@@ -1,0 +1,15 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "posts",
+      "queryScope": "COLLECTION",
+      "density": "SPARSE_ALL",
+      "apiScope": "DATASTORE_MODE_API",
+      "fields": [
+        { "fieldPath": "authorId", "order": "ASCENDING", "somethingNew": true },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "somethingElse": {}
+}
