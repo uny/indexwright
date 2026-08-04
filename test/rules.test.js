@@ -45,6 +45,12 @@ test('R2 ignores indexes that differ in direction rather than order', () => {
   assert.deepEqual(only(['field-order-directions.json'], 'field-order-variant'), []);
 });
 
+test('R2 does not group two field sets that only collide once serialised', () => {
+  // Directions are not checked against an enumeration (SPEC §4), so one may contain the
+  // characters the key is built from; the grouping must still compare the fields themselves.
+  assert.deepEqual(only(['field-order-separator.json'], 'field-order-variant'), []);
+});
+
 test('R2 sees through an explicitly written __name__', () => {
   const findings = only(['name-field-equivalence.json'], 'field-order-variant');
   assert.equal(findings.length, 1, 'the two spellings must land in the same group');

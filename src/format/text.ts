@@ -1,6 +1,7 @@
 import { getRule } from '../rules/index.js';
 import { RULE_IDS } from '../types.js';
 import type { Finding, LintResult, RuleId } from '../types.js';
+import { oneLine } from './inline.js';
 
 /**
  * No finding may read as authorisation to delete an index (SPEC §2), so the summary says so
@@ -18,11 +19,11 @@ export function formatText(result: LintResult): string {
     for (const finding of findings) {
       if (finding.file !== currentFile) {
         currentFile = finding.file;
-        lines.push(`  ${currentFile}`);
+        lines.push(`  ${oneLine(currentFile)}`);
       }
-      lines.push(`    ${finding.message}`);
+      lines.push(`    ${oneLine(finding.message)}`);
       for (const key of [finding.key, ...finding.related]) {
-        if (key !== null) lines.push(`      ${key}`);
+        if (key !== null) lines.push(`      ${oneLine(key)}`);
       }
     }
     lines.push('');
@@ -31,7 +32,7 @@ export function formatText(result: LintResult): string {
   if (result.errors.length > 0) {
     lines.push('could not be analysed');
     for (const error of result.errors) {
-      lines.push(`  ${error.file}: ${error.message}`);
+      lines.push(`  ${oneLine(error.file)}: ${oneLine(error.message)}`);
     }
     lines.push('');
   }

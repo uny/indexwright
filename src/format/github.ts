@@ -1,4 +1,5 @@
 import type { Finding, LintResult } from '../types.js';
+import { oneLine } from './inline.js';
 
 export interface GithubOutput {
   /** Workflow commands, for stdout: GitHub reads them from the job log. */
@@ -76,9 +77,12 @@ function markdown(result: LintResult): string {
   return `${lines.join('\n')}\n`;
 }
 
-/** Canonical keys contain `|`, which would otherwise start a new table cell. */
+/**
+ * Canonical keys contain `|`, which would otherwise start a new table cell, and a value taken from
+ * a linted file may contain a newline, which would end the row entirely (see `oneLine`).
+ */
 function escapeCell(value: string): string {
-  return value.replaceAll('|', '\\|');
+  return oneLine(value).replaceAll('|', '\\|');
 }
 
 function escapeData(value: string): string {

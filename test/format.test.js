@@ -55,6 +55,27 @@ test('github output escapes the pipes inside canonical keys', () => {
   assert.equal(row.split(/(?<!\\)\|/).length, 6, 'the row still has four cells');
 });
 
+test('a linted file cannot forge lines in the text or github report', () => {
+  // §4 accepts any string as a collectionGroup, so the value below reaches both renderers. Neither
+  // may let it end the line it is printed on: the JSON contract keeps it verbatim, the reports
+  // must keep it inside one line and one table row.
+  const result = lintFixtures(['control-characters.json']);
+  assert.match(result.findings[0].message, /## Forged heading/, 'the value does reach the message');
+
+  for (const line of formatText(result).split('\n')) {
+    assert.doesNotMatch(line, /^## Forged heading/, 'text output puts a finding on one line');
+  }
+
+  const { commands, summary } = formatGithub(result);
+  for (const line of summary.split('\n')) {
+    assert.doesNotMatch(line, /^## Forged heading/, 'the summary keeps the value inside its row');
+  }
+  const rows = summary.split('\n').filter((line) => line.startsWith('| `scope-mismatch`'));
+  assert.equal(rows.length, 1, 'one finding is one row');
+  assert.equal(rows[0].split(/(?<!\\)\|/).length, 6, 'the row still has four cells');
+  assert.doesNotMatch(commands, /\n::/, 'no forged workflow command');
+});
+
 test('github output stays quiet when there is nothing to annotate', () => {
   const { commands, summary } = formatGithub(lintFixtures(['clean.json']));
   assert.equal(commands, '');

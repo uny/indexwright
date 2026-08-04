@@ -129,8 +129,21 @@ function parseRuleId(value: string, option: string): RuleId {
   return value;
 }
 
+/** A plain decimal numeral, with or without a fractional part: `5`, `0.8`, `.8`, `-1`. */
+const DECIMAL = /^-?(\d+(\.\d*)?|\.\d+)$/;
+
+/**
+ * `Number` reads `""` as 0, ignores surrounding whitespace, and reads `"0x10"` as 16. A CI step
+ * that writes `--max-warnings=$LIMIT` with `LIMIT` unset would therefore turn "unlimited" into
+ * "zero tolerance" silently, so an option value has to be a numeral and nothing else. `NaN` fails
+ * every caller's range check, which reports it as the usage error it is.
+ */
+function toNumber(value: string): number {
+  return DECIMAL.test(value) ? Number(value) : Number.NaN;
+}
+
 function parseCount(value: string, option: string): number {
-  const parsed = Number(value);
+  const parsed = toNumber(value);
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new UsageError(`${option} needs a non-negative integer, got "${value}"`);
   }
@@ -138,7 +151,7 @@ function parseCount(value: string, option: string): number {
 }
 
 function parsePositiveInteger(value: string, option: string): number {
-  const parsed = Number(value);
+  const parsed = toNumber(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new UsageError(`${option} needs a positive integer, got "${value}"`);
   }
@@ -146,7 +159,7 @@ function parsePositiveInteger(value: string, option: string): number {
 }
 
 function parseFraction(value: string, option: string): number {
-  const parsed = Number(value);
+  const parsed = toNumber(value);
   if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) {
     throw new UsageError(`${option} needs a number in (0, 1], got "${value}"`);
   }

@@ -1,6 +1,5 @@
 import { compareStrings, groupBy, uniqueSorted } from '../collections.js';
-import { formatField } from '../key.js';
-import type { AnalysedIndex, Finding, Rule, RuleContext } from '../types.js';
+import type { AnalysedIndex, CanonicalField, Finding, Rule, RuleContext } from '../types.js';
 
 /** A byte no collection id or field path can contain, so grouping keys cannot collide. */
 const SEPARATOR = '\u0000';
@@ -51,14 +50,24 @@ export const fieldOrderVariant: Rule = {
 };
 
 /**
+ * Every boundary is the separator, never `:` or `|`. Directions are not checked against an
+ * enumeration (§4), so a direction that itself contains `a:X|b` would otherwise make two different
+ * field multisets share one grouping key and fire this rule on indexes that do not share a field
+ * set at all.
+ */
+function pair(field: CanonicalField): string {
+  return `${field.fieldPath}${SEPARATOR}${field.direction}`;
+}
+
+/**
  * Same collectionGroup, same queryScope, same multiset of field/direction pairs — order ignored.
  * Sorting rather than de-duplicating keeps a repeated fieldPath (§4) from collapsing into one.
  */
 function fieldSetKey(index: AnalysedIndex): string {
-  const pairs = index.fields.map(formatField).sort(compareStrings);
-  return [index.collectionGroup, index.queryScope, pairs.join('|')].join(SEPARATOR);
+  const pairs = index.fields.map(pair).sort(compareStrings);
+  return [index.collectionGroup, index.queryScope, ...pairs].join(SEPARATOR);
 }
 
 function fieldSequence(index: AnalysedIndex): string {
-  return index.fields.map(formatField).join('|');
+  return index.fields.map(pair).join(SEPARATOR);
 }

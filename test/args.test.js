@@ -83,3 +83,15 @@ test('numeric options are range-checked', () => {
   assert.equal(parseArgs(['lint', 'a.json', '--quota-threshold', '1']).quotaThreshold, 1);
   assert.equal(parseArgs(['lint', 'a.json', '--max-warnings', '0']).maxWarnings, 0);
 });
+
+test('a numeric option takes a numeral, not whatever Number would coerce', () => {
+  // An unset variable in `--max-warnings=$LIMIT` must not quietly mean "fail on any warning".
+  rejects(['lint', 'a.json', '--max-warnings='], /non-negative integer, got ""/);
+  rejects(['lint', 'a.json', '--max-warnings', ' 0 '], /non-negative integer/);
+  rejects(['lint', 'a.json', '--max-warnings', '0x10'], /non-negative integer/);
+  rejects(['lint', 'a.json', '--quota', '1e3'], /positive integer/);
+  rejects(['lint', 'a.json', '--quota-threshold', ''], /\(0, 1\]/);
+  // Spellings that are numerals stay accepted.
+  assert.equal(parseArgs(['lint', 'a.json', '--quota-threshold', '.5']).quotaThreshold, 0.5);
+  assert.equal(parseArgs(['lint', 'a.json', '--quota', '500']).quota, 500);
+});
