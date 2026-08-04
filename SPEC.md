@@ -71,6 +71,26 @@ The v0.2/v0.3 split is deliberate: capture is cheap and offline, while the cover
 delegated to the platform. Reimplementing index matching would risk emitting false
 `FAILED_PRECONDITION` verdicts and blocking development on a rule that is not published.
 
+**Packaging of v0.2/v0.3.** Capture needs a gRPC stack — `@grpc/grpc-js` and protobuf definitions
+for the Firestore v1 API — and hand-writing a decoder for a wire format owned by someone else is
+not a cost worth paying. That collides with §7: `record` and `check` run inside an adopter's
+project, so their dependencies land in an adopter's tree, and the build-time carve-out does not
+reach them.
+
+They therefore ship as a separate package, `@indexwright/record`, which depends on `indexwright`
+for the index model and the `json` contract. **`indexwright` itself acquires no runtime dependency,
+in any version.**
+
+The split is not a workaround; it puts each cost where it is cheapest. `lint` runs on every push,
+in every CI job, in projects that may never touch Firestore from a server — that is where a
+transitive dependency tree is least welcome. `record` runs against a local emulator, in a project
+that is already talking to Firestore server-side and therefore already resolves `@grpc/grpc-js`
+transitively through `@google-cloud/firestore`. The dependency is added where it is very likely
+already resolved, and is absent where it would be new.
+
+The cost is a second package to discover. `indexwright record` in an installation that has only the
+linter must say where the verb lives, not report an unknown command.
+
 **Known limit of v0.2/v0.3:** coverage is bounded by what actually exercises the proxy. A query that
 no test issues is not observed, and absence of observation is not evidence that an index is unused.
 This limit is inherent, not an implementation gap.
@@ -308,14 +328,20 @@ opt-in and per-adopter.
 **Never authorise a deletion.** See §2. No output phrasing may suggest that an index is unused or
 safe to remove.
 
-**No dependencies.** A linter that pulls a dependency tree into a build pipeline undermines its own
-purpose. Argument parsing and formatting are implemented in-tree, and the published package declares
-no runtime dependencies. The principle is about what lands in an adopter's tree: build- and
-test-time tooling that never ships is out of its scope.
+**No dependencies in `indexwright`.** A linter that pulls a dependency tree into a build pipeline
+undermines its own purpose. Argument parsing and formatting are implemented in-tree, and the
+published package declares no runtime dependencies. This is a property of the package rather than
+an aspiration of the project: it holds in every version, and a test asserts it.
+
+The principle is about what lands in an adopter's tree, so build- and test-time tooling that never
+ships is out of its scope. It is not a claim that no part of indexwright may depend on anything.
+Where a verb needs a library it cannot reasonably write — the gRPC stack behind `record` (§3) —
+that verb ships as its own package instead of as a dependency of the linter. What the principle
+forbids is making every adopter of `lint` pay for it.
 
 **No network, no credentials, in `lint`.** Static analysis must be runnable in any environment,
 including a sandboxed CI step with no cloud access. Network use is confined to the planned
-`record`/`check` verbs, which are separate commands.
+`record`/`check` verbs, which are separate commands in a separate package (§3).
 
 **Delegate undocumented semantics to the platform.** Where Firestore's behaviour is not published —
 principally index matching — indexwright measures rather than models. This bounds what the tool can
@@ -344,6 +370,10 @@ exploration only.
 - The package also exports a JavaScript API, so the rules can be run without spawning a process.
   That API is **provisional**: it is not part of the stable contract before 1.0 and may change in
   any minor release. Only the `json` output shape carries the compatibility promise.
+- indexwright is published as a family: `indexwright`, the linter, which carries no runtime
+  dependencies, and — from v0.2 — `@indexwright/record`, capture and coverage, which depends on the
+  linter and on a gRPC stack (§3). They version independently; `@indexwright/record` declares the
+  range of `indexwright` whose `json` contract it reads.
 
 ## 10. Toward 1.0
 
