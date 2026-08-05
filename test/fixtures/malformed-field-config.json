@@ -1,0 +1,9 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "posts",
+      "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "authorId" }]
+    }
+  ]
+}

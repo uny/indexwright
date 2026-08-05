@@ -1,0 +1,20 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "posts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "a", "order": "X" },
+        { "fieldPath": "b", "order": "Y|c:Z" }
+      ]
+    },
+    {
+      "collectionGroup": "posts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "c", "order": "Z" },
+        { "fieldPath": "a", "order": "X|b:Y" }
+      ]
+    }
+  ]
+}

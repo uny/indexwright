@@ -1,0 +1,16 @@
+# The workflows pin their actions to commit SHAs, which is what makes a retagged action a
+# non-issue — and what makes those pins go stale on their own. Dependabot is the other half of
+# that decision: it raises the SHA and the version comment together, so the pin stays current
+# without anyone having to resolve a tag by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Two actions, updated in lockstep across both workflows: one PR, not four.
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci

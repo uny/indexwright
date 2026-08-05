@@ -1,0 +1,14 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "posts\n\n## Forged heading\n\n| a | b | c | d |",
+      "queryScope": "COLLECTION",
+      "fields": [{ "fieldPath": "a", "order": "ASCENDING" }]
+    },
+    {
+      "collectionGroup": "posts\n\n## Forged heading\n\n| a | b | c | d |",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [{ "fieldPath": "b", "order": "ASCENDING" }]
+    }
+  ]
+}
