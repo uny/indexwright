@@ -36,6 +36,6 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npm run build
       # A published version cannot be replaced, so the tarball is exercised on every change.
+      # verify-package builds first, so there is no separate build step to fall out of step with it.
       - run: npm run verify-package
