@@ -172,8 +172,12 @@ Until then the version stays below 1.0 and the rules stay provisional.
 ```bash
 npm install
 npm test                  # builds, then runs the suite against dist/
-npm run verify-package    # packs, installs the tarball, exercises the bin and the API
+npm run verify-package    # builds, packs, installs the tarball, exercises the bin and the API
 ```
+
+Both scripts build first as an explicit step rather than through a `pre` hook, because npm skips
+`pre`/`post` scripts entirely under `ignore-scripts=true` — a setting many developers turn on. With
+a hook, that configuration silently tests whatever `dist/` happened to be lying around.
 
 ## License
 
