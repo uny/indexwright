@@ -13,14 +13,20 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      # Pinned to commit SHAs, not to tags: this job holds the publish token and can mint
-      # provenance, so a retagged action would be a supply-chain path into a released version.
-      # The trailing comment is the human-readable version and what Dependabot bumps.
+      # Pinned to commit SHAs, not to tags: this job can mint an npm publishing credential from
+      # its OIDC identity, so a retagged action would be a supply-chain path into a released
+      # version. The trailing comment is the human-readable version and what Dependabot bumps.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'
-          registry-url: https://registry.npmjs.org
+          # 24, not the engines floor of 22, because trusted publishing needs npm >= 11.5.1 and
+          # Node 22 still ships npm 10. The floor is exercised by the ci workflow on every PR.
+          node-version: '24'
+          # registry-url is deliberately absent. It makes setup-node write
+          # //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN} into an .npmrc, and with no token
+          # set that is an empty auth line — npm reads it as "auth is already configured", never
+          # starts the OIDC exchange, and fails with ENEEDAUTH. The registry is pinned by the
+          # .npmrc committed at the repository root, so nothing here needs to set it.
           cache: npm
 
       - name: Check that the tag matches the package version
@@ -37,6 +43,7 @@ jobs:
       - run: npm test
       - run: npm run verify-package
 
+      # No NODE_AUTH_TOKEN: npm exchanges the job's OIDC identity for a short-lived credential,
+      # which npmjs.com grants only to the trusted publisher configured for this package —
+      # uny/indexwright, workflow release.yml. There is no long-lived secret to leak or rotate.
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
