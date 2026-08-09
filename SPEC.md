@@ -62,7 +62,7 @@ Firestore connection.
   plaintext on a local port. An intercepting proxy can decode `RunQuery` requests and record the
   observed `StructuredQuery` shapes, yielding a query corpus harvested from execution rather than
   hand-written. This is language- and framework-independent, because it operates on the wire
-  protocol rather than on source code.
+  protocol rather than on source code. The corpus format is specified in §7.
 - **v0.3 — coverage check.** Replay a captured corpus against a throwaway Firestore database that
   has the candidate index set applied, and report queries that fail with `FAILED_PRECONDITION`.
   The oracle is Firestore itself; indexwright does not reimplement the undocumented matching rule.
@@ -73,7 +73,7 @@ delegated to the platform. Reimplementing index matching would risk emitting fal
 
 **Packaging of v0.2/v0.3.** Capture needs a gRPC stack — `@grpc/grpc-js` and protobuf definitions
 for the Firestore v1 API — and hand-writing a decoder for a wire format owned by someone else is
-not a cost worth paying. That collides with §7: `record` and `check` run inside an adopter's
+not a cost worth paying. That collides with §8: `record` and `check` run inside an adopter's
 project, so their dependencies land in an adopter's tree, and the build-time carve-out does not
 reach them.
 
@@ -319,7 +319,155 @@ omitted, and `errors` is `[]` on a clean run.
 **`github`** — GitHub Actions workflow commands (`::warning file=…::`) plus a Markdown summary
 suitable for `$GITHUB_STEP_SUMMARY`.
 
-## 7. Design principles
+## 7. Query corpus (v0.2)
+
+`record` writes a **query corpus**: the set of distinct query shapes observed on the emulator's wire
+during a run, conventionally `firestore.queries.json`. The corpus is the contract between capture
+(v0.2) and the coverage check (v0.3), and it is meant to be committed alongside
+`firestore.indexes.json` and reviewed in a diff like any other declaration.
+
+### What a shape is
+
+A shape is the part of a `StructuredQuery` that determines which index can serve it: the collection,
+the query scope, the filter tree, and the sort order. Everything else is discarded.
+
+**Values are not recorded.** A query's values are customer data, and the corpus is a file that
+persists in a repository. They are also unnecessary: index selection is a function of field paths,
+operators, and directions, not of what is compared against. Discarding them removes the only part of
+a captured query that could carry a secret, and removes the only part that changes between runs of
+the same test.
+
+**Project and database are not recorded.** They are properties of the environment the capture ran
+in, not of the query, and recording them would make a corpus captured against one emulator instance
+look different from the same corpus captured against another.
+
+**`limit`, `offset`, cursors, and `select` are not recorded.** None of them changes which index
+serves the query; a projection is served by the index the underlying query already needs.
+
+**Occurrence counts are not recorded.** A corpus is a set, not a histogram. A count changes on every
+run without changing anything about what must be indexed, which would make the file churn in every
+diff and train reviewers to skim it. `record` reports counts on stderr, where they are useful for
+triage and where they do not have to be committed.
+
+### Vocabulary
+
+The corpus reuses the declaration vocabulary of §5, so that a corpus entry and an index key can be
+read against each other without translation.
+
+| Corpus | Source on the wire | Aligns with |
+|:--|:--|:--|
+| `collectionGroup` | `CollectionSelector.collection_id` | index `collectionGroup` |
+| `queryScope` — `COLLECTION` \| `COLLECTION_GROUP` | `all_descendants` | index `queryScope` |
+| `direction` — `ASCENDING` \| `DESCENDING` | `Order.direction` | field `order` |
+| `op` — `ARRAY_CONTAINS` | `FieldFilter.Operator` | field `arrayConfig: CONTAINS` |
+
+Operators are written with their protobuf enum names: `LESS_THAN`, `LESS_THAN_OR_EQUAL`,
+`GREATER_THAN`, `GREATER_THAN_OR_EQUAL`, `EQUAL`, `NOT_EQUAL`, `ARRAY_CONTAINS`, `IN`,
+`ARRAY_CONTAINS_ANY`, `NOT_IN` for a field filter; `IS_NAN`, `IS_NULL`, `IS_NOT_NAN`, `IS_NOT_NULL`
+for a unary filter; `AND` and `OR` for a composite. Enum names rather than SDK spellings, for the
+same reason §5 writes `ASCENDING` rather than `asc`: the file speaks Firestore's own vocabulary, and
+an unrecognised operator can then be reported by name instead of being silently dropped.
+
+### Canonical query key
+
+```
+<collectionGroup>::<queryScope>::<where>::<orderBy>
+```
+
+`<where>` serialises the filter tree: a field or unary filter as `<fieldPath>:<op>`, a composite as
+`<op>(<child>|<child>|…)`. The root is always a composite, so a query with one filter serialises as
+`AND(status:EQUAL)` and a query with none as `AND()`. `<orderBy>` is `<fieldPath>:<direction>`
+joined by `|`, and is empty when the query declares no sort order. A two-filter, two-sort query
+keys as:
+
+```
+orders::COLLECTION::AND(amount:GREATER_THAN|status:EQUAL)::amount:DESCENDING|createdAt:ASCENDING
+```
+
+Both `AND` and `OR` are commutative, so a composite's children are sorted by their own serialised
+form before joining. This makes the key independent of the order the filters were written in, which
+is what allows two spellings of one query to collapse into one corpus entry. Sort order is *not*
+commutative and is preserved as sent.
+
+Repeated children are kept rather than de-duplicated, for the reason §5 compares multisets:
+`tier == "a" OR tier == "b"` is a two-disjunct query whose shape is `OR(tier:EQUAL|tier:EQUAL)`, and
+collapsing it to one disjunct would describe a query that was never issued.
+
+### File shape
+
+```jsonc
+{
+  "corpusVersion": 1,
+  "queries": [
+    {
+      "key": "orders::COLLECTION::AND(status:EQUAL)::createdAt:DESCENDING",
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "where": {
+        "op": "AND",
+        "filters": [
+          { "fieldPath": "status", "op": "EQUAL" }
+        ]
+      },
+      "orderBy": [
+        { "fieldPath": "createdAt", "direction": "DESCENDING" }
+      ]
+    }
+  ],
+  "skipped": ["aggregation-query"]
+}
+```
+
+A node carrying `filters` is a composite; a node carrying `fieldPath` is a leaf. `where` is always
+present and always a composite. `orderBy` is `[]` rather than omitted. `queries` is sorted by `key`,
+and `skipped` holds the distinct reasons observed, sorted ascending — a set, so that it is as
+diff-stable as the rest of the file. Counts for each reason go to stderr.
+
+`corpusVersion` is an integer that names the format, not the tool: it changes only when a corpus
+written by one version can no longer be read correctly by another, and it does not move when
+`@indexwright/record` is released.
+
+### Implicit fields are not materialised
+
+Firestore appends the document key to every query's sort order, and promotes an inequality field
+into it, but neither appears on the wire — the client sends what the application wrote, and the
+server completes it. The corpus records what was sent.
+
+This is deliberate. §5 has to define the implicit `__name__` direction because a linter comparing
+two declarations has no other way to tell whether they name the same resource. A corpus has no such
+need: the v0.3 oracle is Firestore itself, which applies the real rule. Materialising a guessed
+`__name__` into the corpus would put an unpublished behaviour into a durable file and make every
+entry wrong if the guess were wrong. When a human reads a corpus entry against an index key, §5's
+definition is the one that applies.
+
+### Replay without values
+
+v0.3 must turn a corpus entry back into a query it can execute, and the entry has no values to put
+back. It synthesises them: a unary filter needs none, `IN`, `NOT_IN`, and `ARRAY_CONTAINS_ANY` need
+a one-element array, and everything else needs a single scalar.
+
+This rests on the claim above — that index selection does not depend on the compared value or its
+type. The claim is consistent with how the field is indexed rather than the value, but it is not
+published, and it is the one assumption in v0.3 that a synthesised replay could get wrong. If it is
+false, replay reports `FAILED_PRECONDITION` where a real query would have succeeded, which is a
+false positive of exactly the kind §2 forbids acting on. v0.3 must test the claim before it reports.
+
+### What is not captured
+
+`record` captures `RunQuery`. Two things it sees but does not record:
+
+- **`RunAggregationQuery`** — `count()`, `sum()`, and `average()` carry a `StructuredQuery` and have
+  their own index requirements, which are not necessarily those of the underlying query. Recording
+  the inner query would misreport them, so v0.2 counts them as `aggregation-query` and records
+  nothing. Capturing them properly is a v0.3-or-later extension.
+- **`find_nearest`** — vector search is recorded as `vector-query` and skipped for the same reason:
+  it is served by a `vectorConfig` index whose matching rule this specification does not yet model.
+
+They are reported rather than dropped silently. §3's known limit — that coverage is bounded by what
+exercises the proxy — is about queries no test issues; a query that *was* issued and then discarded
+without trace would be a different and worse failure, because it would look like coverage.
+
+## 8. Design principles
 
 **Warn, do not fail.** The rules encode heuristics whose false-positive rates are, at v0.1.0,
 unmeasured. Shipping them as blocking checks would teach users to suppress the tool. Enforcement is
@@ -350,7 +498,7 @@ claim, which is the point.
 **Deterministic output.** Findings are emitted in a stable sort order (file, rule, key), so that
 output can be diffed across runs.
 
-## 8. Testing
+## 9. Testing
 
 Rules are tested against small hand-written fixtures that isolate one condition each, with explicit
 positive and negative cases.
@@ -360,7 +508,7 @@ count over live data fails whenever that data legitimately changes, which trains
 edit the test rather than read it. Fixtures encode the invariant; real files are for manual
 exploration only.
 
-## 9. Compatibility
+## 10. Compatibility
 
 - Node.js ≥ 22, ESM.
 - Input schema follows the Firebase CLI's `firestore.indexes.json`. Unknown keys are preserved and
@@ -375,7 +523,7 @@ exploration only.
   linter and on a gRPC stack (§3). They version independently; `@indexwright/record` declares the
   range of `indexwright` whose `json` contract it reads.
 
-## 10. Toward 1.0
+## 11. Toward 1.0
 
 1.0 requires, at minimum:
 
