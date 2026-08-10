@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http2';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -85,6 +85,29 @@ test('the corpus is written and the exit code is the suite’s', async () => {
     assert.deepEqual(corpus.queries, []);
     assert.deepEqual(corpus.skipped, []);
     assert.match(streams.stderr(), /0 query request\(s\) observed/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    upstream.close();
+  }
+});
+
+test('a command that cannot be started is reported, not thrown', async () => {
+  const upstream = createServer();
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-record-'));
+
+  try {
+    const out = join(directory, 'corpus.json');
+    const streams = collect();
+    const status = await run(
+      ['--emulator', `127.0.0.1:${upstream.address().port}`, '--out', out, '--', 'indexwright-no-such-command'],
+      streams,
+      {},
+    );
+    assert.equal(status, 2);
+    assert.match(streams.stderr(), /could not run indexwright-no-such-command/);
+    // Nothing ran, so there is nothing for a corpus to be evidence of.
+    assert.equal(existsSync(out), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
     upstream.close();

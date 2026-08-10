@@ -54,6 +54,11 @@ export async function run(
   let status: number;
   try {
     status = await runChild(command.argv, { ...env, FIRESTORE_EMULATOR_HOST: capture.address });
+  } catch (error) {
+    // A command that cannot be started is the user's typo, not a crash to show a stack trace for.
+    // No corpus is written: nothing ran, so there is nothing this run is evidence of.
+    streams.err(`indexwright-record: could not run ${command.argv.join(' ')}: ${(error as Error).message}\n`);
+    return 2;
   } finally {
     await capture.close();
   }
