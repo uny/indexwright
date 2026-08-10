@@ -1,0 +1,51 @@
+{
+  "name": "@indexwright/record",
+  "version": "0.2.0",
+  "description": "Capture the Firestore query shapes a test suite issues, as a corpus for indexwright",
+  "keywords": [
+    "firestore",
+    "firebase",
+    "index",
+    "composite-index",
+    "query-capture",
+    "emulator"
+  ],
+  "homepage": "https://github.com/uny/indexwright/tree/main/packages/record#readme",
+  "bugs": "https://github.com/uny/indexwright/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uny/indexwright.git",
+    "directory": "packages/record"
+  },
+  "license": "Apache-2.0",
+  "author": "Yuki Nagai",
+  "type": "module",
+  "bin": {
+    "indexwright-record": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc --build --force",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  }
+}

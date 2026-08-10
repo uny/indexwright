@@ -1,0 +1,57 @@
+{
+  "note": "RunQueryRequest messages as @google-cloud/firestore serialises them, base64. Regenerate with packages/record/scripts/capture-fixtures.mjs. The shape each one is expected to decode to is written by hand in test/decode.test.js.",
+  "cases": [
+    {
+      "name": "equality and inequality with two sorts",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEmASCBIGb3JkZXJzGjEKLwgBEhcSFQoIEgZzdGF0dXMQBRoHigEEb3BlbhISEhAKCBIGYW1vdW50EAMaAhABIgwKCBIGYW1vdW50EAIiDwoLEgljcmVhdGVkQXQQASoCCAo="
+    },
+    {
+      "name": "the same query with its filters written in the other order",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzElwSCBIGb3JkZXJzGjEKLwgBEhISEAoIEgZhbW91bnQQAxoCEAESFxIVCggSBnN0YXR1cxAFGgeKAQRvcGVuIgwKCBIGYW1vdW50EAIiDwoLEgljcmVhdGVkQXQQAQ=="
+    },
+    {
+      "name": "a collection group query",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEikSCRIFaXRlbXMYARoREg8KBRIDc2t1EAUaBIoBAXgiCQoFEgNxdHkQAQ=="
+    },
+    {
+      "name": "no filters and no sort",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEgoSCBIGb3JkZXJz"
+    },
+    {
+      "name": "a disjunction nested under a conjunction",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzElUSCBIGb3JkZXJzGkkKRwgBEiwKKggCEhISEAoGEgR0aWVyEAUaBIoBAWESEhIQCgYSBHRpZXIQBRoEigEBYhIVEhMKBhIEdGFncxAHGgeKAQRzYWxl"
+    },
+    {
+      "name": "every field operator",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEpIBEggSBm9yZGVycxqFAQqCAQgBEg0SCwoDEgFhEAEaAhABEg0SCwoDEgFiEAIaAhABEg0SCwoDEgFjEAMaAhABEg0SCwoDEgFkEAQaAhABEg0SCwoDEgFlEAUaAhABEg0SCwoDEgFmEAcaAhABEhESDwoDEgFnEAgaBkoECgIQARIREg8KAxIBaBAJGgZKBAoCEAE="
+    },
+    {
+      "name": "a not-equal filter",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEiISCBIGb3JkZXJzGhYSFAoHEgVzdGF0ZRAGGgeKAQR2b2lk"
+    },
+    {
+      "name": "a not-in filter",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEiYSCBIGb3JkZXJzGhoSGAoHEgVzdGF0ZRAKGgtKCQoHigEEdm9pZA=="
+    },
+    {
+      "name": "null and NaN, which reach the wire as unary filters",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEjISCBIGb3JkZXJzGiYKJAgBEhEaDwgDEgsSCWRlbGV0ZWRBdBINGgsIAhIHEgVzY29yZQ=="
+    },
+    {
+      "name": "not-null and not-NaN",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEjISCBIGb3JkZXJzGiYKJAgBEhEaDwgFEgsSCWRlbGV0ZWRBdBINGgsIBBIHEgVzY29yZQ=="
+    },
+    {
+      "name": "a sort on the document key",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEhoSCBIGb3JkZXJzIg4KChIIX19uYW1lX18QAg=="
+    },
+    {
+      "name": "a field path that holds the key delimiters",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEjESCBIGb3JkZXJzGiUSIwobEhlgd2VpcmQ6cGF0aHx3aXRoKHBhcmVucylgEAUaAhAB"
+    },
+    {
+      "name": "a nested field path",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEioSCBIGb3JkZXJzGh4SHAoOEgxwcm9maWxlLmNpdHkQBRoIigEFa3lvdG8="
+    }
+  ]
+}

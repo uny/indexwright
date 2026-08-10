@@ -74,6 +74,19 @@ test('unusable invocations are rejected', () => {
   rejects(['lint', 'a.json', '--format', 'yaml'], /unknown format "yaml"/);
 });
 
+test('a verb that ships in the other package says where it went', () => {
+  // SPEC §3: the cost of the split is a second package to discover, so "unknown command" would be
+  // the wrong answer — it reads as "indexwright cannot do this".
+  rejects(['record', '--', 'npm', 'test'], /ships as @indexwright\/record/);
+  rejects(['record', '--', 'npm', 'test'], /indexwright-record/);
+});
+
+test('a verb that does not exist yet is still an unknown command', () => {
+  // `check` is v0.3. Pointing at a package that does not implement it would be worse than saying
+  // it is not known.
+  rejects(['check', 'a.json'], /unknown command "check"/);
+});
+
 test('numeric options are range-checked', () => {
   rejects(['lint', 'a.json', '--max-warnings', '-1'], /non-negative integer/);
   rejects(['lint', 'a.json', '--max-warnings', '1.5'], /non-negative integer/);

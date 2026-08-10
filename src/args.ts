@@ -22,6 +22,22 @@ export type Command = LintCommand | { kind: 'help' } | { kind: 'version' };
 
 const FORMATS: readonly OutputFormat[] = ['text', 'json', 'github'];
 
+interface VerbLocation {
+  readonly home: string;
+  readonly bin: string;
+}
+
+/**
+ * Verbs that belong to the family but not to this package.
+ *
+ * `indexwright` carries no runtime dependency in any version (SPEC §8), so capture — which needs a
+ * proxy and a wire decoder — ships separately. Only verbs that exist are listed: pointing at a
+ * package that does not implement one yet would be a worse answer than not knowing.
+ */
+const ELSEWHERE: Readonly<Record<string, VerbLocation>> = {
+  record: { home: '@indexwright/record', bin: 'indexwright-record' },
+};
+
 /**
  * Parsed in-tree rather than with a dependency (SPEC §8). Supports `--flag value` and
  * `--flag=value`, and `--` to end option parsing.
@@ -33,6 +49,16 @@ export function parseArgs(argv: readonly string[]): Command {
 
   const [command, ...rest] = argv;
   if (command !== 'lint') {
+    // SPEC §3: the cost of splitting the family into two packages is a second package to
+    // discover, so a verb that lives in the other one has to say where it went. Reporting it as
+    // an unknown command would read as "indexwright cannot do this".
+    if (command !== undefined && command in ELSEWHERE) {
+      const { home, bin } = ELSEWHERE[command] as VerbLocation;
+      throw new UsageError(
+        `"${command}" is not part of indexwright; it ships as ${home}. ` +
+          `Install it with "npm install --save-dev ${home}" and run "${bin}".`,
+      );
+    }
     throw new UsageError(`unknown command "${command}"; the only command is "lint"`);
   }
 
@@ -191,5 +217,8 @@ export function usage(): string {
     '  0  completed; warnings may have been emitted',
     '  1  warning count exceeded --max-warnings',
     '  2  usage error, unreadable file, or malformed input',
+    '',
+    'Capturing the queries a test suite issues is a separate package, @indexwright/record,',
+    'so that this one keeps no runtime dependencies.',
   ].join('\n');
 }
