@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { lintFiles } from '../dist/index.js';
 
-/** Fixtures encode the invariant; real project files are for manual exploration only (SPEC §8). */
+/** Fixtures encode the invariant; real project files are for manual exploration only (SPEC §9). */
 export function fixture(name) {
   return fileURLToPath(new URL(`fixtures/${name}`, import.meta.url));
 }

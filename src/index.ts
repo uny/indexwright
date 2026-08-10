@@ -1,7 +1,7 @@
 /**
  * The JavaScript API.
  *
- * Provisional before 1.0 (SPEC §9): only the `json` output shape carries the compatibility promise.
+ * Provisional before 1.0 (SPEC §10): only the `json` output shape carries the compatibility promise.
  * This exists so the rules can be run without spawning a process — from a test, a codemod, or a
  * bespoke reporter.
  */

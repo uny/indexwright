@@ -3,7 +3,7 @@
  *
  * The input types mirror `firestore.indexes.json` loosely on purpose: unknown keys are carried
  * through rather than rejected, so a field added by a future Firebase release does not break
- * linting (SPEC §9).
+ * linting (SPEC §10).
  */
 
 /** One entry of an index's `fields` array. */
@@ -67,7 +67,7 @@ export const RULE_IDS = [
 
 export type RuleId = (typeof RULE_IDS)[number];
 
-/** A single warning. Never an error: see SPEC §7. */
+/** A single warning. Never an error: see SPEC §8. */
 export interface Finding {
   rule: RuleId;
   file: string;
