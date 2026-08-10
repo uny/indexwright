@@ -5,7 +5,7 @@ import { test } from 'node:test';
 const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 /**
- * SPEC §7 states the dependency-free property as something that holds in every version, not as an
+ * SPEC §8 states the dependency-free property as something that holds in every version, not as an
  * aspiration, so it is asserted rather than left to review. Every field here installs into an
  * adopter's tree: npm resolves peers automatically, and an optional dependency is installed when
  * it can be. A verb that genuinely needs a library ships as `@indexwright/record` (§3) instead.

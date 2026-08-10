@@ -23,7 +23,7 @@ export type Command = LintCommand | { kind: 'help' } | { kind: 'version' };
 const FORMATS: readonly OutputFormat[] = ['text', 'json', 'github'];
 
 /**
- * Parsed in-tree rather than with a dependency (SPEC §7). Supports `--flag value` and
+ * Parsed in-tree rather than with a dependency (SPEC §8). Supports `--flag value` and
  * `--flag=value`, and `--` to end option parsing.
  */
 export function parseArgs(argv: readonly string[]): Command {

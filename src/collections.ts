@@ -1,4 +1,4 @@
-/** Small ordering and grouping helpers. Determinism is a stated requirement (SPEC §7). */
+/** Small ordering and grouping helpers. Determinism is a stated requirement (SPEC §8). */
 
 export function compareStrings(a: string, b: string): number {
   if (a < b) return -1;
