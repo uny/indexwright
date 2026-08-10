@@ -10,7 +10,7 @@ export interface GithubOutput {
 
 /**
  * Findings are annotations without a line number: locating a finding inside the JSON would need a
- * position-tracking parser, which v0.1.0 does not carry (SPEC §4).
+ * position-tracking parser, which v0.1.0 does not carry (SPEC §5).
  */
 export function formatGithub(result: LintResult): GithubOutput {
   const commands = [
