@@ -30,7 +30,7 @@ It starts a proxy, runs `npm test` with `FIRESTORE_EMULATOR_HOST` pointed at the
 the emulator, and writes `firestore.queries.json`. The exit code is your suite's, so a failing suite
 still fails.
 
-```
+```text
 indexwright-record [options] -- <command> [args...]
 
 Options:
@@ -102,7 +102,7 @@ does not know refuses the file rather than reading what it recognises.
 
 Everything else — the CLI flags and the JavaScript API — is provisional before 1.0.
 
-The format is specified in [SPEC.md §7](../../SPEC.md).
+The format is specified in [SPEC.md §7](https://github.com/uny/indexwright/blob/main/SPEC.md).
 
 ## License
 

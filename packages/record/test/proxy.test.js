@@ -4,6 +4,7 @@ import { createServer as createHttp1Server } from 'node:http';
 import { connect, createServer as createHttp2Server } from 'node:http2';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { classify, parseHostPort, startCapture } from '../dist/index.js';
 
 const { cases } = JSON.parse(
@@ -157,6 +158,46 @@ test('query-bearing RPCs that are not RunQuery are counted, and writes are not',
   }
 });
 
+test('a gzipped message is decompressed and recorded, not counted as a skip', async () => {
+  // The only path that captures anything from a client with gRPC compression enabled. If the
+  // encoding key or the payload slice were wrong, every compressed query would land in `skipped`
+  // and the corpus would report `queries: []` for a suite that issued dozens.
+  const upstream = stubUpstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress });
+  try {
+    const compressed = gzipSync(fixtureMessage('a collection group query'));
+    const header = Buffer.alloc(5);
+    header.writeUInt8(1, 0); // compressed
+    header.writeUInt32BE(compressed.length, 1);
+    await new Promise((resolve, reject) => {
+      const client = connect(`http://${capture.address}`);
+      client.on('error', reject);
+      const request = client.request({
+        ':method': 'POST',
+        ':path': '/google.firestore.v1.Firestore/RunQuery',
+        'content-type': 'application/grpc',
+        'grpc-encoding': 'gzip',
+      });
+      request.on('error', reject);
+      request.on('close', () => {
+        client.close();
+        resolve();
+      });
+      request.resume();
+      request.end(Buffer.concat([header, compressed]));
+    });
+    assert.equal(capture.recorder.skips.size, 0);
+    assert.deepEqual(
+      capture.recorder.shapes.map((shape) => shape.key),
+      ['items::COLLECTION_GROUP::AND(sku:EQUAL)::qty:ASCENDING'],
+    );
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
 test('a compressed message this package cannot undo is counted, not dropped', async () => {
   const upstream = stubUpstream();
   const upstreamAddress = await listen(upstream.server);
@@ -236,4 +277,99 @@ test('parseHostPort rejects what cannot be an address', () => {
   assert.throws(() => parseHostPort('127.0.0.1'), /host:port/);
   assert.throws(() => parseHostPort('127.0.0.1:0'), /host:port/);
   assert.throws(() => parseHostPort('127.0.0.1:notaport'), /host:port/);
+  // Without brackets the last colon is not the port separator, and "::1" would otherwise parse as
+  // the host ":" on port 1 — a usage error accepted as an address nobody meant.
+  assert.throws(() => parseHostPort('::1'), /brackets/);
+  assert.throws(() => parseHostPort('fe80::1:8080'), /brackets/);
+});
+
+test('a RunQuery that carries no message at all is counted rather than passed over', async () => {
+  // Zero frames is not zero queries: the proxy saw a query-bearing call. Recording nothing for it
+  // without saying so is how a dropped query comes to look like one that was never issued.
+  const upstream = stubUpstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress });
+  try {
+    await call(capture.address, '/google.firestore.v1.Firestore/RunQuery', Buffer.alloc(0));
+    assert.equal(capture.recorder.observed, 1);
+    assert.equal(capture.recorder.skips.get('undecodable-message'), 1);
+    assert.equal(capture.recorder.shapes.length, 0);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('an IPv6 emulator address is an address the proxy can reach', async (t) => {
+  // parseHostPort strips the brackets, and "http://::1:8080" is not a URL — without putting them
+  // back, a documented `host:port` fails to connect at all instead of proxying.
+  const upstream = stubUpstream();
+  await new Promise((resolve, reject) => {
+    upstream.server.once('error', reject);
+    upstream.server.listen(0, '::1', resolve);
+  }).catch(() => null);
+  if (upstream.server.address() === null) {
+    upstream.server.close();
+    // Skipped, not returned: a host without IPv6 loopback has nothing to assert here, and a
+    // silent early return would report this as coverage the run never had.
+    t.skip('no IPv6 loopback on this host');
+    return;
+  }
+  const capture = await startCapture({ upstream: `[::1]:${upstream.server.address().port}` });
+  try {
+    const response = await call(
+      capture.address,
+      '/google.firestore.v1.Firestore/RunQuery',
+      frame(fixtureMessage('no filters and no sort')),
+    );
+    assert.equal(response.headers[':status'], 200);
+    assert.equal(capture.recorder.shapes.length, 1);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('an upstream that has gone away fails the stream rather than the recorder', async () => {
+  // The upstream session is shared by every stream. If the emulator restarts mid-run, `request`
+  // throws synchronously inside the `stream` handler; unguarded, that ends the recorder process
+  // and takes the suite it is running with it.
+  const upstream = stubUpstream();
+  const sessions = [];
+  upstream.server.on('session', (session) => sessions.push(session));
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: () => {} });
+  try {
+    // Wait for the proxy's session to exist, then take the emulator away under it.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    upstream.server.close();
+    for (const session of sessions) session.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const code = await new Promise((resolve, reject) => {
+      const client = connect(`http://${capture.address}`);
+      client.on('error', reject);
+      const request = client.request({
+        ':method': 'POST',
+        ':path': '/google.firestore.v1.Firestore/RunQuery',
+        'content-type': 'application/grpc',
+      });
+      request.on('error', (error) => {
+        client.close();
+        resolve(error.code);
+      });
+      request.on('close', () => {
+        client.close();
+        resolve(null);
+      });
+      request.resume();
+      request.end(frame(fixtureMessage('no filters and no sort')));
+    });
+
+    // The client is told the call failed. What matters is that this line is reached at all: the
+    // process is still alive to assert it.
+    assert.ok(code === null || code.startsWith('ERR_HTTP2'), `unexpected code ${code}`);
+  } finally {
+    await capture.close();
+  }
 });

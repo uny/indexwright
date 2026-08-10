@@ -10,10 +10,17 @@ import { toQueryShape } from './shape.js';
 import type { QueryShape, SkipReason } from './types.js';
 import { grpcMessages, WireError } from './wire.js';
 
+/**
+ * Ceiling on what a compressed message may expand to, matching the proxy's cap on an uncompressed
+ * body. Without it the size limit applies only to the bytes on the wire, and a few kilobytes of
+ * gzip expand to gigabytes before anything decides the message is too large.
+ */
+const MAX_DECOMPRESSED_BYTES = 8 * 1024 * 1024;
+
 /** Encodings this package can undo. Anything else is counted rather than guessed at. */
 const DECOMPRESSORS = new Map<string, (input: Uint8Array) => Uint8Array>([
-  ['gzip', (input) => gunzipSync(input)],
-  ['deflate', (input) => inflateSync(input)],
+  ['gzip', (input) => gunzipSync(input, { maxOutputLength: MAX_DECOMPRESSED_BYTES })],
+  ['deflate', (input) => inflateSync(input, { maxOutputLength: MAX_DECOMPRESSED_BYTES })],
 ]);
 
 export class Recorder {
@@ -62,6 +69,14 @@ export class Recorder {
       messages = [...grpcMessages(body)];
     } catch (error) {
       if (!(error instanceof WireError)) throw error;
+      this.skip('undecodable-message');
+      return;
+    }
+
+    // A query-bearing call that carried no message at all. Counted rather than passed over: a
+    // RunQuery the proxy saw and recorded nothing for has to appear somewhere, or the corpus says
+    // the query was never issued.
+    if (messages.length === 0) {
       this.skip('undecodable-message');
       return;
     }

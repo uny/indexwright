@@ -64,7 +64,9 @@ export async function run(
   }
 
   // Written whatever the suite's verdict was: a query that failed still describes something the
-  // application issues, and a query that failed for want of an index is the interesting case.
+  // application issues, and the emulator does not enforce composite indexes, so a run that passes
+  // here says nothing about whether the queries it issued are indexed. That is what the corpus is
+  // for, and dropping it on a red suite would drop the queries a fix has to keep working.
   const out = resolve(command.out);
   try {
     writeCorpus(out, buildCorpus(capture.recorder.shapes, capture.recorder.skips.keys()));

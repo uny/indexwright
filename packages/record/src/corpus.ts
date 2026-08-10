@@ -4,6 +4,7 @@
  * The reader refuses rather than repairs. Every reading it would otherwise be choosing between is
  * a different query, and picking one is how a corpus comes to describe coverage it never had.
  */
+import { randomBytes } from 'node:crypto';
 import { renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { normaliseRoot, queryKey, serialiseFilter, compareByCodePoint } from './shape.js';
@@ -33,6 +34,16 @@ export class CorpusError extends Error {
 
 const LEAF_OPERATORS = new Set<string>([...FIELD_OPERATORS, ...UNARY_OPERATORS]);
 const SKIP_REASON_SET = new Set<string>(SKIP_REASONS);
+
+/**
+ * How deep a filter tree in a corpus file may nest before the reader refuses it.
+ *
+ * The same ceiling the decoder applies, so nothing this package writes can fail to read back. The
+ * reader recurses once per level, and a corpus is a committed file that arrives through review
+ * rather than from a trusted caller: without a ceiling, a nested-enough file is a `RangeError`
+ * escaping a function documented to fail with `CorpusError`.
+ */
+const MAX_FILTER_DEPTH = 100;
 
 /**
  * Collect observed shapes into a corpus: de-duplicated by key, sorted by key, with the skip
@@ -80,11 +91,15 @@ function filterToJson(node: FilterNode): unknown {
  *
  * A run that is interrupted leaves the previous file intact rather than a truncated one, which
  * matters because the previous file is the only record of what the last complete run exercised.
+ *
+ * The temporary name is random rather than derived from the pid, and is created exclusively: the
+ * corpus is often written into a shared workspace, and a predictable name is one another user can
+ * pre-create as a symlink to have this write land somewhere else entirely.
  */
 export function writeCorpus(path: string, corpus: Corpus): void {
-  const temporary = join(dirname(path), `.${process.pid}.indexwright-corpus.tmp`);
+  const temporary = join(dirname(path), `.${randomBytes(8).toString('hex')}.indexwright-corpus.tmp`);
   try {
-    writeFileSync(temporary, serialiseCorpus(corpus), { encoding: 'utf8', mode: 0o644 });
+    writeFileSync(temporary, serialiseCorpus(corpus), { encoding: 'utf8', mode: 0o644, flag: 'wx' });
     renameSync(temporary, path);
   } catch (error) {
     try {
@@ -105,8 +120,10 @@ export function parseCorpus(source: string): Corpus {
   }
 
   const root = expectObject(document, 'the corpus');
-  expectExactMembers(root, ['corpusVersion', 'queries', 'skipped'], 'the corpus');
 
+  // Checked before the member set, not after: adding or renaming a top-level member is the normal
+  // reason to bump the version, so testing membership first would answer a future corpus with a
+  // complaint about a stray field instead of the version mismatch that explains it.
   const version = root['corpusVersion'];
   if (version !== CORPUS_VERSION) {
     // Not a fallback to what this version recognises: the integer exists to announce exactly the
@@ -116,14 +133,24 @@ export function parseCorpus(source: string): Corpus {
     );
   }
 
+  expectExactMembers(root, ['corpusVersion', 'queries', 'skipped'], 'the corpus');
+
   const queries = expectArray(root['queries'], 'queries').map((entry, index) =>
     parseQuery(entry, `queries[${index}]`),
   );
 
+  // Sorted, not merely unique. The file is diff-stable only because there is one order for a given
+  // set of entries, and a reader that accepted any order would round-trip a corpus to different
+  // bytes than the one it read — the property SPEC §7 has the sort for.
   const seen = new Set<string>();
+  let previous: string | null = null;
   for (const query of queries) {
     if (seen.has(query.key)) throw new CorpusError(`two entries share the key ${JSON.stringify(query.key)}`);
+    if (previous !== null && compareByCodePoint(previous, query.key) > 0) {
+      throw new CorpusError(`queries are not sorted by key: ${JSON.stringify(query.key)} follows ${JSON.stringify(previous)}`);
+    }
     seen.add(query.key);
+    previous = query.key;
   }
 
   const skipped = expectArray(root['skipped'], 'skipped').map((reason, index) => {
@@ -133,6 +160,11 @@ export function parseCorpus(source: string): Corpus {
     return reason as SkipReason;
   });
   if (new Set(skipped).size !== skipped.length) throw new CorpusError('skipped repeats a reason');
+  for (let index = 1; index < skipped.length; index += 1) {
+    if (compareByCodePoint(skipped[index - 1] as string, skipped[index] as string) > 0) {
+      throw new CorpusError('skipped is not sorted');
+    }
+  }
 
   return { corpusVersion: CORPUS_VERSION, queries, skipped };
 }
@@ -148,7 +180,7 @@ function parseQuery(value: unknown, at: string): QueryShape {
     throw new CorpusError(`${at}.queryScope is not a scope this format defines`);
   }
 
-  const where = parseFilter(entry['where'], `${at}.where`);
+  const where = parseFilter(entry['where'], `${at}.where`, 1);
   if (!isComposite(where)) throw new CorpusError(`${at}.where is not a composite`);
 
   const orderBy = expectArray(entry['orderBy'], `${at}.orderBy`).map((order, index) =>
@@ -171,7 +203,8 @@ function parseQuery(value: unknown, at: string): QueryShape {
   return { key, ...shape };
 }
 
-function parseFilter(value: unknown, at: string): FilterNode {
+function parseFilter(value: unknown, at: string, depth: number): FilterNode {
+  if (depth > MAX_FILTER_DEPTH) throw new CorpusError(`${at} nests deeper than this reader descends`);
   const node = expectObject(value, at);
   const hasFilters = 'filters' in node;
   const hasFieldPath = 'fieldPath' in node;
@@ -185,7 +218,7 @@ function parseFilter(value: unknown, at: string): FilterNode {
       throw new CorpusError(`${at}.op is not a composite operator this format defines`);
     }
     const filters = expectArray(node['filters'], `${at}.filters`).map((child, index) =>
-      parseFilter(child, `${at}.filters[${index}]`),
+      parseFilter(child, `${at}.filters[${index}]`, depth + 1),
     );
     return { op, filters } satisfies FilterComposite;
   }

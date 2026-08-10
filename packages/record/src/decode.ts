@@ -91,6 +91,16 @@ class VectorQuery extends Error {
   override readonly name = 'VectorQuery';
 }
 
+/**
+ * How deep a filter tree may nest before it is declined rather than descended into.
+ *
+ * The reader recurses once per level, so bytes off a socket choose the stack depth. A few hundred
+ * levels is already far past anything a client composes; without a ceiling, a body well under
+ * `MAX_REQUEST_BYTES` reaches `RangeError`, which is not a `WireError` and would leave the proxy
+ * as an uncaught exception rather than a counted skip.
+ */
+const MAX_FILTER_DEPTH = 100;
+
 export function decodeRunQuery(message: Uint8Array): DecodeResult {
   try {
     return { ok: true, query: readRunQueryRequest(message) };
@@ -123,7 +133,7 @@ function readStructuredQuery(bytes: Uint8Array): RawQuery {
         break;
       case QUERY_WHERE:
         // `where` is singular; a repeated occurrence is protobuf's "last one wins".
-        if (field.kind === 'bytes') where = readFilter(field.value);
+        if (field.kind === 'bytes') where = readFilter(field.value, 1);
         break;
       case QUERY_ORDER_BY:
         if (field.kind === 'bytes') orderBy.push(readOrder(field.value));
@@ -165,13 +175,14 @@ function readCollectionSelector(bytes: Uint8Array): { collectionId: string | nul
   return { collectionId, allDescendants };
 }
 
-function readFilter(bytes: Uint8Array): FilterNode {
+function readFilter(bytes: Uint8Array, depth: number): FilterNode {
+  if (depth > MAX_FILTER_DEPTH) throw new UnsupportedShape('filter tree nests deeper than this reader descends');
   let node: FilterNode | null = null;
   for (const field of fields(bytes)) {
     if (field.kind !== 'bytes') continue;
     switch (field.number) {
       case FILTER_COMPOSITE:
-        node = readCompositeFilter(field.value);
+        node = readCompositeFilter(field.value, depth);
         break;
       case FILTER_FIELD:
         node = readFieldFilter(field.value);
@@ -187,14 +198,14 @@ function readFilter(bytes: Uint8Array): FilterNode {
   return node;
 }
 
-function readCompositeFilter(bytes: Uint8Array): FilterNode {
+function readCompositeFilter(bytes: Uint8Array, depth: number): FilterNode {
   let op: CompositeOperator | null = null;
   const filters: FilterNode[] = [];
   for (const field of fields(bytes)) {
     if (field.number === COMPOSITE_OP && field.kind === 'varint') {
       op = COMPOSITE_OPERATORS.get(enumeration(field.value)) ?? null;
     } else if (field.number === COMPOSITE_FILTERS && field.kind === 'bytes') {
-      filters.push(readFilter(field.value));
+      filters.push(readFilter(field.value, depth + 1));
     }
   }
   if (op === null) throw new UnsupportedShape('composite filter has no named operator');

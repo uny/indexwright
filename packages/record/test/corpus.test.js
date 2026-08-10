@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -131,7 +131,23 @@ test('two entries sharing a key are refused', () => {
   assert.throws(() => parseCorpus(JSON.stringify(document)), (error) => /share the key/.test(error.message));
 });
 
-test('an interrupted write leaves the previous corpus intact', () => {
+test('a write that fails after the temp file leaves neither a truncated corpus nor the temp file', () => {
+  // The failure is induced at the rename rather than at serialisation, so this covers the
+  // temp-file path itself: a rename onto a directory fails, and what it leaves behind is what a
+  // non-atomic write would get wrong.
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-corpus-'));
+  try {
+    const path = join(directory, 'occupied');
+    mkdirSync(path);
+    assert.throws(() => writeCorpus(path, buildCorpus([shape('orders')], [])));
+    // Only the directory: the temp file was created and then cleaned up.
+    assert.deepEqual(readdirSync(directory), ['occupied']);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a corpus that cannot be serialised leaves the previous one intact', () => {
   const directory = mkdtempSync(join(tmpdir(), 'indexwright-corpus-'));
   try {
     const path = join(directory, 'firestore.queries.json');
@@ -161,6 +177,74 @@ test('a corpus is written whole, replacing what was there', () => {
     writeFileSync(path, 'not a corpus at all');
     writeCorpus(path, buildCorpus([shape('orders')], []));
     assert.equal(parseCorpus(readFileSync(path, 'utf8')).queries.length, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a corpus nested past what the reader descends is refused as a corpus error', () => {
+  // parseCorpus recurses once per filter level, and a corpus is a committed file that arrives
+  // through review rather than from a trusted caller. Without a ceiling this is a RangeError
+  // escaping a function documented to fail with CorpusError.
+  // Just past the ceiling rather than pathologically deep: 20000 would put `JSON.parse` itself
+  // near the stack limit, and the test would then be red for a reason that is not the fix.
+  const depth = 200;
+  const where =
+    '{"op":"AND","filters":['.repeat(depth) + '{"fieldPath":"a","op":"EQUAL"}' + ']}'.repeat(depth);
+  const source =
+    '{"corpusVersion":1,"queries":[{"key":"x","collectionGroup":"c","queryScope":"COLLECTION",' +
+    `"where":${where},"orderBy":[]}],"skipped":[]}`;
+  assert.throws(
+    () => parseCorpus(source),
+    (error) => error instanceof CorpusError && /nests deeper/.test(error.message),
+  );
+});
+
+test('a corpus from a later format is refused by version, not by its members', () => {
+  // Adding a top-level member is the normal reason to bump the version, so a reader that checked
+  // the member set first would blame a stray field instead of naming the version it cannot read.
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":2,"queries":[],"skipped":[],"capturedAt":"2026-08-11"}'),
+    (error) => error instanceof CorpusError && /corpusVersion 2 is not readable/.test(error.message),
+  );
+});
+
+test('a corpus whose entries are out of order is refused', () => {
+  // The file is diff-stable only because one set of entries has one order. A reader that took any
+  // order would round-trip a corpus to different bytes than the ones it read.
+  const document = JSON.parse(serialiseCorpus(buildCorpus([shape('a'), shape('z')], ['listen-query', 'vector-query'])));
+  const queriesReversed = structuredClone(document);
+  queriesReversed.queries.reverse();
+  assert.throws(
+    () => parseCorpus(JSON.stringify(queriesReversed)),
+    (error) => error instanceof CorpusError && /not sorted/.test(error.message),
+  );
+  const skippedReversed = structuredClone(document);
+  skippedReversed.skipped.reverse();
+  assert.throws(
+    () => parseCorpus(JSON.stringify(skippedReversed)),
+    (error) => error instanceof CorpusError && /not sorted/.test(error.message),
+  );
+});
+
+test('the write does not follow a symlink planted at a guessable temp name', () => {
+  // The corpus is often written into a shared workspace. A temp name derived from the pid is one
+  // another user can pre-create as a symlink to a file of their choosing, and a plain write would
+  // then truncate that file instead. The name is random now, and created exclusively besides.
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-corpus-'));
+  try {
+    const victim = join(directory, 'victim');
+    writeFileSync(victim, 'not to be touched');
+    symlinkSync(victim, join(directory, `.${process.pid}.indexwright-corpus.tmp`));
+
+    writeCorpus(join(directory, 'firestore.queries.json'), buildCorpus([shape('orders')], []));
+
+    assert.equal(readFileSync(victim, 'utf8'), 'not to be touched');
+    assert.deepEqual(readdirSync(directory).sort(), [
+      `.${process.pid}.indexwright-corpus.tmp`,
+      'firestore.queries.json',
+      'victim',
+    ]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

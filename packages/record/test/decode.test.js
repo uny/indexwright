@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { decodeRunQuery, toQueryShape } from '../dist/index.js';
+import * as wire from '../dist/wire.js';
 
 /**
  * Real `RunQueryRequest` bytes, as `@google-cloud/firestore` serialises them.
@@ -169,4 +170,73 @@ test('a query that names more than one collection is skipped', () => {
   const result = decodeRunQuery(request);
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'unsupported-shape');
+});
+
+test('a filter tree nested past what the reader descends is skipped, not a crash', () => {
+  // The reader recurses once per level, so the bytes choose the stack depth. A body far under the
+  // proxy's size cap can reach `RangeError`, which is not a `WireError` and would leave
+  // `decodeRunQuery` as an uncaught exception rather than a counted skip.
+  const varint = (value) => {
+    const out = [];
+    let rest = value;
+    do {
+      const byte = rest & 0x7f;
+      rest >>>= 7;
+      out.push(rest > 0 ? byte | 0x80 : byte);
+    } while (rest > 0);
+    return Buffer.from(out);
+  };
+  const delimited = (field, payload) =>
+    Buffer.concat([varint((field << 3) | 2), varint(payload.length), payload]);
+
+  // Filter{ field_filter: FieldFilter{ field: {field_path: "a"}, op: EQUAL } }
+  const leaf = delimited(2, Buffer.concat([delimited(1, delimited(2, Buffer.from('a'))), Buffer.from([0x10, 0x05])]));
+  const nest = (depth) => {
+    let filter = leaf;
+    for (let level = 0; level < depth; level += 1) {
+      filter = delimited(1, Buffer.concat([Buffer.from([0x08, 0x01]), delimited(2, filter)]));
+    }
+    const query = Buffer.concat([delimited(2, delimited(2, Buffer.from('orders'))), delimited(3, filter)]);
+    return delimited(2, query);
+  };
+
+  const shallow = decodeRunQuery(nest(50));
+  assert.ok(shallow.ok);
+
+  const deep = decodeRunQuery(nest(20000));
+  assert.equal(deep.ok, false);
+  assert.equal(deep.reason, 'unsupported-shape');
+});
+
+test('a negative enum value is an unsupported shape, not a misread message', () => {
+  // FieldFilter{ field: {field_path: "a"}, op: -1 } — proto3 sign-extends a negative enum to the
+  // full ten bytes. Read as unsigned it is a huge number, and reporting it as
+  // `undecodable-message` would claim this decoder read the wire wrongly for a message that
+  // parsed perfectly and merely carried an operator the vocabulary cannot name.
+  const filter = Buffer.from([
+    0x0a, 0x03, 0x12, 0x01, 0x61, 0x10, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01,
+  ]);
+  const where = Buffer.concat([Buffer.from([0x12, filter.length]), filter]);
+  const query = Buffer.concat([
+    Buffer.from([0x12, 0x03, 0x12, 0x01, 0x6f]),
+    Buffer.from([0x1a, where.length]),
+    where,
+  ]);
+  const request = Buffer.concat([Buffer.from([0x12, query.length]), query]);
+  const result = decodeRunQuery(request);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'unsupported-shape');
+});
+
+test('a varint that does not fit in 64 bits is refused rather than folded', () => {
+  // Ten bytes is the maximum length, but the tenth may only carry bit 63. Accepting more lets a
+  // value above 2^64 wrap into the range of a real operator, and the corpus would then assert a
+  // query shape nobody issued.
+  const { fields, WireError } = wire;
+  const tooWide = Uint8Array.from([0x10, 0x85, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]);
+  assert.throws(() => [...fields(tooWide)], WireError);
+
+  // A negative int32 is sign-extended to ten bytes and is still a legal varint.
+  const negative = Uint8Array.from([0x10, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]);
+  assert.equal([...fields(negative)].length, 1);
 });

@@ -7,15 +7,16 @@ again, by its own `corpusVersion`.
 
 ## [0.2.0] — 2026-08-10
 
-First release. Query capture, specified in [SPEC.md](../../SPEC.md) §7.
+First release. Query capture, specified in [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7.
 
 ### Added
 
 - `indexwright-record [options] -- <command>` runs a suite with `FIRESTORE_EMULATOR_HOST` pointed
   at a pass-through proxy in front of the Firestore emulator, and writes the query shapes it
   observed to `firestore.queries.json`. The exit code is the suite's, so a failing suite still
-  fails, and the corpus is written either way — a query that failed for want of an index is the
-  case this exists to surface.
+  fails, and the corpus is written either way. The emulator does not enforce composite indexes, so
+  a green run says nothing about whether the queries it issued are indexed; the corpus is what
+  `check` replays in v0.3 to answer that.
 - A corpus records shape only: collection, scope, filter tree, sort order. Values, project and
   database, `limit`, `offset`, cursors, `select`, and occurrence counts are all left out. Two
   spellings of one query collapse to one entry, so the file is stable across runs.

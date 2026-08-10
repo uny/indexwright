@@ -8,9 +8,10 @@
  */
 import { createServer as createHttp1Server, request as http1Request } from 'node:http';
 import type { IncomingMessage, Server as Http1Server, ServerResponse } from 'node:http';
-import { connect, constants, createServer as createHttp2Server } from 'node:http2';
+import { connect, constants, createServer as createHttp2Server, sensitiveHeaders } from 'node:http2';
 import type {
   ClientHttp2Session,
+  ClientHttp2Stream,
   Http2Server,
   Http2Session,
   IncomingHttpHeaders,
@@ -73,7 +74,10 @@ export async function startCapture(options: CaptureOptions): Promise<Capture> {
   const warn = options.onWarning ?? ((): void => {});
   const upstream = parseHostPort(options.upstream);
 
-  const client = connect(`http://${upstream.host}:${upstream.port}`);
+  // `formatHost`, not the bare host: `parseHostPort` strips the brackets off an IPv6 literal, and
+  // "http://::1:8080" is not a URL — an emulator addressed as [::1]:8080 would fail to connect at
+  // all rather than proxy.
+  const client = connect(`http://${formatHost(upstream.host)}:${upstream.port}`);
   client.on('error', (error) => warn(`upstream connection: ${error.message}`));
 
   const sessions = new Set<Http2Session>();
@@ -162,7 +166,22 @@ function proxyStream(
   const intent = classify(path);
   const encoding = String(headers['grpc-encoding'] ?? 'identity');
 
-  const upstream = client.request(forwardable(headers));
+  // The upstream session is shared by every stream and outlives any one of them, so an emulator
+  // that restarts, sends GOAWAY, or drops the connection leaves it closed. `request` then throws
+  // synchronously, and this is an event handler: an escaping throw would take the recorder — and
+  // with it the suite it is running — down over one stream. Fail the stream instead.
+  //
+  // The error listener goes on first, because failing the stream makes it emit `error`, and an
+  // http2 stream with no listener for that throws out of the emit — the same crash, one step on.
+  let upstream: ClientHttp2Stream | null = null;
+  stream.on('error', () => upstream?.destroy());
+  try {
+    upstream = client.request(forwardable(headers));
+  } catch (error) {
+    warn(`stream ${path}: ${(error as Error).message}`);
+    if (!stream.destroyed) stream.close(constants.NGHTTP2_INTERNAL_ERROR);
+    return;
+  }
 
   if (intent.kind === 'record') {
     collect(
@@ -177,7 +196,6 @@ function proxyStream(
   }
 
   stream.pipe(upstream);
-  stream.on('error', () => upstream.destroy());
 
   let trailers: IncomingHttpHeaders | null = null;
   upstream.on('trailers', (received) => {
@@ -293,6 +311,16 @@ function forwardable(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
     if (NOT_FORWARDED.has(name) || value === undefined) continue;
     forwarded[name] = value;
   }
+  // Carried across explicitly: it is a symbol key, so `Object.entries` does not see it, and losing
+  // it makes a header the client marked sensitive eligible for HPACK indexing on a session shared
+  // by every stream of the run.
+  const sensitive = (headers as Record<symbol, unknown>)[sensitiveHeaders];
+  if (Array.isArray(sensitive)) {
+    const kept = (sensitive as string[]).filter(
+      (name) => !NOT_FORWARDED.has(name) && forwarded[name] !== undefined,
+    );
+    if (kept.length > 0) (forwarded as Record<symbol, unknown>)[sensitiveHeaders] = kept;
+  }
   return forwarded;
 }
 
@@ -323,7 +351,14 @@ function proxyHttp1(
 export function parseHostPort(value: string): { host: string; port: number } {
   const separator = value.lastIndexOf(':');
   if (separator <= 0) throw new Error(`expected host:port, got "${value}"`);
-  const host = value.slice(0, separator).replace(/^\[|\]$/g, '');
+  const rawHost = value.slice(0, separator);
+  // A bare IPv6 literal is all colons, so `lastIndexOf` would split it into a host of "::" and a
+  // port of whatever followed the final colon. Brackets are what make the port unambiguous, and
+  // an unbracketed literal is a usage error rather than an address to guess at.
+  if (rawHost.includes(':') && !(rawHost.startsWith('[') && rawHost.endsWith(']'))) {
+    throw new Error(`expected host:port with an IPv6 literal in brackets, got "${value}"`);
+  }
+  const host = rawHost.replace(/^\[|\]$/g, '');
   const port = Number(value.slice(separator + 1));
   if (!/^\d+$/.test(value.slice(separator + 1)) || port < 1 || port > 65535) {
     throw new Error(`expected host:port with a valid port, got "${value}"`);

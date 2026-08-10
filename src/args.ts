@@ -52,8 +52,12 @@ export function parseArgs(argv: readonly string[]): Command {
     // SPEC §3: the cost of splitting the family into two packages is a second package to
     // discover, so a verb that lives in the other one has to say where it went. Reporting it as
     // an unknown command would read as "indexwright cannot do this".
-    if (command !== undefined && command in ELSEWHERE) {
-      const { home, bin } = ELSEWHERE[command] as VerbLocation;
+    // An own-property lookup, not `in`: `ELSEWHERE` inherits from `Object.prototype`, so `in`
+    // also answers yes for `constructor` and `toString` and the message would then name the
+    // package as "undefined" instead of reporting an unknown command.
+    const elsewhere = Object.hasOwn(ELSEWHERE, command ?? '') ? ELSEWHERE[command as string] : undefined;
+    if (elsewhere !== undefined) {
+      const { home, bin } = elsewhere;
       throw new UsageError(
         `"${command}" is not part of indexwright; it ships as ${home}. ` +
           `Install it with "npm install --save-dev ${home}" and run "${bin}".`,

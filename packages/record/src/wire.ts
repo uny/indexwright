@@ -40,6 +40,12 @@ export function* fields(bytes: Uint8Array): Generator<WireField> {
       if (offset >= bytes.length) throw new WireError('varint runs past the end of the message');
       const byte = bytes[offset] as number;
       offset += 1;
+      // A varint is 64 bits, so the tenth byte contributes bit 63 and nothing above it. Without
+      // this the reader accepts values up to 2^70, which no encoder produces and which nothing
+      // downstream can interpret as the number that was meant.
+      if (read === MAX_VARINT_BYTES - 1 && (byte & 0x7f) > 1) {
+        throw new WireError('varint does not fit in 64 bits');
+      }
       result |= BigInt(byte & 0x7f) << shift;
       if ((byte & 0x80) === 0) return result;
       shift += 7n;
@@ -96,15 +102,25 @@ export function text(bytes: Uint8Array): string {
   }
 }
 
+const TWO_TO_THE_64 = 1n << 64n;
+const TWO_TO_THE_63 = 1n << 63n;
+
 /**
- * Read a varint field as a number.
+ * Read a varint field as an enum value.
  *
- * Enum and boolean fields are the only varints this decoder reads, so a value outside the safe
- * integer range is not a large enum, it is a message this decoder has misread.
+ * Enums are `int32` on the wire, and a negative one is sign-extended to the full ten bytes. Read
+ * as unsigned that is a huge number, and rejecting it would report a message that parsed perfectly
+ * as `undecodable-message` — the one reason SPEC §7 reserves for having read the wire wrongly —
+ * when what actually happened is an operator this vocabulary cannot name. Sign-extended values are
+ * folded back to their negative selves; no table has a negative key, so they fall through to
+ * `unsupported-shape` like any other unknown value.
  */
 export function enumeration(value: bigint): number {
-  if (value > BigInt(Number.MAX_SAFE_INTEGER)) throw new WireError('varint is out of range');
-  return Number(value);
+  const signed = value >= TWO_TO_THE_63 ? value - TWO_TO_THE_64 : value;
+  if (signed > BigInt(Number.MAX_SAFE_INTEGER) || signed < BigInt(Number.MIN_SAFE_INTEGER)) {
+    throw new WireError('varint is out of range');
+  }
+  return Number(signed);
 }
 
 /**

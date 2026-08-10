@@ -7,7 +7,7 @@
 
 export { buildCorpus, CorpusError, parseCorpus, serialiseCorpus, writeCorpus } from './corpus.js';
 export { decodeRunQuery, type DecodeResult } from './decode.js';
-export { classify, parseHostPort, startCapture, type Capture, type CaptureOptions } from './proxy.js';
+export { classify, parseHostPort, startCapture, type Capture, type CaptureOptions, type Intent } from './proxy.js';
 export { Recorder } from './recorder.js';
 export {
   compareByCodePoint,

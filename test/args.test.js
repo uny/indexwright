@@ -85,6 +85,10 @@ test('a verb that does not exist yet is still an unknown command', () => {
   // `check` is v0.3. Pointing at a package that does not implement it would be worse than saying
   // it is not known.
   rejects(['check', 'a.json'], /unknown command "check"/);
+  // A name inherited from Object.prototype is not a verb either. Looked up with `in`, it would be
+  // found, and the message would name the package as "undefined".
+  rejects(['constructor'], /unknown command "constructor"/);
+  rejects(['toString'], /unknown command "toString"/);
 });
 
 test('numeric options are range-checked', () => {
