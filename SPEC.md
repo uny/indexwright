@@ -2,7 +2,7 @@
 
 Linter and query-coverage checker for Firestore composite indexes.
 
-Status: **v0.1.0 (draft)**. Pre-1.0: rules and CLI surface may change between minor versions.
+Status: **v0.2.0 (draft)**. Pre-1.0: rules and CLI surface may change between minor versions.
 
 ---
 
@@ -74,22 +74,32 @@ The v0.2/v0.3 split is deliberate: capture is cheap and offline, while the cover
 delegated to the platform. Reimplementing index matching would risk emitting false
 `FAILED_PRECONDITION` verdicts and blocking development on a rule that is not published.
 
-**Packaging of v0.2/v0.3.** Capture needs a gRPC stack — `@grpc/grpc-js` and protobuf definitions
-for the Firestore v1 API — and hand-writing a decoder for a wire format owned by someone else is
-not a cost worth paying. That collides with §8: `record` and `check` run inside an adopter's
-project, so their dependencies land in an adopter's tree, and the build-time carve-out does not
-reach them.
+**Packaging of v0.2/v0.3.** `record` and `check` run inside an adopter's project, so whatever they
+depend on lands in an adopter's tree, and the build-time carve-out of §8 does not reach them. They
+ship as a separate package, `@indexwright/record`. **`indexwright` itself acquires no runtime
+dependency, in any version.**
 
-They therefore ship as a separate package, `@indexwright/record`, which depends on `indexwright`
-for the index model and the `json` contract. **`indexwright` itself acquires no runtime dependency,
-in any version.**
+The cost being separated is `check`'s, not `record`'s. Replay executes captured shapes against a
+real database and reads the status Firestore answers with, which means a Firestore client — the
+thing §8 exists to keep out of a linter that runs on every push, in every CI job, in projects that
+may never touch Firestore from a server. `check` runs where a project is already talking to
+Firestore server-side and has already resolved that client transitively. The dependency is added
+where it is very likely already resolved, and is absent where it would be new.
 
-The split is not a workaround; it puts each cost where it is cheapest. `lint` runs on every push,
-in every CI job, in projects that may never touch Firestore from a server — that is where a
-transitive dependency tree is least welcome. `record` runs against a local emulator, in a project
-that is already talking to Firestore server-side and therefore already resolves `@grpc/grpc-js`
-transitively through `@google-cloud/firestore`. The dependency is added where it is very likely
-already resolved, and is absent where it would be new.
+Capture turned out not to need one. An earlier draft of this section justified the split with a
+gRPC stack for `record` too — `@grpc/grpc-js` and protobuf definitions for the Firestore v1 API, on
+the grounds that hand-writing a decoder for a wire format owned by someone else is not a cost worth
+paying. Neither half held. `@grpc/grpc-js` implements clients and servers for services known at
+build time; a transparent proxy is `node:http2` and raw frames, and grpc-js has no part in it. And
+§7 fixes a closed operator vocabulary and requires an unrecognised enum value to be counted rather
+than named, so the enum table has to exist in-tree whichever library reads the bytes — what a
+protobuf runtime would add on top of it is varint and length-delimited parsing over field numbers
+that a released `.proto` cannot renumber. `@indexwright/record` v0.2 therefore declares no runtime
+dependency either, and takes one when `check` arrives.
+
+It does not depend on `indexwright` yet. Capture reads no index declarations, so the index model
+and the `json` contract are `check`'s needs rather than `record`'s. Declaring the dependency early
+would put a package in an adopter's tree that nothing imports.
 
 The cost is a second package to discover. `indexwright record` in an installation that has only the
 linter must say where the verb lives, not report an unknown command.
@@ -574,7 +584,17 @@ below and records nothing:
 - **A query-bearing RPC this specification does not model** — `ExecutePipeline` carries a
   `StructuredPipeline` rather than a `StructuredQuery`, and pipelines are outside v0.2. Counted as
   `unsupported-rpc`, so that `skipped: []` keeps meaning *nothing was declined* rather than *nothing
-  the proxy happened to recognise was declined*.
+  the proxy happened to recognise was declined*. The same reason covers any other method on the
+  Firestore service that is neither captured above nor on the list of methods known to carry no
+  query at all: a method added after this was written is counted, not assumed harmless.
+- **A message compressed with an encoding `record` cannot undo** — gRPC marks compression per
+  message and names the codec in `grpc-encoding`. `gzip` and `deflate` are undone and the message
+  read; anything else is counted as `unsupported-encoding`. A client that negotiates a codec this
+  package does not implement would otherwise have every query it sent vanish without trace.
+- **Bytes that do not parse** — a truncated frame, a body that ends mid-message, or a payload that
+  is not the message the method declares. Counted as `undecodable-message`. This is the one reason
+  that indicates a defect rather than a boundary: it should not occur against a conforming client,
+  and a corpus carrying it is reporting that something read the wire wrongly.
 
 `skipped` draws from that closed vocabulary and nothing else. No text decoded from the wire is ever
 interpolated into a reason: the corpus is committed, and a free-text field fed by intercepted
@@ -601,9 +621,13 @@ an aspiration of the project: it holds in every version, and a test asserts it.
 
 The principle is about what lands in an adopter's tree, so build- and test-time tooling that never
 ships is out of its scope. It is not a claim that no part of indexwright may depend on anything.
-Where a verb needs a library it cannot reasonably write — the gRPC stack behind `record` (§3) —
-that verb ships as its own package instead of as a dependency of the linter. What the principle
+Where a verb needs a library it cannot reasonably write — the Firestore client behind `check` (§3)
+— that verb ships as its own package instead of as a dependency of the linter. What the principle
 forbids is making every adopter of `lint` pay for it.
+
+`@indexwright/record` holds the line further than the principle requires: at v0.2 it declares no
+runtime dependency either, because capture turned out to need none (§3). That is not a promise it
+makes for every version, and `check` will end it.
 
 **No network, no credentials, in `lint`.** Static analysis must be runnable in any environment,
 including a sandboxed CI step with no cloud access. Network use is confined to the planned
@@ -636,10 +660,12 @@ exploration only.
 - The package also exports a JavaScript API, so the rules can be run without spawning a process.
   That API is **provisional**: it is not part of the stable contract before 1.0 and may change in
   any minor release. Only the `json` output shape carries the compatibility promise.
-- indexwright is published as a family: `indexwright`, the linter, which carries no runtime
-  dependencies, and — from v0.2 — `@indexwright/record`, capture and coverage, which depends on the
-  linter and on a gRPC stack (§3). They version independently; `@indexwright/record` declares the
-  range of `indexwright` whose `json` contract it reads.
+- indexwright is published as a family: `indexwright`, the linter, and — from v0.2 —
+  `@indexwright/record`, capture and coverage. Both carry no runtime dependencies at v0.2; `check`
+  will give the second one a Firestore client (§3). They version independently, and their version
+  numbers are not held in step: `@indexwright/record` 0.2.0 and `indexwright` 0.2.0 coincide only
+  because the family reached v0.2 together. When `check` lands and declares a range of
+  `indexwright` whose `json` contract it reads, that range is what ties them, not the numbers.
 - The query corpus (§7) is the second stable contract, and the only one that crosses a package
   boundary as a file. It is versioned by its own `corpusVersion` rather than by either package's
   release number, so a writer and a reader agree on the integer and not on each other's versions.

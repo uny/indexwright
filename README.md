@@ -143,21 +143,22 @@ console.log(result.summary.byRule);
 
 ## Scope
 
-v0.1.0 is static analysis of declaration files only: no network access, no credentials, no Firestore
-connection.
+`indexwright lint` is static analysis of declaration files only: no network access, no credentials,
+no Firestore connection. Answering *is this index needed* takes the queries, which is a separate
+package:
 
-Planned, and deliberately split:
-
-- **v0.2 — query capture.** The emulator speaks the Firestore v1 gRPC API in plaintext on a local
-  port, so an intercepting proxy can record observed `StructuredQuery` shapes. This is language- and
-  framework-independent because it operates on the wire protocol.
+- **v0.2 — query capture, shipped.** [`@indexwright/record`](packages/record) runs a test suite
+  with `FIRESTORE_EMULATOR_HOST` pointed at a pass-through proxy and records the `StructuredQuery`
+  shapes it observes as a corpus. This is language- and framework-independent because it operates
+  on the wire protocol rather than on source code.
 - **v0.3 — coverage check.** Replay a captured corpus against a throwaway database with the
   candidate index set applied, and report queries that fail with `FAILED_PRECONDITION`. The oracle
   is Firestore itself; indexwright does not reimplement the undocumented matching rule.
 
-Coverage will be bounded by what actually exercises the proxy. A query no test issues is not
-observed, and absence of observation is not evidence that an index is unused. That limit is
-inherent.
+Coverage is bounded by what actually exercises the proxy. A query no test issues is not observed,
+and absence of observation is not evidence that an index is unused. That limit is inherent; the
+narrower ones that are not — the Firebase Web SDK's transport, and snapshot listeners — are
+[named in the spec](SPEC.md) and counted in the corpus rather than passed over.
 
 ## Toward 1.0
 
