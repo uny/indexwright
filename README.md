@@ -170,15 +170,21 @@ Until then the version stays below 1.0 and the rules stay provisional.
 
 ## Development
 
+This is an npm workspace holding two packages: `indexwright` at the root and
+[`@indexwright/record`](packages/record) under `packages/`. Both scripts cover both.
+
 ```bash
 npm install
-npm test                  # builds, then runs the suite against dist/
-npm run verify-package    # builds, packs, installs the tarball, exercises the bin and the API
+npm test                  # builds, then runs both suites against dist/
+npm run verify-package    # builds, packs, installs each tarball, exercises the bins and the APIs
 ```
 
 Both scripts build first as an explicit step rather than through a `pre` hook, because npm skips
 `pre`/`post` scripts entirely under `ignore-scripts=true` — a setting many developers turn on. With
 a hook, that configuration silently tests whatever `dist/` happened to be lying around.
+
+The packages version independently and release from separate tags: `v0.2.0` publishes the linter,
+`record-v0.2.0` publishes the recorder.
 
 ## License
 

@@ -1,0 +1,60 @@
+name: release-record
+
+# `@indexwright/record` versions independently of `indexwright` (SPEC §10), so it gets its own tag
+# prefix. `record-v0.2.0` does not match the `v*` filter the linter's release workflow uses, and
+# `v0.2.0` does not match this one — the two can never publish each other.
+on:
+  push:
+    tags: ['record-v*']
+
+permissions:
+  contents: read
+  # Required for npm provenance.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to commit SHAs, not to tags: this job can mint an npm publishing credential from
+      # its OIDC identity, so a retagged action would be a supply-chain path into a released
+      # version. The trailing comment is the human-readable version and what Dependabot bumps.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes to git, and the steps below run dependency lifecycle scripts.
+          # Leaving GITHUB_TOKEN in .git/config would hand them a credential for no reason.
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # 24, not the engines floor of 22, because trusted publishing needs npm >= 11.5.1 and
+          # Node 22 still ships npm 10. The floor is exercised by the ci workflow on every PR.
+          node-version: '24'
+          # registry-url is deliberately absent; see the comment in release.yml for why setting it
+          # breaks the OIDC exchange.
+          cache: npm
+
+      - name: Check that the tag matches the package version
+        run: |
+          tag="${GITHUB_REF_NAME#record-v}"
+          version="$(node -p "require('./packages/record/package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match packages/record/package.json version $version" >&2
+            exit 1
+          fi
+
+      # The whole workspace, not just this package: they build from one tsconfig chain and the
+      # tarball checks cover both, so a release that breaks the other one should not ship.
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run verify-package
+
+      # Published from the workspace root so the committed .npmrc applies. No NODE_AUTH_TOKEN: npm
+      # exchanges the job's OIDC identity for a short-lived credential.
+      #
+      # The FIRST publish of this package cannot use that path — npm will not accept a trusted
+      # publisher for a package that does not exist yet, so 0.2.0 is bootstrapped with a one-shot
+      # token published by hand, the trusted publisher is configured against the published
+      # package, and the token is revoked. Every release after that runs here. This is the same
+      # sequence `indexwright` went through for 0.1.0 and 0.1.1.
+      - run: npm publish -w @indexwright/record --provenance --access public

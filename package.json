@@ -1,6 +1,6 @@
 {
   "name": "indexwright",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Linter for Firestore composite index declarations (firestore.indexes.json)",
   "keywords": [
     "firestore",
@@ -47,7 +47,7 @@
     "build": "tsc --build --force tsconfig.json packages/record/tsconfig.json",
     "typecheck": "tsc --noEmit && tsc --noEmit -p packages/record/tsconfig.json",
     "test": "npm run build && node --test \"test/*.test.js\" \"packages/*/test/*.test.js\"",
-    "verify-package": "npm run build && node scripts/verify-package.mjs",
+    "verify-package": "npm run build && node scripts/verify-package.mjs && node scripts/verify-record-package.mjs",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
