@@ -48,7 +48,7 @@
   },
   "scripts": {
     "build": "tsc --build --force",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --build ../indexwright/tsconfig.json && tsc --noEmit",
     "prepublishOnly": "npm run build"
   }
 }
