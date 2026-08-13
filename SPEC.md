@@ -70,6 +70,42 @@ Firestore connection.
   has the candidate index set applied, and report queries that fail with `FAILED_PRECONDITION`.
   The oracle is Firestore itself; indexwright does not reimplement the undocumented matching rule.
 
+  **`check` does not apply the index set.** It is handed a database that already has it, and
+  applying one is left to whatever the project already deploys with — `firebase deploy`, the Admin
+  API, Terraform. Those differ in credentials, in quota, and in what they are permitted to create,
+  and none of that difference informs the verdict `check` returns. Absorbing it would put a deploy
+  path inside a tool whose entire output is a read.
+
+  **`check` does verify that the set is ready.** That obligation does not travel with the applying,
+  because a false `FAILED_PRECONDITION` is emitted by `check` no matter who deployed, and §2 forbids
+  acting on one. A composite index answers `FAILED_PRECONDITION` for a period *after* it can serve
+  some queries: waiting on a single query to succeed is not evidence, since a sibling query on the
+  same index can still fail immediately afterwards, inconsistently across value types and filter
+  shapes, and the effect vanishes on re-run. A check that reported in that window would emit exactly
+  the false positive §2 exists to prevent, and would emit it rarely enough to be believed.
+
+  So readiness is established twice over: every index in the candidate set must report `state:
+  READY` through the Admin API, *and* the set must have been quiet for a settling period after the
+  last transition. Neither half is sufficient — the state alone is what the paragraph above
+  disproves, and a timer alone is a guess at a build duration that varies with collection size.
+
+  What this costs is worth stating precisely, because it is easy to overstate and the overstatement
+  argues for the wrong design. It is not a second OAuth scope:
+  `projects.databases.collectionGroups.indexes.list` accepts the same
+  `https://www.googleapis.com/auth/datastore` (or `cloud-platform`) that the data client already
+  holds. It is an IAM permission — `datastore.schemas.list`, for which `datastore.indexes.list`
+  remains a legacy alias — and `roles/datastore.user`, the ordinary grant for a principal that reads
+  and writes documents, already carries it. So for a runner credentialed the way a test suite is
+  normally credentialed, readiness costs no additional grant at all, and `check` must not ask for
+  `roles/datastore.indexAdmin`: that role adds `create` and `delete` on indexes, which is write
+  authority over the thing being measured, granted to a command whose entire output is a read.
+
+  The obligation is therefore to fail legibly rather than to demand more. A principal that cannot
+  list indexes must be told that readiness could not be established, and `check` must decline to
+  report — not fall back to replaying against a set it cannot vouch for, which is the quietly-wrong
+  behaviour this whole subsection exists to rule out at the moment it is most likely to occur, which
+  is right after a deploy.
+
 The v0.2/v0.3 split is deliberate: capture is cheap and offline, while the coverage decision is
 delegated to the platform. Reimplementing index matching would risk emitting false
 `FAILED_PRECONDITION` verdicts and blocking development on a rule that is not published.
@@ -546,13 +582,33 @@ anything outside it was skipped at capture as `unsupported-shape`.
 Two shapes are not free-form and cannot be synthesised from the same rule. A `__name__` filter takes
 a document reference under the collection being queried, not a scalar, because Firestore validates
 the operand's type against the document key before it selects an index. And an entry whose root
-composite has no children replays with `where` omitted altogether, not as an empty `AND`: a wire
-`CompositeFilter` must carry at least one filter. Both would otherwise fail with `INVALID_ARGUMENT`,
-and an `INVALID_ARGUMENT` is not a `FAILED_PRECONDITION`. v0.3 reports the latter and never the
-former: a replay that comes back invalid is either a synthesis this section got wrong or a query
-that was already invalid when it was captured — the corpus admits those, since it records what was
-sent rather than what succeeded — and neither is a statement about the index set. Both are reported
-as un-replayable entries, which is a defect in the tooling or the test that issued them.
+composite is the empty `AND` replays with `where` omitted altogether, rather than as an empty `AND`
+on the wire: a `CompositeFilter` must carry at least one filter. Both would otherwise fail with
+`INVALID_ARGUMENT`, and an `INVALID_ARGUMENT` is not a `FAILED_PRECONDITION`. v0.3 reports the
+latter and never the former: a replay that comes back invalid is either a synthesis this section got
+wrong or a query that was already invalid when it was captured — the corpus admits those, since it
+records what was sent rather than what succeeded — and neither is a statement about the index set.
+Either cause is reported as an un-replayable entry, which is a defect in the tooling or in the test
+that issued the query.
+
+Only the empty `AND` is exempt, and only because normalisation manufactures it: a query that carried
+no `where` at all is stored that way, so replaying it without a `where` replays the same query.
+Every other childless composite is un-replayable and is reported as such rather than repaired. An
+empty `OR` is the case worth naming, because the repair looks harmless and is not: omitting a
+`where` that matched nothing issues an *unfiltered* query, which needs no index, succeeds, and
+reports the entry covered when nothing was checked — a false clean verdict, which §2 forbids more
+strictly than a false alarm. The same applies to a childless composite nested below the root, which
+normalisation preserves whenever its operator differs from its parent's.
+
+This leaves one ambiguity the format cannot resolve. A query that sent no `where` and one whose
+`where` normalises away to nothing are recorded identically, because the corpus stores the
+normalised tree and both reach the same empty `AND`. The second is not only a literal `AND()`: since
+normalisation splices a same-op child into its parent, `AND(AND())` and any depth of same-op nesting
+over an empty composite collapse to it too. Every one of those was already `INVALID_ARGUMENT` when
+it was captured, so exempting them replays an unfiltered query and reports it covered. The exemption
+is kept anyway — a query with no `where` is ordinary and must stay replayable, while the others are
+pathological — but it is a choice made under ambiguity rather than a distinction the corpus records,
+and a future corpus version that wants the distinction has to record it at capture.
 
 This rests on the claim above — that index selection does not depend on the compared value or its
 type. The claim is consistent with how the field is indexed rather than the value, but it is not
