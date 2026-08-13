@@ -2,7 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    // Referenced by packages/record, which needs the linter's index model for `check` (SPEC §3).
+    "composite": true
   },
   "include": ["src"]
 }

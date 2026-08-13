@@ -33,20 +33,36 @@ export function createChecker() {
   };
 }
 
+function pack(packageRoot, staging) {
+  const packed = JSON.parse(
+    run('npm', ['pack', '--json', '--pack-destination', staging], { cwd: packageRoot }),
+  );
+  console.log(`packed ${packed[0].filename} (${packed[0].files.length} files)`);
+  return {
+    tarball: join(staging, packed[0].filename),
+    files: new Set(packed[0].files.map((entry) => entry.path)),
+  };
+}
+
 /**
  * @param {string} packageRoot directory holding the package.json to pack
  * @param {(context: {files: Set<string>, consumer: string, staging: string}) => void} body
+ * @param {{alongside?: readonly string[]}} [options] package roots to pack and install with it,
+ *   satisfying its runtime dependencies from this tree instead of from the registry
  */
-export function withInstalledTarball(packageRoot, body) {
+export function withInstalledTarball(packageRoot, body, options = {}) {
   const staging = mkdtempSync(join(tmpdir(), 'indexwright-pack-'));
   try {
     console.log('packing…');
-    const packed = JSON.parse(
-      run('npm', ['pack', '--json', '--pack-destination', staging], { cwd: packageRoot }),
-    );
-    const tarball = join(staging, packed[0].filename);
-    const files = new Set(packed[0].files.map((entry) => entry.path));
-    console.log(`packed ${packed[0].filename} (${packed[0].files.length} files)`);
+    const { tarball, files } = pack(packageRoot, staging);
+    // A dependency inside this repository is installed from its own tarball rather than fetched.
+    // Two reasons, and the first is what this whole script is for: the pair is released together, so
+    // the version that matters is the one in the tree, not whichever one is already published. The
+    // second is that fetching makes the check hostage to the installing environment — a registry
+    // mirror that does not carry the package, or an `npm config set before` window that a
+    // days-old release falls outside of, both fail it for reasons that have nothing to do with the
+    // tarball.
+    const dependencies = (options.alongside ?? []).map((root) => pack(root, staging).tarball);
 
     const consumer = join(staging, 'consumer');
     mkdirSync(consumer, { recursive: true });
@@ -55,7 +71,7 @@ export function withInstalledTarball(packageRoot, body) {
       JSON.stringify({ name: 'consumer', private: true, type: 'module' }),
     );
     console.log('installing the tarball…');
-    run('npm', ['install', '--no-audit', '--no-fund', tarball], { cwd: consumer });
+    run('npm', ['install', '--no-audit', '--no-fund', tarball, ...dependencies], { cwd: consumer });
 
     body({ files, consumer, staging });
   } finally {
@@ -84,6 +100,24 @@ export function checkNoRuntimeDependencies(checker, manifest) {
   checker.check('declares no runtime dependencies', () => {
     const declared = Object.keys(manifest.dependencies ?? {});
     if (declared.length > 0) throw new Error(`declares ${declared.join(', ')}`);
+  });
+}
+
+/**
+ * A package's runtime dependencies are exactly the expected set.
+ *
+ * For a package that is allowed some, which is the weaker promise SPEC §3 makes about
+ * `@indexwright/record`. Pinned as an exact set rather than a ceiling so that acquiring the next one
+ * — §3 expects a Firestore client when replay arrives — is a deliberate edit here and not a thing
+ * that lands in an adopter's tree unremarked.
+ */
+export function checkDeclaredDependencies(checker, manifest, expected) {
+  checker.check(`declares exactly ${expected.join(', ') || 'no'} runtime dependencies`, () => {
+    const declared = Object.keys(manifest.dependencies ?? {}).sort();
+    const wanted = [...expected].sort();
+    if (declared.length !== wanted.length || declared.some((name, i) => name !== wanted[i])) {
+      throw new Error(`declares ${declared.join(', ') || '(none)'}`);
+    }
   });
 }
 

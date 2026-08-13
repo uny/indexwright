@@ -40,6 +40,9 @@
   "engines": {
     "node": ">=22"
   },
+  "dependencies": {
+    "indexwright": "^0.2.0"
+  },
   "publishConfig": {
     "access": "public"
   },

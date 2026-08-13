@@ -5,6 +5,29 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## Unreleased
+
+### Added
+
+- Reconciliation of a candidate index set against the set a database actually holds, the presence
+  half of what [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §3 requires `check` to
+  settle before it reports. `reconcile` compares the two sides under the canonical index key of §5,
+  so the trailing `__name__` a live index always carries and a declaration usually omits does not
+  read as a difference, and returns `identical`, `diverged`, or `indeterminate`. Both directions of
+  divergence corrupt a report: an undeclared index on the target serves queries the candidate set
+  alone would fail, so the run comes back clean and the gap never appears in the output, while a
+  declared index the target lacks produces the false `FAILED_PRECONDITION` §2 forbids acting on. An
+  entry whose canonical form cannot be derived makes the whole result `indeterminate` rather than
+  being guessed at or dropped, because §3 requires `check` to decline rather than vouch for a set it
+  cannot vouch for. No client and no I/O: it is fed an analysed document and an observed listing.
+
+### Changed
+
+- **This release takes a runtime dependency on `indexwright`**, as §3 said it would when `check`
+  arrived: reconciliation needs the linter's index model and the canonical key, so that both sides
+  are compared under one interpretation rather than a second copy of it. The direction stays one-way
+  — `indexwright` acquires no runtime dependency, in any version.
+
 ## [0.3.0] — 2026-08-13
 
 The parts of the v0.3 coverage check that are decidable without a Firestore client. The `check`
