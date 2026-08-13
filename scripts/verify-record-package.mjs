@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  checkNoRuntimeDependencies,
+  checkDeclaredDependencies,
   checkShippedFiles,
   createChecker,
   finish,
@@ -21,6 +21,8 @@ import {
 } from './lib/tarball.mjs';
 
 const packageRoot = fileURLToPath(new URL('../packages/record', import.meta.url));
+/** Its one runtime dependency (SPEC §3), installed from this tree so the pair is checked together. */
+const linterRoot = fileURLToPath(new URL('../packages/indexwright', import.meta.url));
 const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
 const checker = createChecker();
 const { check } = checker;
@@ -76,7 +78,7 @@ withInstalledTarball(packageRoot, ({ files, consumer }) => {
     'dist/index.js',
     'dist/index.d.ts',
   ]);
-  checkNoRuntimeDependencies(checker, manifest);
+  checkDeclaredDependencies(checker, manifest, ['indexwright']);
 
   check('the fixture-generating script is not shipped', () => {
     for (const path of files) {
@@ -100,6 +102,27 @@ withInstalledTarball(packageRoot, ({ files, consumer }) => {
         'if (corpus.corpusVersion !== CORPUS_VERSION) throw new Error("version mismatch");\n' +
         'parseCorpus(serialiseCorpus(corpus));\n' +
         'console.log("api ok");\n',
+    );
+    run(process.execPath, [probe], { cwd: consumer });
+  });
+
+  check('reconciliation resolves its indexwright dependency from the installed tree', () => {
+    // The workspace resolves `indexwright` through a symlink to packages/indexwright, so a passing
+    // typecheck says nothing about whether a consumer gets it. This exercises the dependency SPEC §3
+    // predicted through the tarball instead — against the linter packed from *this tree*, not the
+    // published one, which is what `alongside` is for. So it proves the two halves work together at
+    // the versions being released; it does not prove the declared range resolves to them.
+    const probe = join(consumer, 'reconcile.mjs');
+    writeFileSync(
+      probe,
+      "import { analyse } from 'indexwright';\n" +
+        "import { isVouched, reconcile } from '@indexwright/record';\n" +
+        "const candidate = analyse({ indexes: [{ collectionGroup: 'items', queryScope: 'COLLECTION', fields: [{ fieldPath: 'sku', order: 'ASCENDING' }] }] });\n" +
+        "const live = [{ name: 'projects/p/databases/(default)/collectionGroups/items/indexes/ix', state: 'READY', queryScope: 'COLLECTION', fields: [{ fieldPath: 'sku', order: 'ASCENDING' }, { fieldPath: '__name__', order: 'ASCENDING' }] }];\n" +
+        'const result = reconcile(candidate, live);\n' +
+        'if (!isVouched(result)) throw new Error("expected the set to reconcile: " + result.verdict);\n' +
+        'if (reconcile(candidate, []).verdict !== "diverged") throw new Error("expected an empty target to diverge");\n' +
+        'console.log("reconcile ok");\n',
     );
     run(process.execPath, [probe], { cwd: consumer });
   });
@@ -139,7 +162,7 @@ withInstalledTarball(packageRoot, ({ files, consumer }) => {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
-});
+}, { alongside: [linterRoot] });
 
 /** Block until the stub has written the port it bound, or give up. */
 function waitForPort(portPath) {

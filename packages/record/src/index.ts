@@ -18,6 +18,21 @@ export {
   type LiveIndex,
   type Readiness,
 } from './readiness.js';
+export {
+  INCOMPARABLE_REASONS,
+  isVouched,
+  reconcile,
+  UNREADABLE_REASONS,
+  type ExtraIndex,
+  type IncomparableIndex,
+  type IncomparableReason,
+  type LiveCompositeIndex,
+  type MatchedIndex,
+  type Reconciliation,
+  type ReconciliationVerdict,
+  type UnreadableIndex,
+  type UnreadableReason,
+} from './reconcile.js';
 export { Recorder } from './recorder.js';
 export {
   compareByCodePoint,
