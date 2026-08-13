@@ -10,15 +10,18 @@ again, by its own `corpusVersion`.
 ### Added
 
 - Replay synthesis, specified in [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7
-  (*Replay without values*): `planReplay` turns a corpus entry back into the query v0.3's `check`
-  has to issue. A corpus holds no values, so replay invents them; this decides only what *kind* of
-  operand each filter needs — `scalar` or `reference`, and its arity — which follows from the
-  operator and the field path and never from a value. It builds no Firestore objects and imports no
-  client, so the two synthesis mistakes that would make `check` report `INVALID_ARGUMENT` instead of
-  the `FAILED_PRECONDITION` §7 requires — a wrong-shaped operand, an empty `where` — are settled
-  where they can be tested exhaustively. Exported alongside it: `isReplayComposite`, `NAME_FIELD`,
-  `operandFor`, `ReplayError`, and the `Operand`, `OperandType`, `ReplayComposite`, `ReplayLeaf`,
-  `ReplayNode`, `ReplayPlan` types.
+  (*Replay without values*): `planReplay` turns a corpus entry back into a plan for the query v0.3's
+  `check` has to issue. A corpus holds no values, so replay invents them; this decides only what
+  *kind* of operand each filter needs — `scalar` or `reference`, and its arity — which follows from
+  the operator and the field path and never from a value. It builds no Firestore objects and imports
+  no client, so the two synthesis mistakes that would make `check` report `INVALID_ARGUMENT` instead
+  of the `FAILED_PRECONDITION` §7 requires — a wrong-shaped operand, an empty `where` — are settled
+  where they can be tested exhaustively; materialising the plan against a real collection is the
+  adapter's job. An entry with no replayable form — a childless root `OR`, or a childless composite
+  below the root, both of which a committed corpus can carry — raises `ReplayError` rather than a
+  plan for a wider query than the one recorded. Exported alongside it: `isReplayComposite`,
+  `NAME_FIELD`, `operandFor`, `ReplayError`, and the `Operand`, `OperandType`, `ReplayComposite`,
+  `ReplayLeaf`, `ReplayNode`, `ReplayPlan` types.
 - A readiness gate for the index set under test (SPEC §3, *v0.3 — coverage check*): `ReadinessGate`,
   with `DEFAULT_SETTLE_MS`, `INDEX_STATES`, `isReportable`, `isTransient`, and the `IndexState`,
   `LiveIndex`, `Readiness` types. A composite index answers `FAILED_PRECONDITION` for a period after
