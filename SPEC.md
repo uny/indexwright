@@ -588,8 +588,8 @@ on the wire: a `CompositeFilter` must carry at least one filter. Both would othe
 latter and never the former: a replay that comes back invalid is either a synthesis this section got
 wrong or a query that was already invalid when it was captured — the corpus admits those, since it
 records what was sent rather than what succeeded — and neither is a statement about the index set.
-Both are reported as un-replayable entries, which is a defect in the tooling or the test that issued
-them.
+Either cause is reported as an un-replayable entry, which is a defect in the tooling or in the test
+that issued the query.
 
 Only the empty `AND` is exempt, and only because normalisation manufactures it: a query that carried
 no `where` at all is stored that way, so replaying it without a `where` replays the same query.
@@ -600,11 +600,13 @@ reports the entry covered when nothing was checked — a false clean verdict, wh
 strictly than a false alarm. The same applies to a childless composite nested below the root, which
 normalisation preserves whenever its operator differs from its parent's.
 
-This leaves one ambiguity the format cannot resolve. A wire query that actually sent `AND()` is
-recorded identically to one that sent no `where`, because the corpus stores the normalised tree and
-both normalise to the same empty `AND`. The former was already `INVALID_ARGUMENT` when it was
-captured; exempting it replays an unfiltered query and reports it covered. The exemption is kept
-anyway — a query with no `where` is ordinary and must stay replayable, while a wire-sent `AND()` is
+This leaves one ambiguity the format cannot resolve. A query that sent no `where` and one whose
+`where` normalises away to nothing are recorded identically, because the corpus stores the
+normalised tree and both reach the same empty `AND`. The second is not only a literal `AND()`: since
+normalisation splices a same-op child into its parent, `AND(AND())` and any depth of same-op nesting
+over an empty composite collapse to it too. Every one of those was already `INVALID_ARGUMENT` when
+it was captured, so exempting them replays an unfiltered query and reports it covered. The exemption
+is kept anyway — a query with no `where` is ordinary and must stay replayable, while the others are
 pathological — but it is a choice made under ambiguity rather than a distinction the corpus records,
 and a future corpus version that wants the distinction has to record it at capture.
 

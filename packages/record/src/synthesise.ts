@@ -147,11 +147,9 @@ function planNode(node: FilterNode): ReplayNode {
  * verdict is the outcome §2 forbids most strictly, so this refuses instead.
  *
  * The exemption is a choice under an ambiguity the format does not resolve, not a fact about the
- * entry. A wire query that really sent `AND()` normalises to the same empty `AND` as one that sent
- * no `where`, and the corpus keeps no provenance to tell them apart; the first was already
- * `INVALID_ARGUMENT` at capture, so exempting it replays an unfiltered query and calls it covered.
- * It is exempted regardless, because a query with no `where` is ordinary and must stay replayable
- * while a wire-sent `AND()` is pathological — see SPEC §7, which records the same trade.
+ * entry: a `where` that normalises away to nothing is recorded identically to no `where` at all, so
+ * this branch cannot tell an ordinary unfiltered query from one that was already `INVALID_ARGUMENT`
+ * at capture. SPEC §7 carries the argument for taking the benign reading; it is not repeated here.
  */
 function planRoot(where: FilterComposite): ReplayComposite | null {
   if (where.filters.length === 0) {

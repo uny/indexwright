@@ -117,14 +117,20 @@ test('a childless composite below the root is refused rather than planned', () =
   }
 });
 
-test('the refused shape is one a committed corpus really can carry', () => {
+test('both refused shapes are ones a committed corpus really can carry', () => {
   // The premise the two tests above rest on, asserted rather than left in a comment: if parseCorpus
-  // ever grew a check of its own, the ReplayError path would become dead code and those tests would
-  // keep passing while their justification quietly stopped being true.
-  const entry = shape({ where: { op: 'AND', filters: [{ fieldPath: 'a', op: 'EQUAL' }, { op: 'OR', filters: [] }] } });
-  const [read] = parseCorpus(serialiseCorpus(buildCorpus([entry], []))).queries;
-  assert.deepEqual(read, entry, 'a nested empty composite survives a corpus round-trip');
-  assert.throws(() => planReplay(read), { name: 'ReplayError' });
+  // ever grew a check of its own, the ReplayError paths would become dead code and those tests would
+  // keep passing while their justification quietly stopped being true. Both branches are covered —
+  // planRoot's and planNode's — because each is reachable only through its own corpus shape.
+  const entries = [
+    shape({ where: { op: 'OR', filters: [] } }),
+    shape({ where: { op: 'AND', filters: [{ fieldPath: 'a', op: 'EQUAL' }, { op: 'OR', filters: [] }] } }),
+  ];
+  for (const entry of entries) {
+    const [read] = parseCorpus(serialiseCorpus(buildCorpus([entry], []))).queries;
+    assert.deepEqual(read, entry, `${entry.key} survives a corpus round-trip`);
+    assert.throws(() => planReplay(read), { name: 'ReplayError' }, entry.key);
+  }
 });
 
 test('a same-op childless composite is absorbed by normalisation before planning sees it', () => {
