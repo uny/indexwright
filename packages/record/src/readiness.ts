@@ -77,8 +77,18 @@ export const DEFAULT_SETTLE_MS = 60_000;
  */
 const ACTIONABLE: ReadonlySet<string> = new Set(['CREATING', 'READY', 'NEEDS_REPAIR']);
 
+/**
+ * The names of an observed set, coerced and ordered.
+ *
+ * `name` gets the same treatment as `state`, and for the same reason: it is declared `string` but
+ * arrives from a service, and the generated admin protos type it `string | null`. Left uncoerced it
+ * reaches two places that assume otherwise — `compareByCodePoint` calls `Array.from`, which throws
+ * on `null`, and `JSON.stringify` maps an `undefined` element to `null`, so a set named `undefined`
+ * and a set named `null` would share a fingerprint. Coercing first keeps the declared
+ * `readonly string[]` on every verdict honest as well.
+ */
 function namesOf(indexes: readonly LiveIndex[]): string[] {
-  return indexes.map((index) => index.name).sort(compareByCodePoint);
+  return indexes.map((index) => String(index.name)).sort(compareByCodePoint);
 }
 
 /**

@@ -253,6 +253,53 @@ test('a set that has settled stays ready under continued polling', () => {
   assert.deepEqual(gate.observe([ready('a')], 9000), { kind: 'ready' });
 });
 
+test('a name that is not a string is handled rather than thrown over', () => {
+  // `name` is as untrusted as `state` — the generated admin protos type it `string | null`. Two
+  // things downstream assume otherwise: `compareByCodePoint` calls `Array.from`, which throws on
+  // `null`, and it is only reached at all when the set has two or more entries, so a one-element
+  // set hides the problem.
+  const gate = new ReadinessGate(1000);
+  assert.deepEqual(gate.observe([{ name: null, state: 'READY' }, ready('a')], 0), {
+    kind: 'settling',
+    remainingMs: 1000,
+  });
+  assert.deepEqual(gate.observe([{ name: null, state: 'READY' }, ready('a')], 1000), {
+    kind: 'ready',
+  });
+
+  // A numeric name must still order canonically, or the same set listed in two orders fingerprints
+  // two ways and the period restarts on every poll without ever elapsing.
+  const numeric = new ReadinessGate(1000);
+  numeric.observe([ready(2), ready(1)], 0);
+  assert.deepEqual(numeric.observe([ready(1), ready(2)], 1000), { kind: 'ready' });
+
+  // And the two malformed spellings must not share a fingerprint.
+  const distinct = new ReadinessGate(1000);
+  distinct.observe([{ name: undefined, state: 'READY' }], 0);
+  assert.deepEqual(distinct.observe([{ name: null, state: 'READY' }], 1000), {
+    kind: 'settling',
+    remainingMs: 1000,
+  });
+});
+
+test('names are ordered by code point, not by UTF-16 code unit', () => {
+  // The two comparators disagree exactly on an astral character against one in U+E000–U+FFFF, which
+  // is the case shape.ts documents and the reason this package has `compareByCodePoint` at all. All
+  // other names in this file are ASCII, where the two agree and nothing is pinned.
+  const astral = String.fromCodePoint(0x10000);
+  const bmp = String.fromCodePoint(0xe000);
+  const gate = new ReadinessGate(0);
+  const verdict = gate.observe(
+    [
+      { name: astral, state: 'WHO_KNOWS' },
+      { name: bmp, state: 'WHO_KNOWS' },
+    ],
+    0,
+  );
+  assert.deepEqual(verdict.indexes, [bmp, astral]);
+  assert.notDeepEqual([astral, bmp].sort(), [bmp, astral]);
+});
+
 test('a state that is not a string is still reported as one', () => {
   // `states` is declared `readonly string[]`. The gRPC admin client types `Index.state` as a
   // numeric enum, and proto3 JSON omits the field entirely when it is STATE_UNSPECIFIED, so both
