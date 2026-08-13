@@ -5,7 +5,11 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## Unreleased
+## [0.3.0] — 2026-08-13
+
+The parts of the v0.3 coverage check that are decidable without a Firestore client. The `check`
+verb itself is not in this release: nothing here executes a query or talks to a database, and
+`indexwright-record` captures exactly what it captured in 0.2.0.
 
 ### Added
 
@@ -79,4 +83,5 @@ First release. Query capture, specified in [SPEC.md](https://github.com/uny/inde
   stderr. Snapshot listeners carry their query over `Listen` and are counted, not recorded.
   Capturing `Listen` is the first extension worth making.
 
+[0.3.0]: https://github.com/uny/indexwright/releases/tag/record-v0.3.0
 [0.2.0]: https://github.com/uny/indexwright/releases/tag/record-v0.2.0

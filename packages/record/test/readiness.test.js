@@ -172,8 +172,150 @@ test('only building and settling are worth waiting on', () => {
 
 test('the settling period is rejected rather than silently treated as none', () => {
   for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
-    assert.throws(() => new ReadinessGate(bad), RangeError, String(bad));
+    // The message is asserted, not just the class: `assert.throws`'s third argument is the label
+    // printed when the assertion fails, not a matcher, so a class-only check would still pass if
+    // the message stopped naming the value that was rejected.
+    assert.throws(() => new ReadinessGate(bad), { name: 'RangeError', message: /got /u }, String(bad));
   }
+  // A valid period must not be caught by the same guard.
+  assert.doesNotThrow(() => new ReadinessGate(0));
+  assert.doesNotThrow(() => new ReadinessGate(0.5));
+});
+
+test('a clock reading that is not a number is rejected instead of poisoning the run', () => {
+  // `NaN` would anchor the run at `NaN`, every later `elapsed >= settleMs` would be false, and the
+  // gate would answer `settling` for the rest of the process — which `isTransient` calls worth
+  // waiting on, so a polling caller would never stop and never be told why.
+  const gate = new ReadinessGate(1000);
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.throws(() => gate.observe([ready('a')], bad), { name: 'RangeError' }, String(bad));
+  }
+  // Rejecting it left the gate usable rather than half-updated.
+  assert.deepEqual(gate.observe([ready('a')], 0), { kind: 'settling', remainingMs: 1000 });
+  assert.deepEqual(gate.observe([ready('a')], 1000), { kind: 'ready' });
+});
+
+test('set identity is injective, so no membership change can inherit a running period', () => {
+  // A separator-joined identity is only injective if the separator cannot occur in a name. These
+  // are the two sets that broke that assumption; both must restart the period rather than finish
+  // one that was timing a different set.
+  const empty = new ReadinessGate(1000);
+  empty.observe([], 0);
+  assert.deepEqual(empty.observe([{ name: '', state: 'READY' }], 1000), {
+    kind: 'settling',
+    remainingMs: 1000,
+  });
+
+  const separator = new ReadinessGate(1000);
+  const NUL = String.fromCharCode(0);
+  separator.observe([ready('a'), ready(`b${NUL}c`)], 0);
+  assert.deepEqual(separator.observe([ready(`a${NUL}b`), ready('c')], 1000), {
+    kind: 'settling',
+    remainingMs: 1000,
+  });
+});
+
+test('a damaged index restarts the period rather than shortening it', () => {
+  // The CREATING path already covers restart-after-interruption; these two pin the other branches
+  // that reset, which would otherwise let an interruption *credit* time to the run it interrupted.
+  const gate = new ReadinessGate(1000);
+  gate.observe([ready('a')], 0);
+  assert.equal(gate.observe([{ name: 'a', state: 'NEEDS_REPAIR' }], 500).kind, 'damaged');
+  assert.deepEqual(gate.observe([ready('a')], 1000), { kind: 'settling', remainingMs: 1000 });
+});
+
+test('an unrecognised state restarts the period too', () => {
+  const gate = new ReadinessGate(1000);
+  gate.observe([ready('a')], 0);
+  assert.equal(gate.observe([{ name: 'a', state: 'SOMETHING_NEW' }], 500).kind, 'unrecognised');
+  assert.deepEqual(gate.observe([ready('a')], 1000), { kind: 'settling', remainingMs: 1000 });
+});
+
+test('nothing is reportable while the set is still settling', () => {
+  // The only verdict that must never be reportable but *looks* benign: every index says READY and
+  // only the clock disagrees. Without this, widening `isReportable` to accept `settling` — which is
+  // the whole window this module exists to sit out — goes unnoticed.
+  const gate = new ReadinessGate(1000);
+  const settling = gate.observe([ready('a')], 0);
+  assert.equal(settling.kind, 'settling');
+  assert.equal(isReportable(settling), false);
+  assert.equal(isReportable(gate.observe([ready('a')], 999)), false);
+  assert.equal(isReportable(gate.observe([ready('a')], 1000)), true);
+});
+
+test('a set that has settled stays ready under continued polling', () => {
+  // The caller polls; it does not stop at the first `ready`. A gate that re-anchored the run on
+  // each reported `ready` would flap between `ready` and `settling` forever.
+  const gate = new ReadinessGate(1000);
+  gate.observe([ready('a')], 0);
+  assert.deepEqual(gate.observe([ready('a')], 1000), { kind: 'ready' });
+  assert.deepEqual(gate.observe([ready('a')], 1500), { kind: 'ready' });
+  assert.deepEqual(gate.observe([ready('a')], 9000), { kind: 'ready' });
+});
+
+test('a name that is not a string is handled rather than thrown over', () => {
+  // `name` is as untrusted as `state` — the generated admin protos type it `string | null`. Two
+  // things downstream assume otherwise: `compareByCodePoint` calls `Array.from`, which throws on
+  // `null`, and it is only reached at all when the set has two or more entries, so a one-element
+  // set hides the problem.
+  const gate = new ReadinessGate(1000);
+  assert.deepEqual(gate.observe([{ name: null, state: 'READY' }, ready('a')], 0), {
+    kind: 'settling',
+    remainingMs: 1000,
+  });
+  assert.deepEqual(gate.observe([{ name: null, state: 'READY' }, ready('a')], 1000), {
+    kind: 'ready',
+  });
+
+  // A numeric name must still order canonically, or the same set listed in two orders fingerprints
+  // two ways and the period restarts on every poll without ever elapsing.
+  const numeric = new ReadinessGate(1000);
+  numeric.observe([ready(2), ready(1)], 0);
+  assert.deepEqual(numeric.observe([ready(1), ready(2)], 1000), { kind: 'ready' });
+
+  // And the two malformed spellings must not share a fingerprint.
+  const distinct = new ReadinessGate(1000);
+  distinct.observe([{ name: undefined, state: 'READY' }], 0);
+  assert.deepEqual(distinct.observe([{ name: null, state: 'READY' }], 1000), {
+    kind: 'settling',
+    remainingMs: 1000,
+  });
+});
+
+test('names are ordered by code point, not by UTF-16 code unit', () => {
+  // The two comparators disagree exactly on an astral character against one in U+E000–U+FFFF, which
+  // is the case shape.ts documents and the reason this package has `compareByCodePoint` at all. All
+  // other names in this file are ASCII, where the two agree and nothing is pinned.
+  const astral = String.fromCodePoint(0x10000);
+  const bmp = String.fromCodePoint(0xe000);
+  const gate = new ReadinessGate(0);
+  const verdict = gate.observe(
+    [
+      { name: astral, state: 'WHO_KNOWS' },
+      { name: bmp, state: 'WHO_KNOWS' },
+    ],
+    0,
+  );
+  assert.deepEqual(verdict.indexes, [bmp, astral]);
+  assert.notDeepEqual([astral, bmp].sort(), [bmp, astral]);
+});
+
+test('a state that is not a string is still reported as one', () => {
+  // `states` is declared `readonly string[]`. The gRPC admin client types `Index.state` as a
+  // numeric enum, and proto3 JSON omits the field entirely when it is STATE_UNSPECIFIED, so both
+  // reach here as non-strings and must not escape into a message as `2` or `undefined`.
+  const gate = new ReadinessGate(0);
+  assert.deepEqual(gate.observe([{ name: 'a', state: 2 }], 0), {
+    kind: 'unrecognised',
+    indexes: ['a'],
+    states: ['2'],
+  });
+  const absent = new ReadinessGate(0);
+  assert.deepEqual(absent.observe([{ name: 'a' }], 0), {
+    kind: 'unrecognised',
+    indexes: ['a'],
+    states: ['undefined'],
+  });
 });
 
 test('the default settling period errs long', () => {
