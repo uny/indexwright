@@ -11,6 +11,12 @@
  * never `INVALID_ARGUMENT`, and the two synthesis mistakes that produce an `INVALID_ARGUMENT` — an
  * operand of the wrong shape, and an empty `where` — are both settled here, where they can be tested
  * exhaustively rather than observed one round-trip at a time.
+ *
+ * What this module does *not* decide is whether the recorded query was valid to begin with. A corpus
+ * names operators and field paths, never values, so a combination the wire would refuse — `IN`
+ * beside `NOT_IN`, an `IN` whose captured list was empty — is indistinguishable here from one it
+ * would accept. Those are properties of the corpus vocabulary rather than of the plan, and the
+ * verdict for them belongs to whatever executes the plan.
  */
 import type {
   CompositeOperator,
@@ -21,7 +27,18 @@ import type {
   QueryScope,
   QueryShape,
 } from './types.js';
-import { isComposite } from './types.js';
+import { isComposite, UNARY_OPERATORS } from './types.js';
+
+/**
+ * A corpus entry that cannot be replayed as a query at all.
+ *
+ * Thrown rather than papered over, the way `CorpusError` is: every repair available here replays a
+ * *different* query than the one recorded, and a verdict about a query the suite never issued is
+ * the failure §2 forbids wearing the costume of a result.
+ */
+export class ReplayError extends Error {
+  override readonly name = 'ReplayError';
+}
 
 /**
  * The document key's field path.
@@ -35,12 +52,12 @@ export const NAME_FIELD = '__name__';
 /** Operators that compare against a list rather than a single operand. */
 const LIST_OPERATORS = new Set<FilterOperator>(['IN', 'NOT_IN', 'ARRAY_CONTAINS_ANY']);
 
-const UNARY: ReadonlySet<FilterOperator> = new Set<FilterOperator>([
-  'IS_NAN',
-  'IS_NULL',
-  'IS_NOT_NAN',
-  'IS_NOT_NULL',
-]);
+/**
+ * Derived from the vocabulary rather than restated beside it: a unary operator this set failed to
+ * name would be planned as a scalar operand, which is the wrong-shaped operand this module exists
+ * to settle, and restating the list is how the two lists come to disagree.
+ */
+const UNARY: ReadonlySet<FilterOperator> = new Set<FilterOperator>(UNARY_OPERATORS);
 
 /**
  * What a filter compares against.
@@ -78,7 +95,9 @@ export interface ReplayPlan {
    * `null` means the query replays with `where` omitted altogether.
    *
    * Not an empty `AND`: a wire `CompositeFilter` must carry at least one filter, so an empty one is
-   * an `INVALID_ARGUMENT` rather than a statement about the index set.
+   * an `INVALID_ARGUMENT` rather than a statement about the index set. Every composite reachable
+   * from here therefore has at least one child — `planReplay` throws `ReplayError` rather than
+   * return one that does not.
    */
   readonly where: ReplayComposite | null;
   readonly orderBy: readonly Order[];
@@ -108,18 +127,30 @@ function planNode(node: FilterNode): ReplayNode {
   if (!isComposite(node)) {
     return { fieldPath: node.fieldPath, op: node.op, operand: operandFor(node.fieldPath, node.op) };
   }
+  // Below the root, a childless composite is never the wrapper `normaliseRoot` manufactures — it is
+  // a `CompositeFilter` the suite actually sent, which the wire requires to carry a filter. Nothing
+  // can be sent for it and nothing may be dropped in its place: removing it would replay a strictly
+  // wider query and report coverage for a shape that was never issued.
+  if (node.filters.length === 0) {
+    throw new ReplayError(`a nested ${node.op} filter with no children cannot be replayed`);
+  }
   return { op: node.op, filters: node.filters.map(planNode) };
 }
 
 /**
- * A composite with no children replays as no `where` at all.
+ * The one childless composite that means something: the `AND` wrapper.
  *
- * Only the root can be childless in practice — normalisation never manufactures an empty composite —
- * but the check is on the node rather than on the root, so that a corpus that arrived holding one
- * deeper down is planned rather than turned into an `INVALID_ARGUMENT` at execution.
+ * `normaliseRoot` represents a query that carried no `where` at all as an empty `AND`, and that
+ * replays as no `where` — the same query. An empty `OR` is not that. It is a filter that was on the
+ * wire, it matches nothing, and replaying it as an omitted `where` would issue an *unfiltered* query
+ * — which needs no index, succeeds, and reports the entry covered when nothing was ever checked.
+ * A false clean verdict is the one outcome §2 exists to prevent, so this refuses instead.
  */
 function planRoot(where: FilterComposite): ReplayComposite | null {
-  if (where.filters.length === 0) return null;
+  if (where.filters.length === 0) {
+    if (where.op === 'AND') return null;
+    throw new ReplayError('a root OR filter with no children cannot be replayed');
+  }
   return planNode(where) as ReplayComposite;
 }
 
@@ -130,6 +161,9 @@ function planRoot(where: FilterComposite): ReplayComposite | null {
  * records the orders as sent, and replay re-sends them as recorded — adding or removing a `__name__`
  * here would replay a query the suite never issued, and the oracle is Firestore rather than any rule
  * this package could apply.
+ *
+ * Throws `ReplayError` for an entry that has no replayable form at all, rather than returning a plan
+ * for a query other than the one recorded.
  */
 export function planReplay(shape: QueryShape): ReplayPlan {
   return {

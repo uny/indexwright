@@ -24,6 +24,7 @@ export {
   NAME_FIELD,
   operandFor,
   planReplay,
+  ReplayError,
   type Operand,
   type OperandType,
   type ReplayComposite,
