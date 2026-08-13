@@ -270,6 +270,78 @@ test('an apiScope this version does not compare under is unreadable, not a diver
   ]);
 });
 
+test('an apiScope that is neither absent nor a comparable string is refused, not defaulted', () => {
+  // Only *absent* is the ANY_API default. A value this version cannot name — the admin protos send
+  // the enum as a number, and type the field nullable — must not fall through to native mode: doing
+  // so vouches for a Datastore-mode index as though it were the declared Firestore one, which is a
+  // false `identical` rather than a missed one.
+  const candidate = declare({
+    collectionGroup: 'posts',
+    queryScope: 'COLLECTION',
+    fields: [asc('type')],
+  });
+  const observed = [live('posts', [asc('type'), asc('__name__')], { apiScope: 1 })];
+
+  const result = reconcile(candidate, observed);
+  assert.equal(result.verdict, 'indeterminate');
+  assert.ok(!isVouched(result));
+  assert.deepEqual(result.unreadable, [
+    { name: named('posts'), reason: 'api-scope-unrecognised', detail: '1' },
+  ]);
+
+  // `null` is the nullable spelling of the same default and still compares.
+  assert.equal(
+    reconcile(candidate, [live('posts', [asc('type'), asc('__name__')], { apiScope: null })])
+      .verdict,
+    'identical',
+  );
+});
+
+test('a nullish entry in the fields array is reported unreadable rather than thrown on', () => {
+  // `fieldDirection` reads `.order` off its argument, so a nullish element reaches a TypeError
+  // before it reaches the fallback. §3 asks `check` to decline on an entry it cannot read.
+  const result = reconcile(declare(), [live('posts', [asc('a'), null])]);
+  assert.equal(result.verdict, 'indeterminate');
+  assert.deepEqual(result.unreadable, [
+    { name: named('posts'), reason: 'field-unreadable', detail: 'undefined' },
+  ]);
+});
+
+test('a vector field whose dimension is not a number is refused, like an UNKNOWN direction', () => {
+  // `VECTOR(?)` is `fieldDirection`'s other lossy fallback and has the same collision property:
+  // every unreadable dimension keys alike. `parse.ts` validates only that `vectorConfig` is an
+  // object, so a quoted dimension reaches this from a declaration as readily as from a listing —
+  // and keyed on, a declared 128-dimension index would be vouched for by a live 4096-dimension one.
+  const candidate = declare({
+    collectionGroup: 'posts',
+    queryScope: 'COLLECTION',
+    fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: '128' } }],
+  });
+  const observed = [live('posts', [{ fieldPath: 'embedding', vectorConfig: { dimension: '4096' } }])];
+
+  const result = reconcile(candidate, observed);
+  assert.equal(result.verdict, 'indeterminate');
+  assert.ok(!isVouched(result));
+  assert.equal(result.unreadable[0].reason, 'field-unreadable');
+
+  // A numeric dimension is read, and still distinguishes two different vector indexes.
+  const numeric = declare({
+    collectionGroup: 'posts',
+    queryScope: 'COLLECTION',
+    fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 128 } }],
+  });
+  assert.equal(
+    reconcile(numeric, [live('posts', [{ fieldPath: 'embedding', vectorConfig: { dimension: 128 } }])])
+      .verdict,
+    'identical',
+  );
+  assert.equal(
+    reconcile(numeric, [live('posts', [{ fieldPath: 'embedding', vectorConfig: { dimension: 4096 } }])])
+      .verdict,
+    'diverged',
+  );
+});
+
 test('an absent apiScope is native-mode Firestore, because proto3 JSON omits the default', () => {
   const candidate = declare({
     collectionGroup: 'posts',
@@ -322,6 +394,28 @@ test('every outcome is sorted, so a report does not depend on listing order', ()
     result.extra.map((entry) => entry.key),
     ['posts::COLLECTION::b:ASCENDING', 'posts::COLLECTION::y:ASCENDING'],
   );
+});
+
+test('sorting does not fall back on the §5 key alone, which two entries can share', () => {
+  // The key is the non-injective one `identity` exists to avoid relying on. Sorted by it alone, a
+  // colliding pair is ordered by wherever the listing happened to put them — the dependence on
+  // listing order the sort is here to remove. Same construction as the collision test above.
+  const collide = [
+    live('posts', [{ fieldPath: 'x:ASCENDING|y', order: 'ASCENDING' }, asc('__name__')], { id: 'a' }),
+    live('posts', [asc('x'), asc('y'), asc('__name__')], { id: 'b' }),
+  ];
+  const order = (observed) => reconcile(declare(), observed).extra.map((entry) => entry.live.name);
+
+  assert.equal(order(collide)[0], order([...collide].reverse())[0]);
+  assert.deepEqual(order(collide), order([...collide].reverse()));
+
+  // Two unreadable entries can share a name too — every `null` name coerces to the same string.
+  const unreadable = [
+    { name: null, state: 'READY', queryScope: 'COLLECTION', fields: [] },
+    { name: null, state: 'READY', fields: [] },
+  ];
+  const reasons = (observed) => reconcile(declare(), observed).unreadable.map((e) => e.reason);
+  assert.deepEqual(reasons(unreadable), reasons([...unreadable].reverse()));
 });
 
 test('the unreadable reasons are the ones the module can actually produce', () => {

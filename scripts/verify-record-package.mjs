@@ -108,8 +108,10 @@ withInstalledTarball(packageRoot, ({ files, consumer }) => {
 
   check('reconciliation resolves its indexwright dependency from the installed tree', () => {
     // The workspace resolves `indexwright` through a symlink to packages/indexwright, so a passing
-    // typecheck says nothing about whether a consumer gets it. This is the one check that exercises
-    // the dependency SPEC §3 predicted, through the tarball, against the published linter.
+    // typecheck says nothing about whether a consumer gets it. This exercises the dependency SPEC §3
+    // predicted through the tarball instead — against the linter packed from *this tree*, not the
+    // published one, which is what `alongside` is for. So it proves the two halves work together at
+    // the versions being released; it does not prove the declared range resolves to them.
     const probe = join(consumer, 'reconcile.mjs');
     writeFileSync(
       probe,

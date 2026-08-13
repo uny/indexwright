@@ -127,6 +127,18 @@ const RESOURCE_NAME =
 const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
 
 /**
+ * The directions `fieldDirection` returns when it could not read a field, rather than as its value.
+ *
+ * Both are many-to-one, and that is what makes them unusable here in a way they are not inside the
+ * linter: `UNKNOWN` stands for any field carrying none of the three configs, and `VECTOR(?)` for any
+ * vector field whose `dimension` is not a number — `parse.ts` checks only that `vectorConfig` is an
+ * object, so a quoted dimension reaches it from a declaration too. Keyed on, two different fields
+ * would key alike and could match each other, so a declared 128-dimension vector index would be
+ * vouched for by a live 4096-dimension one. They are refused rather than keyed on.
+ */
+const LOSSY_DIRECTIONS: ReadonlySet<string> = new Set(['UNKNOWN', 'VECTOR(?)']);
+
+/**
  * The identity two sides are matched on.
  *
  * Not the §5 key, and the difference matters here in a way it does not inside the linter. The §5 key
@@ -170,9 +182,14 @@ function readLive(live: LiveCompositeIndex): ReadableLive | UnreadableIndex {
   // service that can send `null`, and it is about to be matched against a regular expression.
   const name = String(live.name);
 
+  // Only *absent* means native mode. Anything else this version cannot name is refused, rather than
+  // falling through to the default the way a `typeof === 'string'` guard would: a value the module
+  // cannot classify is the case where assuming `ANY_API` vouches for a Datastore-mode index as
+  // though it were the declared Firestore one, which is a false `identical` rather than a missed
+  // one. The admin protos type the field nullable and can send the enum as a number.
   const apiScope = live.apiScope;
-  if (typeof apiScope === 'string' && !COMPARABLE_API_SCOPES.has(apiScope)) {
-    return { name, reason: 'api-scope-unrecognised', detail: apiScope };
+  if (apiScope !== undefined && apiScope !== null && !COMPARABLE_API_SCOPES.has(apiScope)) {
+    return { name, reason: 'api-scope-unrecognised', detail: String(apiScope) };
   }
 
   const matched = RESOURCE_NAME.exec(name);
@@ -189,11 +206,11 @@ function readLive(live: LiveCompositeIndex): ReadableLive | UnreadableIndex {
     return { name, reason: 'fields-missing', detail: String(live.fields) };
   }
 
-  // `fieldDirection` has an `UNKNOWN` fallback for a field carrying none of the three configs, and
-  // reaching it would be worse here than in the linter: two different unreadable fields would key
-  // alike and could match each other. So the fallback is refused rather than keyed on.
   for (const field of live.fields) {
-    if (fieldDirection(field) === 'UNKNOWN') {
+    // Nullish first, because `fieldDirection` reads `.order` off its argument and would throw
+    // rather than reach a fallback — and throwing is the one thing this module must not do, since
+    // §3 asks `check` to decline on an entry it cannot read, not to die on it.
+    if (field === null || field === undefined || LOSSY_DIRECTIONS.has(fieldDirection(field))) {
       return { name, reason: 'field-unreadable', detail: String(field?.fieldPath) };
     }
   }
@@ -271,10 +288,23 @@ export function reconcile(
     for (const entry of bucket) extra.push({ key: entry.key, live: entry.live });
   }
 
-  matched.sort((a, b) => compareByCodePoint(a.key, b.key));
-  missing.sort((a, b) => compareByCodePoint(a.key, b.key));
-  extra.sort((a, b) => compareByCodePoint(a.key, b.key));
-  unreadable.sort((a, b) => compareByCodePoint(a.name, b.name));
+  // Sorted by the §5 key, so a report reads the way the linter's output does — but never by the key
+  // *alone*. The key is the non-injective one `identity` exists to avoid relying on, and two entries
+  // that collide under it would then be ordered by wherever the listing happened to put them, which
+  // is exactly the dependence on listing order the sort is here to remove. Each falls back to
+  // something that really is unique: a declaration's position in the document, a live index's
+  // resource name.
+  matched.sort((a, b) => compareByCodePoint(a.key, b.key) || a.declared.position - b.declared.position);
+  missing.sort((a, b) => compareByCodePoint(a.key, b.key) || a.position - b.position);
+  extra.sort(
+    (a, b) => compareByCodePoint(a.key, b.key) || compareByCodePoint(String(a.live.name), String(b.live.name)),
+  );
+  unreadable.sort(
+    (a, b) =>
+      compareByCodePoint(a.name, b.name) ||
+      compareByCodePoint(a.reason, b.reason) ||
+      compareByCodePoint(a.detail, b.detail),
+  );
 
   // Precedence mirrors `readiness.ts`: what the caller should do next, not severity. `indeterminate`
   // wins because an unreadable entry means this version may be misreading the listing, which is a
