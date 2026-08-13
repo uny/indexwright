@@ -35,12 +35,28 @@ test('every other field operator compares against a single scalar', () => {
 
 test('the field operators are covered exhaustively, so a new one cannot pass unnoticed', () => {
   // The vocabulary is closed (SPEC §7), and this is the assertion that notices if it stops being
-  // the list this module was written against.
-  for (const op of FIELD_OPERATORS) {
-    const operand = operandFor('amount', op);
-    assert.notEqual(operand.arity, 'none', `${op} is a field operator and must carry an operand`);
+  // the list this module was written against. Spelled as the whole expected mapping rather than as
+  // `arity !== 'none'`: the distinction that decides whether replay sends a scalar where Firestore
+  // demands an array is `single` vs `array`, which a not-`none` assertion cannot see.
+  const expected = {
+    LESS_THAN: 'single',
+    LESS_THAN_OR_EQUAL: 'single',
+    GREATER_THAN: 'single',
+    GREATER_THAN_OR_EQUAL: 'single',
+    EQUAL: 'single',
+    NOT_EQUAL: 'single',
+    ARRAY_CONTAINS: 'single',
+    IN: 'array',
+    ARRAY_CONTAINS_ANY: 'array',
+    NOT_IN: 'array',
+  };
+  assert.deepEqual(FIELD_OPERATORS.toSorted(), Object.keys(expected).toSorted());
+  for (const [op, arity] of Object.entries(expected)) {
+    assert.deepEqual(operandFor('amount', op), { arity, type: 'scalar' }, op);
   }
-  assert.equal(FIELD_OPERATORS.length + UNARY_OPERATORS.length, 14);
+  for (const op of UNARY_OPERATORS) {
+    assert.deepEqual(operandFor('amount', op), { arity: 'none' }, op);
+  }
 });
 
 test('a __name__ filter takes a reference rather than a scalar', () => {
@@ -73,6 +89,42 @@ test('an entry whose root composite has no children replays with where omitted',
   assert.equal(plan.where, null);
 });
 
+test('a childless root OR is refused rather than replayed as an unfiltered query', () => {
+  // The empty AND above is the wrapper normaliseRoot manufactures for "no where at all". An empty
+  // OR is a filter that was actually on the wire and matches nothing; replaying it as an omitted
+  // where would issue an unfiltered query, which needs no index, succeeds, and reports the entry
+  // covered when nothing was checked. A false clean verdict is what SPEC §2 exists to prevent.
+  assert.throws(() => planReplay(shape({ where: { op: 'OR', filters: [] } })), {
+    name: 'ReplayError',
+  });
+});
+
+test('a childless composite below the root is refused rather than planned', () => {
+  // Reachable from a committed corpus: parseCorpus accepts `filters: []` at any depth, and the
+  // entry passes the normalised-form gate. Planned, it would send a CompositeFilter with zero
+  // filters — INVALID_ARGUMENT, which carries no information about the index set.
+  // Only a childless composite whose op DIFFERS from its parent's survives normalisation:
+  // normaliseFilter splices a same-op child into its parent, and an empty one then vanishes.
+  for (const [parent, child] of [
+    ['AND', 'OR'],
+    ['OR', 'AND'],
+  ]) {
+    const where = { op: parent, filters: [{ fieldPath: 'a', op: 'EQUAL' }, { op: child, filters: [] }] };
+    assert.throws(() => planReplay(shape({ where })), { name: 'ReplayError' }, `${parent}(${child}())`);
+  }
+});
+
+test('a same-op childless composite is absorbed by normalisation before planning sees it', () => {
+  // The other half of the rule above, pinned so the refusal test cannot quietly start passing for
+  // the wrong reason: this entry is plannable precisely because the empty OR no longer exists.
+  const where = { op: 'OR', filters: [{ fieldPath: 'a', op: 'EQUAL' }, { op: 'OR', filters: [] }] };
+  const plan = planReplay(shape({ where }));
+  assert.deepEqual(plan.where, {
+    op: 'OR',
+    filters: [{ fieldPath: 'a', op: 'EQUAL', operand: { arity: 'single', type: 'scalar' } }],
+  });
+});
+
 test('a single-filter query keeps the AND the root was wrapped in', () => {
   const plan = planReplay(shape({ where: { fieldPath: 'status', op: 'EQUAL' } }));
   assert.ok(isReplayComposite(plan.where));
@@ -100,18 +152,25 @@ test('operands are planned at every depth of a nested tree', () => {
       },
     }),
   );
-  const operands = [];
-  const walk = (node) => {
-    if (isReplayComposite(node)) node.filters.forEach(walk);
-    else operands.push([node.fieldPath, node.operand]);
-  };
-  walk(plan.where);
-  operands.sort((a, b) => (a[0] < b[0] ? -1 : 1));
-  assert.deepEqual(operands, [
-    ['__name__', { arity: 'single', type: 'reference' }],
-    ['status', { arity: 'single', type: 'scalar' }],
-    ['tier', { arity: 'array', type: 'scalar' }],
-  ]);
+  // Asserted as the whole tree, not as a flattened bag of operands: a planner that spliced the OR
+  // into its parent AND would produce the same bag, and would replay `a AND b AND c` for a query
+  // the suite issued as `a AND (b OR c)` — a different query, with a different index requirement.
+  // Child order is the normalised one (shape.ts sorts by the serialised form, code point wise).
+  assert.deepEqual(plan.where, {
+    op: 'AND',
+    filters: [
+      {
+        op: 'OR',
+        filters: [
+          { fieldPath: '__name__', op: 'GREATER_THAN', operand: { arity: 'single', type: 'reference' } },
+          { fieldPath: 'tier', op: 'IN', operand: { arity: 'array', type: 'scalar' } },
+        ],
+      },
+      { fieldPath: 'status', op: 'EQUAL', operand: { arity: 'single', type: 'scalar' } },
+    ],
+  });
+  assert.ok(isReplayComposite(plan.where.filters[0]), 'the nested OR is still a composite');
+  assert.equal(isReplayComposite(plan.where.filters[1]), false, 'a leaf is not a composite');
 });
 
 test('a top-level OR is planned as an OR rather than wrapped', () => {
