@@ -99,11 +99,13 @@ export function classifyHost(host: string): HostClass {
   if (value === 'localhost') return 'loopback';
 
   if (isLoopbackIpv4(value)) return 'loopback';
-  // `::ffff:127.0.0.1` and `::ffff:7f00:1` are the same address wearing IPv4-mapped clothing.
+  // `::ffff:127.0.0.1` and `::ffff:7f00:1` are the same address wearing IPv4-mapped clothing, and
+  // `::ffff:0.0.0.0` is the unspecified address wearing it.
   if (value.startsWith('::ffff:')) {
     const mapped = value.slice('::ffff:'.length);
     if (isLoopbackIpv4(mapped)) return 'loopback';
     if (/^7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(mapped)) return 'loopback';
+    if (mapped === '0.0.0.0' || ALL_ZERO.test(mapped)) return 'wildcard';
   }
   if (value === '::1' || value === '0:0:0:0:0:0:0:1') return 'loopback';
 
@@ -117,6 +119,13 @@ export function classifyHost(host: string): HostClass {
   return 'remote';
 }
 
+/**
+ * Whether a host is loopback — which is not the same question as whether it is a permitted upstream.
+ *
+ * `requireLoopbackUpstream` also admits a wildcard, because connecting to one reaches this host. A
+ * caller mirroring this package's rule wants that function, not this predicate: `0.0.0.0` is `false`
+ * here and permitted there, and the difference is deliberate rather than an oversight in either.
+ */
 export function isLoopbackHost(host: string): boolean {
   return classifyHost(host) === 'loopback';
 }

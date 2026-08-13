@@ -56,7 +56,7 @@ test('a name that merely contains localhost is not loopback', () => {
 test('every spelling of the all-zeros address is a wildcard, not a routable host', () => {
   // The classification now decides whether a *connect* is permitted, so a spelling missed here
   // refuses a local emulator rather than merely mislabelling it.
-  for (const host of ['::0', '0::0', '0::', '0:0:0:0:0:0:0:0', '::']) {
+  for (const host of ['::0', '0::0', '0::', '0:0:0:0:0:0:0:0', '::', '::ffff:0.0.0.0', '::ffff:0:0']) {
     assert.equal(classifyHost(host), 'wildcard', host);
   }
   // Still not addresses, so still not wildcards.
@@ -302,21 +302,32 @@ test('a refused bind leaves the port genuinely unbound, not merely reported as r
   // The rejection type alone would still pass if the guard ran *after* tcp.listen — which is the one
   // ordering the guard exists to prevent, since it would publish the port it is refusing to publish.
   // So the assertion is on the port itself: after the refusal, we must be able to take it.
-  const port = await freePort();
-  await assert.rejects(
-    () => startCapture({ upstream: '127.0.0.1:8080', host: '0.0.0.0', port }),
-    EndpointError,
-  );
+  //
+  // Retried across fresh ports because a released ephemeral port can be taken by anyone, including
+  // the other tests in this run. An unrelated squatter loses the race on the next port; a guard that
+  // bound before refusing holds every one of them, so the retry cannot mask the defect.
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const port = await freePort();
+    await assert.rejects(
+      () => startCapture({ upstream: '127.0.0.1:8080', host: '0.0.0.0', port }),
+      EndpointError,
+    );
 
-  const claim = createServer();
-  try {
-    await new Promise((resolve, reject) => {
-      claim.once('error', reject);
-      claim.listen(port, '0.0.0.0', resolve);
-    });
-  } finally {
-    await new Promise((resolve) => claim.close(resolve));
+    const claim = createServer();
+    try {
+      await new Promise((resolve, reject) => {
+        claim.once('error', reject);
+        claim.listen(port, '0.0.0.0', resolve);
+      });
+      return; // reclaimed it, so nothing was left listening
+    } catch (error) {
+      lastError = error;
+    } finally {
+      await new Promise((resolve) => claim.close(resolve));
+    }
   }
+  assert.fail(`the refused port was never reclaimable: ${lastError?.code ?? lastError}`);
 });
 
 test('allowRemoteUpstream is load-bearing: it is what lets a remote upstream through', async () => {

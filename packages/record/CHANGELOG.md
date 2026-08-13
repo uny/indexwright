@@ -69,19 +69,6 @@ again, by its own `corpusVersion`.
   the candidate side through the new `incomparable` — because matching on the key alone would vouch
   for a `DENSE` live index against a `SPARSE_ANY` declaration.
 
-- **This release takes a runtime dependency on `indexwright`**, as §3 said it would when `check`
-  arrived: reconciliation needs the linter's index model and the canonical key, so that both sides
-  are compared under one interpretation rather than a second copy of it. The direction stays one-way
-  — `indexwright` acquires no runtime dependency, in any version.
-
-  The range is `>=0.2.0 <1`, not a caret. A caret on a `0.x` version pins the minor, so the next
-  linter release would stop satisfying it — and since the two are released together, that is not a
-  hypothetical. What made it worth avoiding is that nothing would have *said* so: the workspace link
-  would quietly give way to a registry fetch, and `npm ci`, the test suite, and the tarball check
-  would all go on passing against a copy of the linter that is not the one being released. A single
-  `0.x` range also lets an adopter who depends on `indexwright` directly resolve one copy rather than
-  two, which matters because `reconcile` takes `AnalysedIndex` values their `analyse` produced.
-
 ## [0.3.0] — 2026-08-13
 
 The parts of the v0.3 coverage check that are decidable without a Firestore client. The `check`

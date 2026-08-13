@@ -45,10 +45,10 @@ Options:
 
 ## Both ends stay on this machine
 
-The proxy listens on loopback and forwards to loopback, and `indexwright-record` has no option to
-change the first — the verb has no `--host`, deliberately, since adding one in order to guard it
-would be inventing the exposure. Neither constraint is a precaution against an exotic attack; both
-are about what a misconfiguration costs.
+The proxy listens on loopback, and forwards only to an address on this machine. `indexwright-record`
+has no option to change the first — the verb has no `--host`, deliberately, since adding one in order
+to guard it would be inventing the exposure. Neither constraint is a precaution against an exotic
+attack; both are about what a misconfiguration costs.
 
 The proxy performs no authentication — it is a transparent pass-through in front of an emulator that
 performs none either. Reachable from off the machine, it is an open read/write channel into your
