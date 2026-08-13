@@ -46,7 +46,9 @@ export interface LiveCompositeIndex extends LiveIndex {
   /**
    * Which documents the index covers — `SPARSE_ALL`, `SPARSE_ANY`, `DENSE`.
    *
-   * Modelled but never compared, and therefore refused: see `COMPARABLE_DENSITIES`.
+   * Modelled so that a value the canonical key cannot express is refused rather than ignored; only
+   * the ones that mean what a density-less declaration means are compared. See
+   * `COMPARABLE_DENSITIES`.
    */
   readonly density?: string | null;
   /**
@@ -419,10 +421,14 @@ export function reconcile(
   // is exactly the dependence on listing order the sort is here to remove. Each falls back to
   // something that really is unique: a declaration's position in the document, a live index's
   // resource name.
-  matched.sort((a, b) => compareByCodePoint(a.key, b.key) || a.declared.position - b.declared.position);
+  matched.sort(
+    (a, b) => compareByCodePoint(a.key, b.key) || a.declared.position - b.declared.position,
+  );
   missing.sort((a, b) => compareByCodePoint(a.key, b.key) || a.position - b.position);
   extra.sort(
-    (a, b) => compareByCodePoint(a.key, b.key) || compareByCodePoint(String(a.live.name), String(b.live.name)),
+    (a, b) =>
+      compareByCodePoint(a.key, b.key) ||
+      compareByCodePoint(String(a.live.name), String(b.live.name)),
   );
   unreadable.sort(
     (a, b) =>
