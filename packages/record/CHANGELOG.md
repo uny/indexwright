@@ -25,6 +25,13 @@ again, by its own `corpusVersion`.
   bind refusal can only be reached through the JavaScript API, where `allowRemoteBind: true` states
   the intent.
 
+  A wildcard is treated differently at the two ends, because it means opposite things there. Bound,
+  `0.0.0.0` is every interface and is refused. Connected to, it is *this host* — the kernel sends it
+  to the local machine — so `FIRESTORE_EMULATOR_HOST=0.0.0.0:8080`, which is what a compose file
+  tends to leave behind, is a local emulator and passes without the override. Refusing it would have
+  refused a purely local run while telling the reader it was not on this machine, and the remedy it
+  offered was to permit remote emulators.
+
 - `parseHostPort` moved to a new `endpoints` module so the argument parser and the proxy read an
   address with one set of rules rather than two. It is still exported from the same place.
 

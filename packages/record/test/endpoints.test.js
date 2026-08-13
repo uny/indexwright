@@ -53,6 +53,47 @@ test('a name that merely contains localhost is not loopback', () => {
   }
 });
 
+test('every spelling of the all-zeros address is a wildcard, not a routable host', () => {
+  // The classification now decides whether a *connect* is permitted, so a spelling missed here
+  // refuses a local emulator rather than merely mislabelling it.
+  for (const host of ['::0', '0::0', '0::', '0:0:0:0:0:0:0:0', '::']) {
+    assert.equal(classifyHost(host), 'wildcard', host);
+  }
+  // Still not addresses, so still not wildcards.
+  for (const host of [':::', '0:::0', '0.0.0', '0']) {
+    assert.notEqual(classifyHost(host), 'wildcard', host);
+  }
+});
+
+test('a wildcard upstream is permitted, because connecting to one reaches this host', () => {
+  // The same address means opposite things at the two ends: bound it is every interface, connected
+  // to it is the local machine. Refusing it here refused a local emulator and sent the reader to
+  // the override — the one habit this guard must not teach.
+  const origin = { kind: 'env', variable: 'FIRESTORE_EMULATOR_HOST' };
+  for (const host of ['0.0.0.0', '::', '::0']) {
+    assert.doesNotThrow(() => requireLoopbackUpstream({ host, origin, override: '--allow' }), host);
+  }
+  // ...and the bind end is unmoved: that is where a wildcard is the exposure.
+  for (const host of ['0.0.0.0', '::', '::0']) {
+    assert.throws(
+      () => requireLoopbackBind({ host, origin: { kind: 'option', field: 'host' }, override: 'x' }),
+      EndpointError,
+      host,
+    );
+  }
+});
+
+test('a routable upstream is still refused, so permitting the wildcard widened nothing else', () => {
+  const origin = { kind: 'env', variable: 'FIRESTORE_EMULATOR_HOST' };
+  for (const host of ['10.0.0.1', '192.168.1.5', 'firestore', '::ffff:10.0.0.1']) {
+    assert.throws(
+      () => requireLoopbackUpstream({ host, origin, override: '--allow' }),
+      EndpointError,
+      host,
+    );
+  }
+});
+
 test('a wildcard is classified apart from a routable address', () => {
   // Not a pedantic distinction: it is the case reached by habit, and the one whose consequence is
   // strongest, so the refusal says something different about it.
@@ -335,6 +376,15 @@ test('a malformed address is blamed on the input that actually carried it', () =
     () => parseArgs(['--emulator', 'firestore', '--', 'true'], {}),
     (error) => error instanceof UsageError && /^--emulator: expected host:port/.test(error.message),
   );
+});
+
+test('a wildcard emulator address needs no override, because it is this host', () => {
+  // What a compose file tends to leave in the environment. It used to be refused as "not on this
+  // machine", which was untrue, and the fix it suggested was to allow remote emulators.
+  const command = parseArgs(['--', 'true'], { FIRESTORE_EMULATOR_HOST: '0.0.0.0:8080' });
+  assert.equal(command.emulator, '0.0.0.0:8080');
+  assert.equal(command.allowRemoteUpstream, false);
+  assert.equal(parseArgs(['--emulator', '[::]:8080', '--', 'true'], {}).emulator, '[::]:8080');
 });
 
 test('the override also permits an upstream that arrived from the environment', () => {

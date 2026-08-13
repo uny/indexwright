@@ -57,9 +57,11 @@ people. And an upstream that is not the emulator you meant routes whatever docum
 it holds through this process: `FIRESTORE_EMULATOR_HOST` is read from the environment, so that value
 can be one nobody typed.
 
-So a non-loopback emulator is refused, and the message names where the address came from. If you
-genuinely run the emulator on another host — a container in a compose file, say — pass
-`--allow-remote-emulator` and it will proceed:
+So an emulator that is not on this host is refused, and the message names where the address came
+from. A wildcard address is not one of those: `0.0.0.0:8080` as a *destination* means this machine,
+so it is a local emulator and needs nothing — it is only as a *bind* address that a wildcard is the
+exposure. If you genuinely run the emulator on another host — a container in a compose file, say —
+pass `--allow-remote-emulator` and it will proceed:
 
 ```sh
 indexwright-record --allow-remote-emulator --emulator firestore:8080 -- npm test

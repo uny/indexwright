@@ -23,6 +23,8 @@
  * a run is allowed to start is testable without opening a socket.
  */
 
+import { isIP } from 'node:net';
+
 export class EndpointError extends Error {
   override readonly name = 'EndpointError';
 }
@@ -63,6 +65,9 @@ export type HostClass =
 /** Each octet of a dotted-quad, so `127.999.0.1` is not read as loopback. */
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
+/** The shape every IPv6 unspecified address shares: `::`, `::0`, `0::0`, `0:0:0:0:0:0:0:0`. */
+const ALL_ZERO = /^[0:]+$/;
+
 /**
  * Reduce a host to the form the tests below expect.
  *
@@ -102,7 +107,12 @@ export function classifyHost(host: string): HostClass {
   }
   if (value === '::1' || value === '0:0:0:0:0:0:0:1') return 'loopback';
 
-  if (value === '0.0.0.0' || value === '::' || value === '0:0:0:0:0:0:0:0') return 'wildcard';
+  // Every spelling of all-zeros, not the three obvious ones. `isIP` is a parser rather than a
+  // resolver — it opens nothing — so it can settle which strings are the same address here, where
+  // the answer now decides whether a *connect* is permitted and a missed spelling would refuse a
+  // local emulator.
+  if (value === '0.0.0.0') return 'wildcard';
+  if (ALL_ZERO.test(value) && isIP(value) === 6) return 'wildcard';
 
   return 'remote';
 }
@@ -151,15 +161,25 @@ function describe({ host, value, origin }: EndpointCheck): string {
 }
 
 /**
- * Refuse a non-loopback upstream, naming where the value came from.
+ * Refuse an upstream that is not on this host, naming where the value came from.
  *
  * The provenance is in the message because the dangerous case is the one nobody typed: a run that
  * inherits `FIRESTORE_EMULATOR_HOST` from a shell profile or a CI environment looks, from the
  * command line, exactly like a run against the default. Being told which variable is responsible is
  * the difference between fixing it and adding the override.
+ *
+ * A wildcard passes here and is refused by `requireLoopbackBind`, because the same address means
+ * opposite things at the two ends. Bound, `0.0.0.0` is every interface — the exposure this module
+ * exists to prevent. Connected to, it is *this host*: the kernel sends it to the local machine, so
+ * an upstream of `0.0.0.0:8080` reaches the emulator on this laptop and nothing leaves it. Refusing
+ * it would have refused a local emulator — `FIRESTORE_EMULATOR_HOST=0.0.0.0:8080` is what a compose
+ * file tends to leave behind — while telling the reader it was not on this machine, and pointing
+ * them at the override. Teaching someone to pass "allow remote" for a purely local run is a worse
+ * outcome than the one the refusal was buying.
  */
 export function requireLoopbackUpstream(check: EndpointCheck): void {
-  if (check.allowed === true || isLoopbackHost(check.host)) return;
+  const classified = classifyHost(check.host);
+  if (check.allowed === true || classified === 'loopback' || classified === 'wildcard') return;
   throw new EndpointError(
     `refusing to forward to a non-loopback emulator: ${describe(check)}. ` +
       'The capture proxy performs no authentication and forwards every request verbatim, so a ' +

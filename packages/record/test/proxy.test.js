@@ -402,3 +402,23 @@ test('a failed listen takes the upstream session down with it', async () => {
     await new Promise((resolve) => upstream.close(resolve));
   }
 });
+
+test('a wildcard upstream reaches the emulator on this host, which is why it is permitted', async () => {
+  // The justification for allowing 0.0.0.0 as an upstream, asserted rather than argued: the emulator
+  // listens on 127.0.0.1, the proxy is pointed at 0.0.0.0, and the call arrives. Nothing leaves the
+  // machine, so refusing this only ever refused a local emulator.
+  const upstream = stubUpstream();
+  await new Promise((resolve) => upstream.server.listen(0, '127.0.0.1', resolve));
+  const port = upstream.server.address().port;
+
+  const capture = await startCapture({ upstream: `0.0.0.0:${port}` });
+  try {
+    const path = '/google.firestore.v1.Firestore/RunQuery';
+    const { headers } = await call(capture.address, path, frame(fixtureMessage('no filters and no sort')));
+    assert.equal(headers[':status'], 200);
+    assert.deepEqual(upstream.seen, [path], 'the request reached the 127.0.0.1 emulator');
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
