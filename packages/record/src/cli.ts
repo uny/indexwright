@@ -44,6 +44,12 @@ export async function run(
     capture = await startCapture({
       upstream: command.emulator,
       port: command.port,
+      // `parseArgs` has already refused a non-loopback upstream unless this was asked for, so the
+      // check inside `startCapture` cannot fire here. Passed anyway rather than relied on: the two
+      // must not be able to disagree about what was permitted, and a future caller that reaches
+      // `startCapture` by another route gets the same answer. There is no bind counterpart — the
+      // verb has no `--host`, so the proxy's loopback default is the only address it ever binds.
+      allowRemoteUpstream: command.allowRemoteUpstream,
       onWarning: (message) => streams.err(`indexwright-record: ${message}\n`),
     });
   } catch (error) {

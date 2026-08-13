@@ -38,8 +38,29 @@ Options:
                           else 127.0.0.1:8080)
   --out <file>            where to write the corpus (default: firestore.queries.json)
   --port <n>              port for the proxy to listen on (default: chosen by the OS)
+  --allow-remote-emulator forward to an emulator that is not on this host (refused by default)
   -h, --help              show the usage
       --version           show the version
+```
+
+## Both ends stay on this machine
+
+The proxy listens on loopback and forwards to loopback, and there is no option to change the first.
+Neither is a precaution against an exotic attack; both are about what a misconfiguration costs.
+
+The proxy performs no authentication — it is a transparent pass-through in front of an emulator that
+performs none either. Reachable from off the machine, it is an open read/write channel into your
+emulator's dataset for anyone who can reach the port, which on a shared CI runner is a real set of
+people. And an upstream that is not the emulator you meant routes whatever documents and credentials
+it holds through this process: `FIRESTORE_EMULATOR_HOST` is read from the environment, so that value
+can be one nobody typed.
+
+So a non-loopback emulator is refused, and the message names where the address came from. If you
+genuinely run the emulator on another host — a container in a compose file, say — pass
+`--allow-remote-emulator` and it will proceed:
+
+```sh
+indexwright-record --allow-remote-emulator --emulator firestore:8080 -- npm test
 ```
 
 The proxy is transparent: bodies, trailers, and gRPC errors reach your client unchanged, and

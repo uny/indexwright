@@ -7,6 +7,27 @@ again, by its own `corpusVersion`.
 
 ## Unreleased
 
+### Changed
+
+- **`indexwright-record` now refuses to forward to an emulator that is not on this host**, and
+  `startCapture` refuses to bind an address other than loopback. Both were previously unconstrained
+  (issue #7). The proxy authenticates nothing and forwards verbatim, so a non-loopback upstream routes
+  whatever documents and gRPC `authorization` metadata it holds through this process, and a
+  non-loopback bind is an open read/write channel into the emulator's dataset for anyone who can reach
+  the port. The upstream is the half that arrives on its own: `FIRESTORE_EMULATOR_HOST` is read from
+  the environment, so a run can inherit an address nobody typed, and the refusal names which variable
+  is responsible for exactly that reason.
+
+  **This is a breaking change**, and the case it breaks is a legitimate one: an emulator reached by
+  container name, as in a compose file, is not loopback. Pass `--allow-remote-emulator` (or
+  `allowRemoteUpstream: true`) to proceed. `indexwright-record` gained no way to change the bind
+  address — adding a `--host` in order to guard it would have been inventing the exposure — so the
+  bind refusal can only be reached through the JavaScript API, where `allowRemoteBind: true` states
+  the intent.
+
+- `parseHostPort` moved to a new `endpoints` module so the argument parser and the proxy read an
+  address with one set of rules rather than two. It is still exported from the same place.
+
 ### Added
 
 - Reconciliation of a candidate index set against the set a database actually holds, the presence
