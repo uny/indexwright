@@ -19,10 +19,13 @@ export {
   type Readiness,
 } from './readiness.js';
 export {
+  INCOMPARABLE_REASONS,
   isVouched,
   reconcile,
   UNREADABLE_REASONS,
   type ExtraIndex,
+  type IncomparableIndex,
+  type IncomparableReason,
   type LiveCompositeIndex,
   type MatchedIndex,
   type Reconciliation,

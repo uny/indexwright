@@ -21,6 +21,13 @@ again, by its own `corpusVersion`.
   being guessed at or dropped, because §3 requires `check` to decline rather than vouch for a set it
   cannot vouch for. No client and no I/O: it is fed an analysed document and an observed listing.
 
+  What it compares is exactly §5's key — collection group, query scope, fields. A set that turns on
+  anything else is refused rather than matched on the key that ignores it: a `density`, which decides
+  which documents an index covers and which §4 passes through unanalysed, or a Datastore-mode
+  `apiScope`. Both are refused on whichever side declares them — the live side through `unreadable`,
+  the candidate side through the new `incomparable` — because matching on the key alone would vouch
+  for a `DENSE` live index against a `SPARSE_ANY` declaration.
+
 ### Changed
 
 - **This release takes a runtime dependency on `indexwright`**, as §3 said it would when `check`

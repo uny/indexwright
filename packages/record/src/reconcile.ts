@@ -44,6 +44,12 @@ export interface LiveCompositeIndex extends LiveIndex {
   /** `ANY_API` for a native-mode Firestore index. */
   readonly apiScope?: string | null;
   /**
+   * Which documents the index covers — `SPARSE_ALL`, `SPARSE_ANY`, `DENSE`.
+   *
+   * Modelled but never compared, and therefore refused: see `COMPARABLE_DENSITIES`.
+   */
+  readonly density?: string | null;
+  /**
    * The index's fields, including the trailing `__name__` a live index carries — which is exactly
    * why the comparison goes through the canonical form of SPEC §5 rather than field-list equality.
    */
@@ -59,9 +65,34 @@ export const UNREADABLE_REASONS = [
   'field-unreadable',
   /** An `apiScope` this version does not compare under. */
   'api-scope-unrecognised',
+  /** A `density` this version does not compare under. */
+  'density-unrecognised',
 ] as const;
 
 export type UnreadableReason = (typeof UNREADABLE_REASONS)[number];
+
+/**
+ * Why a *declaration* could not be reconciled.
+ *
+ * The mirror of `UnreadableReason`, and it exists because refusing only the live side would be
+ * half a guard. §5's canonical key is built from the collection group, the query scope, and the
+ * fields; a declaration that also sets `density` or a non-native `apiScope` is asking for an index
+ * the key cannot describe, and matching it on the key alone vouches for a live index that differs
+ * in exactly the respect the declaration went out of its way to state.
+ */
+export const INCOMPARABLE_REASONS = ['api-scope-unrecognised', 'density-unrecognised'] as const;
+
+export type IncomparableReason = (typeof INCOMPARABLE_REASONS)[number];
+
+/** A declaration carrying something this version does not compare under. */
+export interface IncomparableIndex {
+  /** The canonical index key of SPEC §5, so a message names it the way the linter does. */
+  readonly key: string;
+  readonly declared: AnalysedIndex;
+  readonly reason: IncomparableReason;
+  /** What was actually declared, for a message. */
+  readonly detail: string;
+}
 
 /**
  * A live entry whose canonical form could not be derived.
@@ -97,7 +128,7 @@ export type ReconciliationVerdict =
   | 'identical'
   /** They disagree. A report would be about neither set.  */
   | 'diverged'
-  /** At least one live entry could not be read, so agreement is unknown. */
+  /** A live entry could not be read, or a declaration could not be compared. Agreement is unknown. */
   | 'indeterminate';
 
 export interface Reconciliation {
@@ -110,6 +141,8 @@ export interface Reconciliation {
   readonly extra: readonly ExtraIndex[];
   /** Sorted by name. */
   readonly unreadable: readonly UnreadableIndex[];
+  /** Declarations this version cannot compare. Sorted by key. */
+  readonly incomparable: readonly IncomparableIndex[];
 }
 
 const RESOURCE_NAME =
@@ -125,6 +158,30 @@ const RESOURCE_NAME =
  * disagreement that stops a correct run.
  */
 const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
+
+/**
+ * The `density` values this module is willing to compare under: only the unset one.
+ *
+ * `density` decides *which documents* an index covers — `SPARSE_ANY` indexes a document when any
+ * indexed field is present, `DENSE` indexes every document — so two indexes agreeing on collection
+ * group, query scope, and fields can still serve different queries. SPEC §5's key is built from
+ * those three and says nothing about density, and SPEC §4's declaration shape passes `density`
+ * through without analysing it, so this module has no interpretation of it to compare with.
+ *
+ * Rather than key on it (which would extend §5's notion of index identity) or ignore it (which
+ * vouches for a `DENSE` live index against a `SPARSE_ANY` declaration), a set that uses it is
+ * refused. That is the same call the module makes for a Datastore-mode `apiScope`, and the same one
+ * SPEC §3 asks for: decline rather than vouch. If this turns out to fire on ordinary listings —
+ * whether the Admin API returns a density for every index is not settled here — it fails loudly,
+ * with a named reason, which is the failure this module is willing to have.
+ */
+const COMPARABLE_DENSITIES: ReadonlySet<string> = new Set(['DENSITY_UNSPECIFIED']);
+
+/** Absent is always comparable: proto3 JSON omits a field holding its default. */
+function comparableUnder(value: unknown, comparable: ReadonlySet<string>): boolean {
+  if (value === undefined || value === null) return true;
+  return typeof value === 'string' && comparable.has(value);
+}
 
 /**
  * The directions `fieldDirection` returns when it could not read a field, rather than as its value.
@@ -187,9 +244,12 @@ function readLive(live: LiveCompositeIndex): ReadableLive | UnreadableIndex {
   // cannot classify is the case where assuming `ANY_API` vouches for a Datastore-mode index as
   // though it were the declared Firestore one, which is a false `identical` rather than a missed
   // one. The admin protos type the field nullable and can send the enum as a number.
-  const apiScope = live.apiScope;
-  if (apiScope !== undefined && apiScope !== null && !COMPARABLE_API_SCOPES.has(apiScope)) {
-    return { name, reason: 'api-scope-unrecognised', detail: String(apiScope) };
+  if (!comparableUnder(live.apiScope, COMPARABLE_API_SCOPES)) {
+    return { name, reason: 'api-scope-unrecognised', detail: String(live.apiScope) };
+  }
+
+  if (!comparableUnder(live.density, COMPARABLE_DENSITIES)) {
+    return { name, reason: 'density-unrecognised', detail: String(live.density) };
   }
 
   const matched = RESOURCE_NAME.exec(name);
@@ -223,6 +283,26 @@ function readLive(live: LiveCompositeIndex): ReadableLive | UnreadableIndex {
   };
 }
 
+/**
+ * Whether a declaration sets something this version does not compare under, and which.
+ *
+ * The declared side of the same guard `readLive` applies to the live side. SPEC §4 passes `density`
+ * through unanalysed and ignores unknown keys, so a declaration can carry either of these and still
+ * be a valid, lint-clean document — which is exactly why reconciliation has to notice.
+ */
+function incomparableReason(
+  declared: AnalysedIndex,
+): { reason: IncomparableReason; detail: string } | null {
+  const { source } = declared;
+  if (!comparableUnder(source['apiScope'], COMPARABLE_API_SCOPES)) {
+    return { reason: 'api-scope-unrecognised', detail: String(source['apiScope']) };
+  }
+  if (!comparableUnder(source['density'], COMPARABLE_DENSITIES)) {
+    return { reason: 'density-unrecognised', detail: String(source['density']) };
+  }
+  return null;
+}
+
 function isUnreadable(read: ReadableLive | UnreadableIndex): read is UnreadableIndex {
   return 'reason' in read;
 }
@@ -238,6 +318,10 @@ function isUnreadable(read: ReadableLive | UnreadableIndex): read is UnreadableI
  * Duplicate declarations that canonicalise alike are not this function's problem — that is the
  * linter's `field-order-variant` — but they must not be *made* into one. They collapse onto the one
  * live index they name rather than producing a spurious `missing`.
+ *
+ * What it compares is exactly §5's key: collection group, query scope, fields. A set that turns on
+ * anything else — `density`, a Datastore-mode `apiScope` — is refused on whichever side carries it,
+ * rather than matched on the key and vouched for. See `COMPARABLE_DENSITIES`.
  *
  * `live` must be a listing that succeeded. An empty array here means "observed, and empty", exactly
  * as in `ReadinessGate.observe`; passing `[]` for a listing that failed or came back partial would
@@ -264,9 +348,20 @@ export function reconcile(
 
   const matched: MatchedIndex[] = [];
   const missing: AnalysedIndex[] = [];
+  const incomparable: IncomparableIndex[] = [];
   const claimed = new Set<string>();
 
   for (const declared of candidate) {
+    // The declaration is refused before it is matched, not after: a declaration carrying a
+    // discriminator §5's key does not describe would otherwise be *matched* on the key alone, and a
+    // match is the false vouch. `source` is the declaration as written, so this reads what the file
+    // actually said rather than what canonicalisation kept.
+    const refusal = incomparableReason(declared);
+    if (refusal) {
+      incomparable.push({ key: declared.key, declared, ...refusal });
+      continue;
+    }
+
     const key = identity(declared.collectionGroup, declared.queryScope, declared.fields);
     const bucket = byIdentity.get(key);
     const found = bucket?.[0];
@@ -305,18 +400,23 @@ export function reconcile(
       compareByCodePoint(a.reason, b.reason) ||
       compareByCodePoint(a.detail, b.detail),
   );
+  incomparable.sort(
+    (a, b) => compareByCodePoint(a.key, b.key) || a.declared.position - b.declared.position,
+  );
 
   // Precedence mirrors `readiness.ts`: what the caller should do next, not severity. `indeterminate`
-  // wins because an unreadable entry means this version may be misreading the listing, which is a
-  // reason to distrust the classification of everything else in the same response.
+  // wins because an entry this version cannot read — or a declaration it cannot compare — means it
+  // may be misreading the input, which is a reason to distrust the classification of everything else
+  // alongside it. An incomparable declaration counts for the same reason an unreadable live entry
+  // does: it was never matched, so `missing` and `extra` are not a statement about it either way.
   const verdict: ReconciliationVerdict =
-    unreadable.length > 0
+    unreadable.length > 0 || incomparable.length > 0
       ? 'indeterminate'
       : missing.length === 0 && extra.length === 0
         ? 'identical'
         : 'diverged';
 
-  return { verdict, matched, missing, extra, unreadable };
+  return { verdict, matched, missing, extra, unreadable, incomparable };
 }
 
 /**

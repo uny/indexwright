@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { analyse } from 'indexwright';
-import { isVouched, reconcile, UNREADABLE_REASONS } from '../dist/index.js';
+import { INCOMPARABLE_REASONS, isVouched, reconcile, UNREADABLE_REASONS } from '../dist/index.js';
 
 /** A candidate set, from declarations written the way a `firestore.indexes.json` writes them. */
 const declare = (...indexes) => analyse({ indexes });
@@ -396,6 +396,88 @@ test('every outcome is sorted, so a report does not depend on listing order', ()
   );
 });
 
+test('a density on either side is refused rather than matched on the key that ignores it', () => {
+  // `density` decides which documents an index covers, so two indexes agreeing on collection group,
+  // query scope, and fields can still serve different queries. §5's key is built from those three
+  // and says nothing about it, and SPEC §4 passes it through unanalysed — so a declaration can carry
+  // it and still lint clean. Matching on the key alone vouches for a DENSE live index against a
+  // SPARSE_ANY declaration.
+  const dense = declare({
+    collectionGroup: 'posts',
+    queryScope: 'COLLECTION',
+    fields: [asc('type')],
+    density: 'SPARSE_ANY',
+  });
+  const declaredSide = reconcile(dense, [live('posts', [asc('type'), asc('__name__')])]);
+  assert.equal(declaredSide.verdict, 'indeterminate');
+  assert.ok(!isVouched(declaredSide));
+  assert.equal(declaredSide.incomparable.length, 1);
+  assert.equal(declaredSide.incomparable[0].reason, 'density-unrecognised');
+  assert.equal(declaredSide.incomparable[0].detail, 'SPARSE_ANY');
+  assert.equal(declaredSide.incomparable[0].key, 'posts::COLLECTION::type:ASCENDING');
+  // Refused *before* matching: it must not also show up as a divergence it is not.
+  assert.deepEqual(declaredSide.missing, []);
+  assert.deepEqual(declaredSide.matched, []);
+
+  const plain = declare({ collectionGroup: 'posts', queryScope: 'COLLECTION', fields: [asc('type')] });
+  const liveSide = reconcile(plain, [
+    { ...live('posts', [asc('type'), asc('__name__')]), density: 'DENSE' },
+  ]);
+  assert.equal(liveSide.verdict, 'indeterminate');
+  assert.deepEqual(liveSide.unreadable, [
+    { name: named('posts'), reason: 'density-unrecognised', detail: 'DENSE' },
+  ]);
+
+  // Two live indexes that differ only in density are no longer one bucket the declaration can claim.
+  const bothLive = reconcile(plain, [
+    { ...live('posts', [asc('type'), asc('__name__')], { id: 'a' }), density: 'SPARSE_ANY' },
+    { ...live('posts', [asc('type'), asc('__name__')], { id: 'b' }), density: 'DENSE' },
+  ]);
+  assert.equal(bothLive.verdict, 'indeterminate');
+  assert.ok(!isVouched(bothLive));
+  assert.equal(bothLive.unreadable.length, 2);
+});
+
+test('a declaration setting a non-native apiScope is refused, as the live side already was', () => {
+  // The mirror of the live-side rule. A Datastore-mode declaration is not a Firestore index the
+  // canonical key can describe, so matching it against a native-mode live index vouches for an
+  // index that differs in exactly the respect the declaration went out of its way to state.
+  const candidate = declare({
+    collectionGroup: 'posts',
+    queryScope: 'COLLECTION',
+    fields: [asc('type')],
+    apiScope: 'DATASTORE_MODE_API',
+  });
+  const result = reconcile(candidate, [
+    { ...live('posts', [asc('type'), asc('__name__')]), apiScope: 'ANY_API' },
+  ]);
+
+  assert.equal(result.verdict, 'indeterminate');
+  assert.ok(!isVouched(result));
+  assert.equal(result.incomparable[0].reason, 'api-scope-unrecognised');
+  assert.equal(result.incomparable[0].detail, 'DATASTORE_MODE_API');
+  // The live index is then undeclared, which is what it now is.
+  assert.equal(result.extra.length, 1);
+});
+
+test('an explicit ANY_API and an absent density are the comparable spellings, on both sides', () => {
+  // The refusals must not fire on an ordinary set, or `check` could never report at all.
+  const candidate = declare({
+    collectionGroup: 'posts',
+    queryScope: 'COLLECTION',
+    fields: [asc('type')],
+    apiScope: 'ANY_API',
+    density: 'DENSITY_UNSPECIFIED',
+  });
+  const result = reconcile(candidate, [
+    { ...live('posts', [asc('type'), asc('__name__')]), apiScope: 'ANY_API', density: null },
+  ]);
+
+  assert.equal(result.verdict, 'identical');
+  assert.ok(isVouched(result));
+  assert.deepEqual(result.incomparable, []);
+});
+
 test('sorting does not fall back on the §5 key alone, which two entries can share', () => {
   // The key is the non-injective one `identity` exists to avoid relying on. Sorted by it alone, a
   // colliding pair is ordered by wherever the listing happened to put them — the dependence on
@@ -423,9 +505,14 @@ test('the unreadable reasons are the ones the module can actually produce', () =
   // operator vocabulary is pinned.
   assert.deepEqual([...UNREADABLE_REASONS].sort(), [
     'api-scope-unrecognised',
+    'density-unrecognised',
     'field-unreadable',
     'fields-missing',
     'name-unparseable',
     'query-scope-missing',
+  ]);
+  assert.deepEqual([...INCOMPARABLE_REASONS].sort(), [
+    'api-scope-unrecognised',
+    'density-unrecognised',
   ]);
 });
