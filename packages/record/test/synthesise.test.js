@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  buildCorpus,
   FIELD_OPERATORS,
   UNARY_OPERATORS,
   isReplayComposite,
   operandFor,
+  parseCorpus,
   planReplay,
+  serialiseCorpus,
   toQueryShape,
 } from '../dist/index.js';
 
@@ -112,6 +115,16 @@ test('a childless composite below the root is refused rather than planned', () =
     const where = { op: parent, filters: [{ fieldPath: 'a', op: 'EQUAL' }, { op: child, filters: [] }] };
     assert.throws(() => planReplay(shape({ where })), { name: 'ReplayError' }, `${parent}(${child}())`);
   }
+});
+
+test('the refused shape is one a committed corpus really can carry', () => {
+  // The premise the two tests above rest on, asserted rather than left in a comment: if parseCorpus
+  // ever grew a check of its own, the ReplayError path would become dead code and those tests would
+  // keep passing while their justification quietly stopped being true.
+  const entry = shape({ where: { op: 'AND', filters: [{ fieldPath: 'a', op: 'EQUAL' }, { op: 'OR', filters: [] }] } });
+  const [read] = parseCorpus(serialiseCorpus(buildCorpus([entry], []))).queries;
+  assert.deepEqual(read, entry, 'a nested empty composite survives a corpus round-trip');
+  assert.throws(() => planReplay(read), { name: 'ReplayError' });
 });
 
 test('a same-op childless composite is absorbed by normalisation before planning sees it', () => {

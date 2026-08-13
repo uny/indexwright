@@ -138,13 +138,20 @@ function planNode(node: FilterNode): ReplayNode {
 }
 
 /**
- * The one childless composite that means something: the `AND` wrapper.
+ * The one childless composite that is exempt: the empty `AND`.
  *
- * `normaliseRoot` represents a query that carried no `where` at all as an empty `AND`, and that
- * replays as no `where` — the same query. An empty `OR` is not that. It is a filter that was on the
- * wire, it matches nothing, and replaying it as an omitted `where` would issue an *unfiltered* query
- * — which needs no index, succeeds, and reports the entry covered when nothing was ever checked.
- * A false clean verdict is the one outcome §2 exists to prevent, so this refuses instead.
+ * `normaliseRoot` stores a query that carried no `where` at all as an empty `AND`, and replaying
+ * that without a `where` replays the same query. An empty `OR` is not that: it is a filter that was
+ * on the wire and matches nothing, so omitting it would issue an *unfiltered* query — which needs no
+ * index, succeeds, and reports the entry covered when nothing was ever checked. A false clean
+ * verdict is the outcome §2 forbids most strictly, so this refuses instead.
+ *
+ * The exemption is a choice under an ambiguity the format does not resolve, not a fact about the
+ * entry. A wire query that really sent `AND()` normalises to the same empty `AND` as one that sent
+ * no `where`, and the corpus keeps no provenance to tell them apart; the first was already
+ * `INVALID_ARGUMENT` at capture, so exempting it replays an unfiltered query and calls it covered.
+ * It is exempted regardless, because a query with no `where` is ordinary and must stay replayable
+ * while a wire-sent `AND()` is pathological — see SPEC §7, which records the same trade.
  */
 function planRoot(where: FilterComposite): ReplayComposite | null {
   if (where.filters.length === 0) {
