@@ -70,6 +70,28 @@ Firestore connection.
   has the candidate index set applied, and report queries that fail with `FAILED_PRECONDITION`.
   The oracle is Firestore itself; indexwright does not reimplement the undocumented matching rule.
 
+  **`check` does not apply the index set.** It is handed a database that already has it, and
+  applying one is left to whatever the project already deploys with — `firebase deploy`, the Admin
+  API, Terraform. Those differ in credentials, in quota, and in what they are permitted to create,
+  and none of that difference informs the verdict `check` returns. Absorbing it would put a deploy
+  path inside a tool whose entire output is a read.
+
+  **`check` does verify that the set is ready.** That obligation does not travel with the applying,
+  because a false `FAILED_PRECONDITION` is emitted by `check` no matter who deployed, and §2 forbids
+  acting on one. A composite index answers `FAILED_PRECONDITION` for a period *after* it can serve
+  some queries: waiting on a single query to succeed is not evidence, since a sibling query on the
+  same index can still fail immediately afterwards, inconsistently across value types and filter
+  shapes, and the effect vanishes on re-run. A check that reported in that window would emit exactly
+  the false positive §2 exists to prevent, and would emit it rarely enough to be believed.
+
+  So readiness is established twice over: every index in the candidate set must report `state:
+  READY` through the Admin API, *and* the set must have been quiet for a settling period after the
+  last transition. Neither half is sufficient — the state alone is what the paragraph above
+  disproves, and a timer alone is a guess at a build duration that varies with collection size. This
+  costs `check` a second credential scope, `firestore.indexes.list`, beyond the data client it
+  already needs. That is a real cost and it is the one being chosen: the alternative is a tool that
+  is quietly wrong at the moment it is most likely to be run, which is right after a deploy.
+
 The v0.2/v0.3 split is deliberate: capture is cheap and offline, while the coverage decision is
 delegated to the platform. Reimplementing index matching would risk emitting false
 `FAILED_PRECONDITION` verdicts and blocking development on a rule that is not published.

@@ -20,6 +20,18 @@ export {
   toQueryShape,
 } from './shape.js';
 export {
+  isReplayComposite,
+  NAME_FIELD,
+  operandFor,
+  planReplay,
+  type Operand,
+  type OperandType,
+  type ReplayComposite,
+  type ReplayLeaf,
+  type ReplayNode,
+  type ReplayPlan,
+} from './synthesise.js';
+export {
   CORPUS_VERSION,
   FIELD_OPERATORS,
   isComposite,
