@@ -88,7 +88,7 @@ measured your own noise level.
 | `quota-headroom` | The declared index count is close to the per-database limit. |
 
 Each rule's rationale, its known false positives, and the exact detection condition are in
-[SPEC.md](../../SPEC.md) §5.
+[SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §5.
 
 ### A note on `__name__`
 
@@ -147,7 +147,7 @@ console.log(result.summary.byRule);
 no Firestore connection. Answering *is this index needed* takes the queries, which is a separate
 package:
 
-- **v0.2 — query capture, shipped.** [`@indexwright/record`](../record) runs a test suite
+- **v0.2 — query capture, shipped.** [`@indexwright/record`](https://github.com/uny/indexwright/tree/main/packages/record) runs a test suite
   with `FIRESTORE_EMULATOR_HOST` pointed at a pass-through proxy and records the `StructuredQuery`
   shapes it observes as a corpus. This is language- and framework-independent because it operates
   on the wire protocol rather than on source code.
@@ -158,7 +158,7 @@ package:
 Coverage is bounded by what actually exercises the proxy. A query no test issues is not observed,
 and absence of observation is not evidence that an index is unused. That limit is inherent; the
 narrower ones that are not — the Firebase Web SDK's transport, and snapshot listeners — are
-[named in the spec](../../SPEC.md) and counted in the corpus rather than passed over.
+[named in the spec](https://github.com/uny/indexwright/blob/main/SPEC.md) and counted in the corpus rather than passed over.
 
 ## Toward 1.0
 
@@ -171,7 +171,7 @@ Until then the version stays below 1.0 and the rules stay provisional.
 ## Development
 
 This is an npm workspace holding two packages under `packages/`: `indexwright` and
-[`@indexwright/record`](../record). Both scripts cover both.
+[`@indexwright/record`](https://github.com/uny/indexwright/tree/main/packages/record). Both scripts cover both.
 
 ```bash
 npm install

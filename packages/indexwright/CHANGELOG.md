@@ -24,12 +24,12 @@ output shape is the stable contract.
 
 ### Added
 
-- A query corpus format, specified in [SPEC.md](../../SPEC.md) §7 and versioned by its own
+- A query corpus format, specified in [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7 and versioned by its own
   `corpusVersion` rather than by any package's release number. It is the contract between capture
   and the coverage check, and the first indexwright artefact meant to be committed and reviewed in
   a diff alongside `firestore.indexes.json`.
 - `@indexwright/record`, a separate package that writes one. See
-  [its changelog](../record/CHANGELOG.md).
+  [its changelog](https://github.com/uny/indexwright/blob/main/packages/record/CHANGELOG.md).
 - `indexwright record` now says that the verb ships in `@indexwright/record` and how to run it,
   instead of reporting an unknown command. The cost of splitting the family into two packages is a
   second package to discover, and "unknown command" reads as "indexwright cannot do this".
