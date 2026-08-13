@@ -21,8 +21,10 @@ jobs:
       # version. The trailing comment is the human-readable version and what Dependabot bumps.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Nothing here pushes to git, and the steps below run dependency lifecycle scripts.
-          # Leaving GITHUB_TOKEN in .git/config would hand them a credential for no reason.
+          # Nothing here pushes to git, so there is nothing for a stored credential to be for.
+          # The steps below no longer run dependency lifecycle scripts — see the `npm ci` step —
+          # but they do run this tree's own code, and a GITHUB_TOKEN left in .git/config would be
+          # a credential sitting in reach of it for no reason.
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
