@@ -71,12 +71,13 @@ export function withInstalledTarball(packageRoot, body, options = {}) {
       JSON.stringify({ name: 'consumer', private: true, type: 'module' }),
     );
     // --ignore-scripts for the same reason the release workflows carry it on their own `npm ci`:
-    // this runs inside a job holding `id-token: write`, so an install-time script here could mint
-    // the publishing credential from the job's OIDC identity. Nothing is fetched from the registry
-    // today — `alongside` above is what keeps it that way — but this is the one install in the
-    // release that resolves against a semver range with no lockfile, so it is the widest of them
-    // the day SPEC §3's Firestore client lands. It costs the check nothing: neither package ships
-    // an install script, and `checkDeclaredDependencies` is what holds the dependency set.
+    // verify-package runs inside those jobs, which hold `id-token: write`, so an install-time
+    // script reached from here could mint the publishing credential from the job's OIDC identity
+    // before the publish step runs. Nothing is fetched from the registry today — `alongside` above
+    // is what keeps it that way — but this is the one install in the release that resolves against
+    // a semver range with no lockfile, so it is the widest of them the day SPEC §3's Firestore
+    // client lands. It costs the check nothing: neither package ships an install script, and
+    // `checkDeclaredDependencies` is what holds the dependency set.
     console.log('installing the tarball…');
     run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball, ...dependencies], {
       cwd: consumer,
