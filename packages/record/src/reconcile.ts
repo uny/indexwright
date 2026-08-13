@@ -80,7 +80,12 @@ export type UnreadableReason = (typeof UNREADABLE_REASONS)[number];
  * the key cannot describe, and matching it on the key alone vouches for a live index that differs
  * in exactly the respect the declaration went out of its way to state.
  */
-export const INCOMPARABLE_REASONS = ['api-scope-unrecognised', 'density-unrecognised'] as const;
+export const INCOMPARABLE_REASONS = [
+  'api-scope-unrecognised',
+  'density-unrecognised',
+  /** A declared field whose direction is one `LOSSY_DIRECTIONS` refuses. */
+  'field-unreadable',
+] as const;
 
 export type IncomparableReason = (typeof INCOMPARABLE_REASONS)[number];
 
@@ -160,22 +165,29 @@ const RESOURCE_NAME =
 const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
 
 /**
- * The `density` values this module is willing to compare under: only the unset one.
+ * The `density` values this module is willing to compare under.
  *
  * `density` decides *which documents* an index covers — `SPARSE_ANY` indexes a document when any
- * indexed field is present, `DENSE` indexes every document — so two indexes agreeing on collection
- * group, query scope, and fields can still serve different queries. SPEC §5's key is built from
- * those three and says nothing about density, and SPEC §4's declaration shape passes `density`
- * through without analysing it, so this module has no interpretation of it to compare with.
+ * indexed field is present, `DENSE` indexes every one — so two indexes agreeing on collection group,
+ * query scope, and fields can still serve different queries. SPEC §5's key is built from those three
+ * and says nothing about density, and SPEC §4's declaration shape passes `density` through without
+ * analysing it, so this module has no interpretation of it to compare with.
  *
  * Rather than key on it (which would extend §5's notion of index identity) or ignore it (which
- * vouches for a `DENSE` live index against a `SPARSE_ANY` declaration), a set that uses it is
- * refused. That is the same call the module makes for a Datastore-mode `apiScope`, and the same one
- * SPEC §3 asks for: decline rather than vouch. If this turns out to fire on ordinary listings —
- * whether the Admin API returns a density for every index is not settled here — it fails loudly,
- * with a named reason, which is the failure this module is willing to have.
+ * vouches for a `DENSE` live index against a `SPARSE_ANY` declaration), a set that turns on it is
+ * refused. Same call the module makes for a Datastore-mode `apiScope`, and the one SPEC §3 asks for:
+ * decline rather than vouch.
+ *
+ * `SPARSE_ALL` is comparable, and that is not a concession — it is the covering behaviour a
+ * declaration *without* a density already asks for, so it is what the §5 key assumes when it says
+ * nothing. Refusing it would refuse the ordinary case: whether the Admin API returns a density on
+ * every index or omits it as the proto3 default is not settled here, and a set that comes back
+ * uniformly `SPARSE_ALL` must still reconcile, or `check` could never vouch for anything.
  */
-const COMPARABLE_DENSITIES: ReadonlySet<string> = new Set(['DENSITY_UNSPECIFIED']);
+const COMPARABLE_DENSITIES: ReadonlySet<string> = new Set([
+  'DENSITY_UNSPECIFIED',
+  'SPARSE_ALL',
+]);
 
 /** Absent is always comparable: proto3 JSON omits a field holding its default. */
 function comparableUnder(value: unknown, comparable: ReadonlySet<string>): boolean {
@@ -271,7 +283,9 @@ function readLive(live: LiveCompositeIndex): ReadableLive | UnreadableIndex {
     // rather than reach a fallback — and throwing is the one thing this module must not do, since
     // §3 asks `check` to decline on an entry it cannot read, not to die on it.
     if (field === null || field === undefined || LOSSY_DIRECTIONS.has(fieldDirection(field))) {
-      return { name, reason: 'field-unreadable', detail: String(field?.fieldPath) };
+      // The element itself when it has no `fieldPath` to name, so the detail reports what was
+      // observed rather than the `undefined` a missing property would render as.
+      return { name, reason: 'field-unreadable', detail: String(field?.fieldPath ?? field) };
     }
   }
 
@@ -299,6 +313,15 @@ function incomparableReason(
   }
   if (!comparableUnder(source['density'], COMPARABLE_DENSITIES)) {
     return { reason: 'density-unrecognised', detail: String(source['density']) };
+  }
+  // The declared half of `LOSSY_DIRECTIONS`, which `parse.ts` lets through: it validates that
+  // `vectorConfig` is an object, not that its `dimension` is a number. Without this the declaration
+  // is keyed on a direction the module has just called unreadable, and since no live entry can carry
+  // one, it lands in `missing` and its live counterpart in `extra` — a confident `diverged` asserted
+  // about a field this version cannot read. Fail-safe, but declining is what §3 asks for.
+  const lossy = declared.fields.find((field) => LOSSY_DIRECTIONS.has(field.direction));
+  if (lossy) {
+    return { reason: 'field-unreadable', detail: `${lossy.fieldPath}:${lossy.direction}` };
   }
   return null;
 }
@@ -356,13 +379,20 @@ export function reconcile(
     // discriminator §5's key does not describe would otherwise be *matched* on the key alone, and a
     // match is the false vouch. `source` is the declaration as written, so this reads what the file
     // actually said rather than what canonicalisation kept.
+    const key = identity(declared.collectionGroup, declared.queryScope, declared.fields);
+
     const refusal = incomparableReason(declared);
     if (refusal) {
       incomparable.push({ key: declared.key, declared, ...refusal });
+      // Claimed, though not matched. The live index this declaration names is not one the file
+      // failed to declare, and letting it fall through to `extra` would tell the operator to delete
+      // an index their own file asks for. Suppressing it asserts nothing either: the verdict is
+      // `indeterminate` regardless, which is the honest answer about a bucket that was never
+      // compared.
+      claimed.add(key);
       continue;
     }
 
-    const key = identity(declared.collectionGroup, declared.queryScope, declared.fields);
     const bucket = byIdentity.get(key);
     const found = bucket?.[0];
     if (found === undefined) {

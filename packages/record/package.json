@@ -41,7 +41,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "indexwright": "^0.2.0"
+    "indexwright": ">=0.2.0 <1"
   },
   "publishConfig": {
     "access": "public"

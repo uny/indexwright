@@ -302,8 +302,10 @@ test('a nullish entry in the fields array is reported unreadable rather than thr
   // before it reaches the fallback. §3 asks `check` to decline on an entry it cannot read.
   const result = reconcile(declare(), [live('posts', [asc('a'), null])]);
   assert.equal(result.verdict, 'indeterminate');
+  // `detail` reports the element that was observed — `null` — not the `undefined` that reading a
+  // `fieldPath` off it would render as.
   assert.deepEqual(result.unreadable, [
-    { name: named('posts'), reason: 'field-unreadable', detail: 'undefined' },
+    { name: named('posts'), reason: 'field-unreadable', detail: 'null' },
   ]);
 });
 
@@ -456,26 +458,69 @@ test('a declaration setting a non-native apiScope is refused, as the live side a
   assert.ok(!isVouched(result));
   assert.equal(result.incomparable[0].reason, 'api-scope-unrecognised');
   assert.equal(result.incomparable[0].detail, 'DATASTORE_MODE_API');
-  // The live index is then undeclared, which is what it now is.
-  assert.equal(result.extra.length, 1);
+  // The live index it names is not one the file failed to declare, so it must not be reported as
+  // extra: a rendered report would be telling the operator to delete an index their file asks for.
+  assert.deepEqual(result.extra, []);
 });
 
-test('an explicit ANY_API and an absent density are the comparable spellings, on both sides', () => {
-  // The refusals must not fire on an ordinary set, or `check` could never report at all.
+test('a declared field this version cannot read is refused, not asserted to be a divergence', () => {
+  // The declared half of the lossy-direction rule. `parse.ts` validates that `vectorConfig` is an
+  // object, not that its dimension is a number, so this declaration is valid and lints clean.
+  // Keyed on, it would land in `missing` and the live index it describes in `extra` — a confident
+  // `diverged` about a field the module has just called unreadable.
   const candidate = declare({
     collectionGroup: 'posts',
     queryScope: 'COLLECTION',
-    fields: [asc('type')],
-    apiScope: 'ANY_API',
-    density: 'DENSITY_UNSPECIFIED',
+    fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: '128' } }],
   });
   const result = reconcile(candidate, [
-    { ...live('posts', [asc('type'), asc('__name__')]), apiScope: 'ANY_API', density: null },
+    live('posts', [{ fieldPath: 'embedding', vectorConfig: { dimension: 128 } }]),
   ]);
 
-  assert.equal(result.verdict, 'identical');
-  assert.ok(isVouched(result));
-  assert.deepEqual(result.incomparable, []);
+  assert.equal(result.verdict, 'indeterminate');
+  assert.ok(!isVouched(result));
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.incomparable.map((entry) => entry.reason), ['field-unreadable']);
+  assert.equal(result.incomparable[0].detail, 'embedding:VECTOR(?)');
+});
+
+test('the comparable spellings still reconcile, or check could never vouch for anything', () => {
+  // The refusals must not fire on an ordinary set. SPARSE_ALL matters most here: it is the covering
+  // behaviour a declaration *without* a density already asks for, so it is what §5's key assumes
+  // when it says nothing — and if the Admin API stamps it on every index, refusing it would make
+  // every listing indeterminate and the whole coverage check inert.
+  const spellings = [
+    {},
+    { apiScope: 'ANY_API' },
+    { density: 'DENSITY_UNSPECIFIED' },
+    { density: 'SPARSE_ALL' },
+    { apiScope: 'ANY_API', density: 'SPARSE_ALL' },
+  ];
+
+  for (const extras of spellings) {
+    const candidate = declare({
+      collectionGroup: 'posts',
+      queryScope: 'COLLECTION',
+      fields: [asc('type')],
+      ...extras,
+    });
+    const result = reconcile(candidate, [
+      { ...live('posts', [asc('type'), asc('__name__')]), ...extras },
+    ]);
+
+    assert.equal(result.verdict, 'identical', `refused ${JSON.stringify(extras)}`);
+    assert.ok(isVouched(result));
+    assert.deepEqual(result.incomparable, []);
+    assert.deepEqual(result.unreadable, []);
+  }
+
+  // And a null density is the nullable spelling of absent.
+  assert.equal(
+    reconcile(declare({ collectionGroup: 'posts', queryScope: 'COLLECTION', fields: [asc('type')] }), [
+      { ...live('posts', [asc('type'), asc('__name__')]), density: null },
+    ]).verdict,
+    'identical',
+  );
 });
 
 test('sorting does not fall back on the §5 key alone, which two entries can share', () => {
@@ -491,12 +536,16 @@ test('sorting does not fall back on the §5 key alone, which two entries can sha
   assert.equal(order(collide)[0], order([...collide].reverse())[0]);
   assert.deepEqual(order(collide), order([...collide].reverse()));
 
-  // Two unreadable entries can share a name too — every `null` name coerces to the same string.
+  // Two unreadable entries can share a name too — a listing really can report one resource name
+  // twice — and then only the reason and the detail separate them. Both names here must *parse*,
+  // or the name check short-circuits and both entries come back `name-unparseable`, which would
+  // hold in either order with no tie-breaker at all.
   const unreadable = [
-    { name: null, state: 'READY', queryScope: 'COLLECTION', fields: [] },
-    { name: null, state: 'READY', fields: [] },
+    { name: named('posts'), state: 'READY', fields: [asc('a')] }, // query-scope-missing
+    { name: named('posts'), state: 'READY', queryScope: 'COLLECTION' }, // fields-missing
   ];
   const reasons = (observed) => reconcile(declare(), observed).unreadable.map((e) => e.reason);
+  assert.deepEqual(reasons(unreadable), ['fields-missing', 'query-scope-missing']);
   assert.deepEqual(reasons(unreadable), reasons([...unreadable].reverse()));
 });
 
@@ -514,5 +563,6 @@ test('the unreadable reasons are the ones the module can actually produce', () =
   assert.deepEqual([...INCOMPARABLE_REASONS].sort(), [
     'api-scope-unrecognised',
     'density-unrecognised',
+    'field-unreadable',
   ]);
 });
