@@ -5,6 +5,39 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## Unreleased
+
+### Added
+
+- Replay synthesis, specified in [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7
+  (*Replay without values*): `planReplay` turns a corpus entry back into the query v0.3's `check`
+  has to issue. A corpus holds no values, so replay invents them; this decides only what *kind* of
+  operand each filter needs — `scalar` or `reference`, and its arity — which follows from the
+  operator and the field path and never from a value. It builds no Firestore objects and imports no
+  client, so the two synthesis mistakes that would make `check` report `INVALID_ARGUMENT` instead of
+  the `FAILED_PRECONDITION` §7 requires — a wrong-shaped operand, an empty `where` — are settled
+  where they can be tested exhaustively. Exported alongside it: `isReplayComposite`, `NAME_FIELD`,
+  `operandFor`, `ReplayError`, and the `Operand`, `OperandType`, `ReplayComposite`, `ReplayLeaf`,
+  `ReplayNode`, `ReplayPlan` types.
+- A readiness gate for the index set under test (SPEC §3, *v0.3 — coverage check*): `ReadinessGate`,
+  with `DEFAULT_SETTLE_MS`, `INDEX_STATES`, `isReportable`, `isTransient`, and the `IndexState`,
+  `LiveIndex`, `Readiness` types. A composite index answers `FAILED_PRECONDITION` for a period after
+  it can already serve some queries, so one succeeding query is not evidence that a sibling will
+  succeed; reporting inside that window emits exactly the false positive §2 forbids. Readiness is
+  therefore established twice over — every index reports `READY`, *and* the set has been quiet for a
+  settling period, which a single observation can never satisfy. The gate holds no client and does
+  no I/O; it is fed observations and a monotonic clock, so the rule is testable without waiting on a
+  real index build. `DEFAULT_SETTLE_MS` (60s) is a conservative guess, not a measured bound, and
+  errs long on purpose.
+
+### Notes
+
+- **Both additions are provisional and have no caller yet.** They are the parts of v0.3's `check`
+  that are decidable without a Firestore client, written and tested ahead of the verb itself, so
+  their shape has not been exercised by a real consumer. The package's JavaScript API is already
+  unstable before 1.0 — `corpusVersion` is the contract, not the API — and these two are the least
+  settled corner of it. Expect them to move when `check` lands.
+
 ## [0.2.0] — 2026-08-10
 
 First release. Query capture, specified in [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7.
