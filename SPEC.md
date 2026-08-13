@@ -87,10 +87,20 @@ Firestore connection.
   So readiness is established twice over: every index in the candidate set must report `state:
   READY` through the Admin API, *and* the set must have been quiet for a settling period after the
   last transition. Neither half is sufficient — the state alone is what the paragraph above
-  disproves, and a timer alone is a guess at a build duration that varies with collection size. This
-  costs `check` a second credential scope, `firestore.indexes.list`, beyond the data client it
-  already needs. That is a real cost and it is the one being chosen: the alternative is a tool that
-  is quietly wrong at the moment it is most likely to be run, which is right after a deploy.
+  disproves, and a timer alone is a guess at a build duration that varies with collection size.
+
+  What this costs is worth stating precisely, because the imprecise version understates it. It is
+  *not* a second OAuth scope: `projects.databases.collectionGroups.indexes.list` accepts the same
+  `https://www.googleapis.com/auth/datastore` (or `cloud-platform`) the data client already holds.
+  The cost is an **IAM permission** — `datastore.schemas.list`, for which `datastore.indexes.list`
+  remains a legacy alias — which the roles granting a test runner read/write access to documents do
+  not carry. So `check` needs a principal holding that permission, and the ready-made role that does
+  is `roles/datastore.indexAdmin`, which also carries `create` and `delete` on indexes. Granting it
+  hands a tool whose entire output is a read the ability to drop an index; a custom role with
+  `datastore.schemas.list` alone is the grant that matches what `check` does, and is what a
+  deployment should prefer. That is the real cost and it is the one being chosen: the alternative is
+  a tool that is quietly wrong at the moment it is most likely to be run, which is right after a
+  deploy.
 
 The v0.2/v0.3 split is deliberate: capture is cheap and offline, while the coverage decision is
 delegated to the platform. Reimplementing index matching would risk emitting false
