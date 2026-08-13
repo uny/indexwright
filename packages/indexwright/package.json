@@ -1,0 +1,51 @@
+{
+  "name": "indexwright",
+  "version": "0.2.0",
+  "description": "Linter for Firestore composite index declarations (firestore.indexes.json)",
+  "keywords": [
+    "firestore",
+    "firebase",
+    "index",
+    "composite-index",
+    "linter",
+    "static-analysis"
+  ],
+  "homepage": "https://github.com/uny/indexwright/tree/main/packages/indexwright#readme",
+  "bugs": "https://github.com/uny/indexwright/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uny/indexwright.git",
+    "directory": "packages/indexwright"
+  },
+  "license": "Apache-2.0",
+  "author": "Yuki Nagai",
+  "type": "module",
+  "bin": {
+    "indexwright": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc --build --force",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  }
+}

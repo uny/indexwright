@@ -15,7 +15,7 @@ import {
   withInstalledTarball,
 } from './lib/tarball.mjs';
 
-const root = fileURLToPath(new URL('..', import.meta.url));
+const root = fileURLToPath(new URL('../packages/indexwright/', import.meta.url));
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const checker = createChecker();
 const { check } = checker;
@@ -31,11 +31,11 @@ withInstalledTarball(root, ({ files, consumer }) => {
   ]);
   checkNoRuntimeDependencies(checker, manifest);
 
-  check('the workspace does not leak into the tarball', () => {
-    for (const path of files) {
-      if (path.startsWith('packages/')) throw new Error(`${path} is another package`);
-    }
-  });
+  // A check that the workspace does not leak into the tarball used to sit here. It was meaningful
+  // while this package was packed from the repository root, where `packages/` was a sibling of
+  // `dist/`. Packed from `packages/indexwright`, no path in the tarball can reach another package,
+  // so the check asserted nothing — and a check that cannot fail reads as protection it is not
+  // providing. `@indexwright/record` never had one, for the same reason.
 
   const bin = join(consumer, 'node_modules', '.bin', 'indexwright');
 
@@ -46,6 +46,7 @@ withInstalledTarball(root, ({ files, consumer }) => {
 
   check('the bin lints a file and honours --max-warnings', () => {
     const fixture = join(root, 'test', 'fixtures', 'scope-minority.json');
+    // `root` is the package directory, so the fixture travels with the tests it belongs to.
     const clean = run(bin, ['lint', fixture, '--format', 'json']);
     if (JSON.parse(clean).summary.warnings < 1) throw new Error('expected at least one warning');
     try {
