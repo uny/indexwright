@@ -114,6 +114,35 @@ test('a command that cannot be started is reported, not thrown', async () => {
   }
 });
 
+test('an inherited non-loopback emulator exits 2 and names the variable, without starting a proxy', async () => {
+  // The UsageError rewrap in parseArgs is what makes this exit 2 with the usage rather than throwing
+  // an EndpointError out of run(); nothing else asserts that the two are wired that way.
+  const streams = collect();
+  assert.equal(await run(['--', 'true'], streams, { FIRESTORE_EMULATOR_HOST: 'firestore:8080' }), 2);
+  assert.match(streams.stderr(), /FIRESTORE_EMULATOR_HOST is set to "firestore:8080"/);
+  assert.match(streams.stderr(), /--allow-remote-emulator/);
+});
+
+test('--allow-remote-emulator carries through parseArgs into the proxy, so the escape hatch works', async () => {
+  // The whole documented remote path: without the pass-through in cli.ts the flag parses fine and
+  // then startCapture refuses anyway, so the run dies at exit 2 with a green test suite.
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-record-'));
+  try {
+    const out = join(directory, 'corpus.json');
+    const streams = collect();
+    // 10.0.0.1 need not exist: the upstream connection is lazy, and the child does not use it.
+    const status = await run(
+      ['--allow-remote-emulator', '--emulator', '10.0.0.1:8080', '--out', out, '--', process.execPath, '-e', ''],
+      streams,
+      {},
+    );
+    assert.equal(status, 0, streams.stderr());
+    assert.doesNotMatch(streams.stderr(), /could not start the capture proxy/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('the child is told where the proxy is, not where the emulator is', async () => {
   const upstream = createServer();
   await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));

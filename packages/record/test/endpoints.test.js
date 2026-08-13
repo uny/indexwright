@@ -9,6 +9,7 @@ import {
 } from '../dist/index.js';
 import { ALLOW_REMOTE_EMULATOR, parseArgs, UsageError } from '../dist/args.js';
 import { startCapture } from '../dist/proxy.js';
+import { createServer } from 'node:net';
 
 test('the whole of 127.0.0.0/8 is loopback, not just 127.0.0.1', () => {
   // 127.0.0.2 is a real thing to bind to, and a check that only knew the one address would refuse it
@@ -245,4 +246,103 @@ test('the opt-ins are per endpoint, so permitting one does not permit the other'
     () => startCapture({ upstream: '127.0.0.1:8080', host: '0.0.0.0', allowRemoteUpstream: true }),
     EndpointError,
   );
+});
+
+/** A port nothing is listening on, obtained by holding one and letting it go. */
+async function freePort() {
+  const probe = createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const { port } = probe.address();
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
+}
+
+test('a refused bind leaves the port genuinely unbound, not merely reported as refused', async () => {
+  // The rejection type alone would still pass if the guard ran *after* tcp.listen — which is the one
+  // ordering the guard exists to prevent, since it would publish the port it is refusing to publish.
+  // So the assertion is on the port itself: after the refusal, we must be able to take it.
+  const port = await freePort();
+  await assert.rejects(
+    () => startCapture({ upstream: '127.0.0.1:8080', host: '0.0.0.0', port }),
+    EndpointError,
+  );
+
+  const claim = createServer();
+  try {
+    await new Promise((resolve, reject) => {
+      claim.once('error', reject);
+      claim.listen(port, '0.0.0.0', resolve);
+    });
+  } finally {
+    await new Promise((resolve) => claim.close(resolve));
+  }
+});
+
+test('allowRemoteUpstream is load-bearing: it is what lets a remote upstream through', async () => {
+  // Without this the override could be deleted and every test would still pass, while the CLI's one
+  // advertised escape hatch — `--allow-remote-emulator --emulator firestore:8080` — died with exit 2.
+  // `connect` is lazy, so no remote host has to exist for the permitted path to be observable.
+  const capture = await startCapture({
+    upstream: '10.0.0.1:8080',
+    allowRemoteUpstream: true,
+    onWarning: () => {},
+  });
+  try {
+    assert.match(capture.address, /^127\.0\.0\.1:\d+$/);
+  } finally {
+    await capture.close();
+  }
+});
+
+test('allowRemoteBind is load-bearing: it is what lets a non-loopback bind through', async () => {
+  // Binds every interface for the lifetime of this assertion, which is what the option means; it is
+  // closed immediately, and it is the only way to show the opt-in actually reaches the decision.
+  const capture = await startCapture({
+    upstream: '127.0.0.1:8080',
+    host: '0.0.0.0',
+    allowRemoteBind: true,
+    onWarning: () => {},
+  });
+  try {
+    assert.match(capture.address, /^0\.0\.0\.0:\d+$/);
+  } finally {
+    await capture.close();
+  }
+});
+
+test('the override flag takes no value, so a value that reads as "off" cannot turn it on', () => {
+  // `--allow-remote-emulator=false` would otherwise enable the guard's own override: the parser
+  // splits the `=` off before matching the name, so the value was accepted and discarded.
+  for (const spelling of [`${ALLOW_REMOTE_EMULATOR}=false`, `${ALLOW_REMOTE_EMULATOR}=0`, `${ALLOW_REMOTE_EMULATOR}=`]) {
+    assert.throws(
+      () => parseArgs([spelling, '--emulator', '10.0.0.1:8080', '--', 'true'], {}),
+      (error) => error instanceof UsageError && /takes no value/.test(error.message),
+      spelling,
+    );
+  }
+});
+
+test('a malformed address is blamed on the input that actually carried it', () => {
+  // The flag is named when the flag carried it, and the variable when the environment did. Blaming
+  // `--emulator` for an inherited value sends the reader to a flag that is not on their command line.
+  assert.throws(
+    () => parseArgs(['--', 'true'], { FIRESTORE_EMULATOR_HOST: 'firestore' }),
+    (error) =>
+      error instanceof UsageError &&
+      /^FIRESTORE_EMULATOR_HOST: expected host:port/.test(error.message),
+  );
+  assert.throws(
+    () => parseArgs(['--emulator', 'firestore', '--', 'true'], {}),
+    (error) => error instanceof UsageError && /^--emulator: expected host:port/.test(error.message),
+  );
+});
+
+test('the override also permits an upstream that arrived from the environment', () => {
+  // The origin decides the message, never whether the override applies — a compose-set variable is
+  // exactly the case the override documents.
+  const command = parseArgs([ALLOW_REMOTE_EMULATOR, '--', 'true'], {
+    FIRESTORE_EMULATOR_HOST: 'firestore:8080',
+  });
+  assert.equal(command.emulator, 'firestore:8080');
+  assert.equal(command.allowRemoteUpstream, true);
 });
