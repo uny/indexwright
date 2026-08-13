@@ -31,7 +31,15 @@ jobs:
           # set that is an empty auth line — npm reads it as "auth is already configured", never
           # starts the OIDC exchange, and fails with ENEEDAUTH. The registry is pinned by the
           # .npmrc committed at the repository root, so nothing here needs to set it.
-          cache: npm
+          #
+          # Caching is deliberately off, and `package-manager-cache: false` keeps it off if a
+          # `packageManager` or `devEngines.packageManager` field is ever added — that field would
+          # otherwise turn caching back on automatically. The Actions cache is a cross-job channel
+          # into a job holding a publishing credential. `npm ci` does verify integrity hashes
+          # against the lockfile, so this is defence in depth rather than a live hole, but a release
+          # build is where a clean environment is worth more than the seconds a cache saves.
+          # setup-node's own advanced-usage docs recommend disabling it for privileged workflows.
+          package-manager-cache: false
 
       - name: Check that the tag matches the package version
         run: |
@@ -42,7 +50,22 @@ jobs:
             exit 1
           fi
 
-      - run: npm ci
+      # --ignore-scripts, because this job holds `id-token: write` and GitHub exports
+      # ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN to *every* step of such a
+      # job, not only to the step that needs them. A dependency shipping a lifecycle script would
+      # therefore run with the ability to request an OIDC token for audience npm:registry.npmjs.org,
+      # exchange it for this package's trusted-publisher credential, and publish an arbitrary
+      # tarball with valid provenance attached — before the publish step below ever runs. Neither
+      # `persist-credentials: false` nor the SHA-pinned actions cover that: the token is minted on
+      # demand from the job environment, not read from the checkout.
+      #
+      # Nothing here needs install-time scripts. The build is an explicit step already, because both
+      # `npm test` and `npm run verify-package` call `npm run build` themselves — a deliberate
+      # choice, so that `ignore-scripts=true` in a developer's own config cannot silently test a
+      # stale dist/. The flag stays on this invocation rather than moving into a config file for the
+      # same reason inverted: set globally it would also suppress `prepublishOnly`, which is how the
+      # tarball gets a dist/ at all.
+      - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm test
       - run: npm run verify-package

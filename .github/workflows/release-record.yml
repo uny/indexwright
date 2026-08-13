@@ -31,7 +31,11 @@ jobs:
           node-version: '24'
           # registry-url is deliberately absent; see the comment in release.yml for why setting it
           # breaks the OIDC exchange.
-          cache: npm
+          #
+          # Caching is off for the reason release.yml records: the Actions cache is a cross-job
+          # channel into a job holding a publishing credential. `package-manager-cache: false` keeps
+          # it off if a `packageManager` field is ever added.
+          package-manager-cache: false
 
       - name: Check that the tag matches the package version
         run: |
@@ -44,7 +48,18 @@ jobs:
 
       # The whole workspace, not just this package: they build from one tsconfig chain and the
       # tarball checks cover both, so a release that breaks the other one should not ship.
-      - run: npm ci
+      # --ignore-scripts for the reason release.yml records at length: this job holds
+      # `id-token: write`, GitHub exports the OIDC request variables to every step of such a job, and
+      # a dependency's lifecycle script could use them to mint this package's publishing credential
+      # and ship a tarball with valid provenance before the publish step runs.
+      #
+      # It matters more here than it does there, and increasingly so. `@indexwright/record` is the
+      # package that takes runtime dependencies — `indexwright` today, a Firestore client when
+      # replay arrives (SPEC §3) — so this is the job whose install tree grows.
+      #
+      # Both workflows carry the same flags on purpose. An asymmetry between them would read as a
+      # deliberate distinction and there is none.
+      - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm test
       - run: npm run verify-package
