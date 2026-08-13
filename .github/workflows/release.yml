@@ -36,9 +36,9 @@ jobs:
       - name: Check that the tag matches the package version
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          version="$(node -p "require('./package.json').version")"
+          version="$(node -p "require('./packages/indexwright/package.json').version")"
           if [ "$tag" != "$version" ]; then
-            echo "tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            echo "tag $GITHUB_REF_NAME does not match packages/indexwright/package.json version $version" >&2
             exit 1
           fi
 
@@ -47,7 +47,10 @@ jobs:
       - run: npm test
       - run: npm run verify-package
 
+      # Published from the workspace root so the committed .npmrc applies, and named with `-w` so
+      # the root — which is private and publishes nothing — cannot be the thing that goes out.
+      #
       # No NODE_AUTH_TOKEN: npm exchanges the job's OIDC identity for a short-lived credential,
       # which npmjs.com grants only to the trusted publisher configured for this package —
       # uny/indexwright, workflow release.yml. There is no long-lived secret to leak or rotate.
-      - run: npm publish --provenance --access public
+      - run: npm publish -w indexwright --provenance --access public

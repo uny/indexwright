@@ -5,16 +5,31 @@ All notable changes to this project are documented here. The format follows
 versioning. Pre-1.0, rule additions and message changes may land in minor releases; the `json`
 output shape is the stable contract.
 
+## Unreleased
+
+### Changed
+
+- The package now lives at `packages/indexwright` rather than at the repository root, so that
+  `@indexwright/record` can depend on it from the working tree instead of from a published release.
+  Nothing about the published package moves: same name, same bin, same `exports`, same
+  dependency-free guarantee.
+- `SPEC.md` is no longer shipped inside the tarball. It specifies both packages, so it belongs to
+  the repository rather than to either one, and `files` cannot reach above a package directory. The
+  alternative — copying it in at pack time — runs through `prepublishOnly`, which npm skips entirely
+  under `ignore-scripts=true`; that would make the verified tarball and the published one differ in
+  exactly the way `verify-package` exists to catch. The spec is linked from the README and is in the
+  repository.
+
 ## [0.2.0] — 2026-08-10
 
 ### Added
 
-- A query corpus format, specified in [SPEC.md](SPEC.md) §7 and versioned by its own
+- A query corpus format, specified in [SPEC.md](../../SPEC.md) §7 and versioned by its own
   `corpusVersion` rather than by any package's release number. It is the contract between capture
   and the coverage check, and the first indexwright artefact meant to be committed and reviewed in
   a diff alongside `firestore.indexes.json`.
 - `@indexwright/record`, a separate package that writes one. See
-  [its changelog](packages/record/CHANGELOG.md).
+  [its changelog](../record/CHANGELOG.md).
 - `indexwright record` now says that the verb ships in `@indexwright/record` and how to run it,
   instead of reporting an unknown command. The cost of splitting the family into two packages is a
   second package to discover, and "unknown command" reads as "indexwright cannot do this".
