@@ -20,6 +20,16 @@ export {
   toQueryShape,
 } from './shape.js';
 export {
+  DEFAULT_SETTLE_MS,
+  INDEX_STATES,
+  isReportable,
+  isTransient,
+  ReadinessGate,
+  type IndexState,
+  type LiveIndex,
+  type Readiness,
+} from './readiness.js';
+export {
   isReplayComposite,
   NAME_FIELD,
   operandFor,
