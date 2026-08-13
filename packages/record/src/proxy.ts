@@ -146,13 +146,22 @@ export async function startCapture(options: CaptureOptions): Promise<Capture> {
     route(socket, http2, http1, warn);
   });
 
-  await new Promise<void>((resolve, reject) => {
-    tcp.once('error', reject);
-    tcp.listen(options.port ?? 0, bindHost, () => {
-      tcp.removeListener('error', reject);
-      resolve();
+  // The upstream session is already open by now, so a listen that fails has to take it down on the
+  // way out. Left behind it keeps the event loop alive: `--port` on a port something else holds
+  // reported the error and then hung instead of exiting 2, because nothing was ever going to close
+  // the handle the rejected call had opened.
+  try {
+    await new Promise<void>((resolve, reject) => {
+      tcp.once('error', reject);
+      tcp.listen(options.port ?? 0, bindHost, () => {
+        tcp.removeListener('error', reject);
+        resolve();
+      });
     });
-  });
+  } catch (error) {
+    await close(tcp, sessions, sockets, client);
+    throw error;
+  }
 
   const address = tcp.address() as AddressInfo;
   return {

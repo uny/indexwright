@@ -373,3 +373,32 @@ test('an upstream that has gone away fails the stream rather than the recorder',
     await capture.close();
   }
 });
+
+test('a failed listen takes the upstream session down with it', async () => {
+  // The upstream connection is opened before the listener is bound, so a bind that fails has to
+  // close it on the way out. Asserted from the upstream's side, which is the only place the
+  // difference is observable: the session arrives either way, and without the cleanup it stays.
+  const upstream = createHttp2Server();
+  const closed = new Promise((resolve) => {
+    upstream.on('session', (session) => session.on('close', () => resolve('session closed')));
+  });
+  const upstreamAddress = await listen(upstream);
+
+  // Something already holding the port the proxy will ask for.
+  const squatter = createHttp2Server();
+  const busy = Number((await listen(squatter)).split(':')[1]);
+
+  try {
+    await assert.rejects(
+      () => startCapture({ upstream: upstreamAddress, port: busy, onWarning: () => {} }),
+      (error) => error.code === 'EADDRINUSE',
+    );
+    assert.equal(
+      await Promise.race([closed, new Promise((r) => setTimeout(() => r('still open'), 2000))]),
+      'session closed',
+    );
+  } finally {
+    await new Promise((resolve) => squatter.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});
