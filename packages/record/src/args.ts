@@ -1,6 +1,6 @@
 /** Argument parsing, in-tree and without a dependency, in the shape `indexwright` uses. */
 
-import { parseHostPort, requireLoopbackUpstream } from './endpoints.js';
+import { parseHostPort, requireLoopbackUpstream, type HostOrigin } from './endpoints.js';
 
 export class UsageError extends Error {
   override readonly name = 'UsageError';
@@ -68,6 +68,12 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
         fromFlag = true;
         break;
       case ALLOW_REMOTE_EMULATOR:
+        // Refused rather than interpreted. `--allow-remote-emulator=false` reads as "off" and would
+        // otherwise turn the guard on, because the name is matched with the `=value` already split
+        // off — and every value-taking option here accepts that form, so it is one a caller has
+        // reason to write. A flag that silently means the opposite of what it says is worse than one
+        // that says it takes no value.
+        if (inline !== null) throw new UsageError(`${name} takes no value, got "${inline}"`);
         allowRemoteUpstream = true;
         break;
       case '--out':
@@ -91,14 +97,15 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
   //
   // A UsageError, because exit 2 is what §4's table gives a run that was asked for wrongly, and the
   // fix is on the command line either way — correct the upstream, or state the intent.
-  const upstream = readUpstreamHost(emulator);
+  const origin: HostOrigin = fromFlag
+    ? { kind: 'flag', option: '--emulator' }
+    : { kind: 'env', variable: 'FIRESTORE_EMULATOR_HOST' };
+  const upstream = readUpstreamHost(emulator, origin);
   try {
     requireLoopbackUpstream({
       host: upstream,
       value: emulator,
-      origin: fromFlag
-        ? { kind: 'flag', option: '--emulator' }
-        : { kind: 'env', variable: 'FIRESTORE_EMULATOR_HOST' },
+      origin,
       override: ALLOW_REMOTE_EMULATOR,
       allowed: allowRemoteUpstream,
     });
@@ -110,18 +117,24 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
 }
 
 /**
- * The host half of an `--emulator` value, or a usage error naming what was wrong with it.
+ * The host half of an emulator address, or a usage error naming what was wrong with it.
  *
  * The proxy parses the same string with the same function, so a value this accepts is one it will
  * accept too. Rewrapped as a `UsageError` because a malformed address is a usage error, and it has to
  * be reported as malformed rather than reaching the loopback check and being refused as "not
  * loopback" — which would be true, and useless.
+ *
+ * Named by origin for the same reason the refusal below is: an address inherited from the
+ * environment is not one the reader can find on their command line, so blaming `--emulator` for it
+ * sends them to look at a flag they never passed.
  */
-function readUpstreamHost(value: string): string {
+function readUpstreamHost(value: string, origin: HostOrigin): string {
   try {
     return parseHostPort(value).host;
   } catch (error) {
-    throw new UsageError(`--emulator: ${error instanceof Error ? error.message : String(error)}`);
+    const source =
+      origin.kind === 'flag' ? origin.option : origin.kind === 'env' ? origin.variable : origin.field;
+    throw new UsageError(`${source}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
