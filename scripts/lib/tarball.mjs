@@ -76,8 +76,9 @@ export function withInstalledTarball(packageRoot, body, options = {}) {
     // before the publish step runs. Nothing is fetched from the registry today — `alongside` above
     // is what keeps it that way — but this is the one install in the release that resolves against
     // a semver range with no lockfile, so it is the widest of them the day SPEC §3's Firestore
-    // client lands. It costs the check nothing: neither package ships an install script, and
-    // `checkDeclaredDependencies` is what holds the dependency set.
+    // client lands. It costs the check nothing: neither package ships an install script, and what
+    // holds each one's dependency set is its own check — `checkNoRuntimeDependencies` for
+    // `indexwright`, `checkDeclaredDependencies` for `@indexwright/record`.
     console.log('installing the tarball…');
     run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball, ...dependencies], {
       cwd: consumer,

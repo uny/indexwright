@@ -22,7 +22,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Nothing here pushes to git, so there is nothing for a stored credential to be for.
-          # The steps below no longer run dependency lifecycle scripts — see the `npm ci` step —
+          # The steps below no longer run dependency lifecycle scripts — that takes both the flag
+          # on the `npm ci` step and the one on the nested install in scripts/lib/tarball.mjs —
           # but they do run this tree's own code, and a GITHUB_TOKEN left in .git/config would be
           # a credential sitting in reach of it for no reason.
           persist-credentials: false
