@@ -35,7 +35,12 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
+      # --ignore-scripts to match the release jobs. This job is the one that stands in for a
+      # release, so it is the one that has to install the way a release does: a dependency whose
+      # install script the build turns out to need would otherwise pass here and fail there, after
+      # the tag is pushed and the version is spent. The `test` job above keeps the ordinary install,
+      # which is what a contributor actually runs.
+      - run: npm ci --ignore-scripts
       # A published version cannot be replaced, so the tarball is exercised on every change.
       # verify-package builds first, so there is no separate build step to fall out of step with it.
       - run: npm run verify-package
