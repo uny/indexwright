@@ -8,6 +8,16 @@
 export { buildCorpus, CorpusError, parseCorpus, serialiseCorpus, writeCorpus } from './corpus.js';
 export { decodeRunQuery, type DecodeResult } from './decode.js';
 export { classify, parseHostPort, startCapture, type Capture, type CaptureOptions, type Intent } from './proxy.js';
+export {
+  DEFAULT_SETTLE_MS,
+  INDEX_STATES,
+  isReportable,
+  isTransient,
+  ReadinessGate,
+  type IndexState,
+  type LiveIndex,
+  type Readiness,
+} from './readiness.js';
 export { Recorder } from './recorder.js';
 export {
   compareByCodePoint,
@@ -19,16 +29,6 @@ export {
   serialiseOrderBy,
   toQueryShape,
 } from './shape.js';
-export {
-  DEFAULT_SETTLE_MS,
-  INDEX_STATES,
-  isReportable,
-  isTransient,
-  ReadinessGate,
-  type IndexState,
-  type LiveIndex,
-  type Readiness,
-} from './readiness.js';
 export {
   isReplayComposite,
   NAME_FIELD,
