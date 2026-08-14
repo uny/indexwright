@@ -333,9 +333,13 @@ test('a refused bind leaves the port genuinely unbound, not merely reported as r
 test('allowRemoteUpstream is load-bearing: it is what lets a remote upstream through', async () => {
   // Without this the override could be deleted and every test would still pass, while the CLI's one
   // advertised escape hatch — `--allow-remote-emulator --emulator firestore:8080` — died with exit 2.
-  // `connect` is lazy, so no remote host has to exist for the permitted path to be observable.
+  //
+  // TEST-NET-1 (RFC 5737), reserved for documentation and routed nowhere. Not a nicety: `http2.connect`
+  // opens the TCP connection immediately — it is the *streams* that are lazy, not the session — so
+  // this address is really dialled. 10.0.0.1 would have been a live host on plenty of corporate and CI
+  // networks, which is precisely the thing this module exists to stop happening by accident.
   const capture = await startCapture({
-    upstream: '10.0.0.1:8080',
+    upstream: '192.0.2.1:8080',
     allowRemoteUpstream: true,
     onWarning: () => {},
   });

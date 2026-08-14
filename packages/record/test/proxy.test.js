@@ -422,3 +422,25 @@ test('a wildcard upstream reaches the emulator on this host, which is why it is 
     upstream.server.close();
   }
 });
+
+test('closing destroys a pending upstream connection, so a run does not hang after it', async () => {
+  // The upstream being unreachable is exactly the state a run ends in when it was pointed at the
+  // wrong emulator: the suite has finished and the corpus is written, and the process then has
+  // nothing left to do. A session's `destroy` does not tear down a TCP connection that has not been
+  // established yet, and `session.socket` refuses `destroy` with ERR_HTTP2_NO_SOCKET_MANIPULATION,
+  // so the socket used to survive close and hold the event loop open until the OS gave up on the
+  // connect — 75 seconds on macOS, after a capture that had in fact succeeded.
+  //
+  // 192.0.2.1 is TEST-NET-1 (RFC 5737): reserved for documentation and routed nowhere, so the
+  // connect stays pending rather than being refused. It must not be an address that could belong to
+  // someone, because it is really dialled — `http2.connect` opens the socket immediately.
+  const before = process.getActiveResourcesInfo().filter((kind) => kind === 'TCPWRAP').length;
+  const capture = await startCapture({
+    upstream: '192.0.2.1:8080',
+    allowRemoteUpstream: true,
+    onWarning: () => {},
+  });
+  await capture.close();
+  const after = process.getActiveResourcesInfo().filter((kind) => kind === 'TCPWRAP').length;
+  assert.equal(after, before, 'close left a socket open');
+});

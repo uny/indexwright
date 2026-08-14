@@ -130,9 +130,11 @@ test('--allow-remote-emulator carries through parseArgs into the proxy, so the e
   try {
     const out = join(directory, 'corpus.json');
     const streams = collect();
-    // 10.0.0.1 need not exist: the upstream connection is lazy, and the child does not use it.
+    // TEST-NET-1 (RFC 5737): reserved for documentation and routed nowhere. The connection is really
+    // opened — `http2.connect` is not lazy about the socket — so this must not be an address that
+    // could belong to someone.
     const status = await run(
-      ['--allow-remote-emulator', '--emulator', '10.0.0.1:8080', '--out', out, '--', process.execPath, '-e', ''],
+      ['--allow-remote-emulator', '--emulator', '192.0.2.1:8080', '--out', out, '--', process.execPath, '-e', ''],
       streams,
       {},
     );

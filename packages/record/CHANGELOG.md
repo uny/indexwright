@@ -32,6 +32,15 @@ again, by its own `corpusVersion`.
   refused a purely local run while telling the reader it was not on this machine, and the remedy it
   offered was to permit remote emulators.
 
+- **`close()` now destroys a pending upstream connection.** It previously called `close()` on the
+  upstream session, which is a graceful shutdown and does nothing for a TCP connection that has not
+  been established yet — and `session.socket` is a guarded Proxy that refuses `destroy`. The socket
+  therefore survived and held the event loop open until the OS gave up on the connect, 75 seconds on
+  macOS. That is precisely the state a run pointed at an unreachable emulator ends in, so the symptom
+  was `indexwright-record` appearing to hang *after* a capture that had already written its corpus.
+  The socket is now created by this package rather than by `http2.connect`, which is the only way to
+  get a reference that can be closed.
+
 - `parseHostPort` moved to a new `endpoints` module so the argument parser and the proxy read an
   address with one set of rules rather than two. It is still exported from the same place.
 

@@ -18,7 +18,7 @@ import type {
   OutgoingHttpHeaders,
   ServerHttp2Stream,
 } from 'node:http2';
-import { createServer as createTcpServer } from 'node:net';
+import { connect as netConnect, createServer as createTcpServer } from 'node:net';
 import type { AddressInfo, Server as TcpServer, Socket } from 'node:net';
 import { parseHostPort, requireLoopbackBind, requireLoopbackUpstream } from './endpoints.js';
 
@@ -112,10 +112,28 @@ export async function startCapture(options: CaptureOptions): Promise<Capture> {
     allowed: options.allowRemoteBind,
   });
 
-  // `formatHost`, not the bare host: `parseHostPort` strips the brackets off an IPv6 literal, and
-  // "http://::1:8080" is not a URL — an emulator addressed as [::1]:8080 would fail to connect at
-  // all rather than proxy.
-  const client = connect(`http://${formatHost(upstream.host)}:${upstream.port}`);
+  // The socket is created here rather than left to `http2.connect`, so that closing can destroy it.
+  //
+  // A session's own `destroy` does not tear down a TCP connection that has not been established yet,
+  // and `session.socket` is a guarded Proxy that answers `destroy` with
+  // ERR_HTTP2_NO_SOCKET_MANIPULATION — so a pending connect is unreachable through the session and
+  // keeps the process alive until the OS gives up, 75 seconds on macOS. That is exactly the state a
+  // run ends in when the upstream is unreachable: the suite has finished and the corpus is written,
+  // and `indexwright-record` then appears to hang after a capture that in fact succeeded. Owning the
+  // socket is the only way to close it.
+  //
+  // `formatHost`, not the bare host, in the authority: `parseHostPort` strips the brackets off an
+  // IPv6 literal, and "http://::1:8080" is not a URL — an emulator addressed as [::1]:8080 would
+  // fail to connect at all rather than proxy. The socket takes the bare host, which is what
+  // `net.connect` wants.
+  const upstreamSocket = netConnect({ host: upstream.host, port: upstream.port });
+  // Attached so a connect failure is not an unhandled 'error' event. It is deliberately silent: the
+  // session forwards the same failure, and reporting it in both places would warn twice for one
+  // cause.
+  upstreamSocket.on('error', () => {});
+  const client = connect(`http://${formatHost(upstream.host)}:${upstream.port}`, {
+    createConnection: () => upstreamSocket,
+  });
   client.on('error', (error) => warn(`upstream connection: ${error.message}`));
 
   const sessions = new Set<Http2Session>();
@@ -159,7 +177,7 @@ export async function startCapture(options: CaptureOptions): Promise<Capture> {
       });
     });
   } catch (error) {
-    await close(tcp, sessions, sockets, client);
+    await close(tcp, sessions, sockets, client, upstreamSocket);
     throw error;
   }
 
@@ -167,7 +185,7 @@ export async function startCapture(options: CaptureOptions): Promise<Capture> {
   return {
     recorder,
     address: `${formatHost(address.address)}:${address.port}`,
-    close: () => close(tcp, sessions, sockets, client),
+    close: () => close(tcp, sessions, sockets, client, upstreamSocket),
   };
 }
 
@@ -405,8 +423,19 @@ async function close(
   sessions: Set<Http2Session>,
   sockets: Set<Socket>,
   client: ClientHttp2Session,
+  upstreamSocket: Socket,
 ): Promise<void> {
-  client.close();
+  // `destroy`, not `close`. A graceful close asks an established session to finish; it does nothing
+  // for one whose TCP connection has not been established yet, and that socket then keeps the
+  // process alive until the OS gives up on the connect — 75 seconds on macOS. The upstream being
+  // unreachable is exactly when a run reaches here, since the suite has already finished and the
+  // corpus is written, so the failure mode is `indexwright-record` appearing to hang after a
+  // successful capture. The other two collections have always been destroyed; this one was the
+  // exception.
+  client.destroy();
+  // After the session, and separately from it: see the comment where the socket is created. A
+  // pending connect survives `client.destroy()` and is unreachable through `client.socket`.
+  upstreamSocket.destroy();
   const closed = new Promise<void>((resolve) => tcp.close(() => resolve()));
   for (const session of sessions) session.destroy();
   for (const socket of sockets) socket.destroy();
