@@ -32,6 +32,16 @@ again, by its own `corpusVersion`.
   refused a purely local run while telling the reader it was not on this machine, and the remedy it
   offered was to permit remote emulators.
 
+  **The classification is literal and resolves nothing**, which bounds what the guard is worth.
+  `localhost` counts as loopback because of how it is spelled, so a resolver that answers it with
+  something else — DNS consulted ahead of files, an image without `/etc/hosts`, a corporate wildcard
+  domain — passes the check while the connection leaves the machine. In the other direction, a name
+  that really is loopback but is spelled otherwise, such as `foo.localhost` or `ip6-localhost`, is
+  refused; `--allow-remote-emulator` or the address itself gets past it. Resolving instead of reading
+  is [issue #24](https://github.com/uny/indexwright/issues/24) and is a design change rather than a
+  patch — `classifyHost` and its callers are synchronous, and the refusal happens before anything is
+  opened, which is what lets it name where the address came from.
+
 - **`close()` now destroys a pending upstream connection.** It previously called `close()` on the
   upstream session, which is a graceful shutdown and does nothing for a TCP connection that has not
   been established yet — and `session.socket` is a guarded Proxy that refuses `destroy`. The socket

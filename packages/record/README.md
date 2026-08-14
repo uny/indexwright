@@ -73,6 +73,16 @@ Callers of `startCapture` have the same two opt-ins as named options, `allowRemo
 since the bind address is reachable from the API even though the verb has no flag for it —
 `allowRemoteBind`.
 
+**The check reads addresses, it does not resolve names.** `localhost` is treated as loopback because
+it is spelled that way, and every other name is refused as though it were remote. Two consequences
+are worth knowing before you rely on this. A resolver that answers `localhost` with something other
+than loopback — a `nsswitch.conf` that consults DNS ahead of files, an image with no `/etc/hosts`, a
+corporate wildcard domain — defeats the check, because nothing here looks. And a name that genuinely
+is loopback but is not spelled `localhost` — `foo.localhost`, `ip6-localhost` — is refused even
+though connecting to it would never leave the machine; pass `--allow-remote-emulator`, or give the
+address instead of the name. Verifying by resolution rather than by spelling is
+[issue #24](https://github.com/uny/indexwright/issues/24).
+
 The proxy is transparent: bodies, trailers, and gRPC errors reach your client unchanged, and
 HTTP/1.1 traffic — the emulator's REST endpoints, including the one
 `@firebase/rules-unit-testing` uses to clear data — is forwarded rather than refused. A suite that
