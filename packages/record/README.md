@@ -30,9 +30,11 @@ It starts a proxy, runs `npm test` with `FIRESTORE_EMULATOR_HOST` pointed at the
 the emulator, and writes `firestore.queries.json`. The exit code is your suite's, so a failing suite
 still fails.
 
-Interrupting the run keeps the corpus. Ctrl-C is passed on to your suite so its own cleanup runs,
-and what the proxy observed up to that point is written before the recorder exits `130`. Press it
-again to stop immediately, without waiting for the suite or the corpus.
+Interrupting the run keeps the corpus. Ctrl-C reaches your suite exactly as it would without the
+recorder in the way — once, so the suite runs its own cleanup rather than reading a repeat as "quit
+now" — and what the proxy observed up to that point is written before the recorder exits `130`.
+Press it again to stop immediately, without waiting for the suite or the corpus. A `SIGTERM`, which
+no terminal sends, is passed on to the suite and then handled the same way.
 
 ```text
 indexwright-record [options] -- <command> [args...]
