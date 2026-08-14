@@ -6,6 +6,7 @@ import {
   isLoopbackHost,
   requireLoopbackBind,
   requireLoopbackUpstream,
+  unbracketHost,
 } from '../dist/index.js';
 import { ALLOW_REMOTE_EMULATOR, parseArgs, UsageError } from '../dist/args.js';
 import { startCapture } from '../dist/proxy.js';
@@ -410,4 +411,24 @@ test('the override also permits an upstream that arrived from the environment', 
   });
   assert.equal(command.emulator, 'firestore:8080');
   assert.equal(command.allowRemoteUpstream, true);
+});
+
+test('a bracketed IPv6 bind address is accepted and actually bound', async () => {
+  // The classification strips brackets, so `[::1]` passed the loopback check; `net.listen` does not,
+  // and read it as a hostname — the guard said yes and the bind then failed with ENOTFOUND. Since
+  // `parseHostPort` accepts that spelling for the upstream, a caller has every reason to write it
+  // here too, so both ends now strip.
+  const capture = await startCapture({ upstream: '127.0.0.1:8080', host: '[::1]' });
+  try {
+    assert.match(capture.address, /^\[::1\]:\d+$/);
+  } finally {
+    await capture.close();
+  }
+});
+
+test('unbracketHost leaves anything that is not a bracketed literal alone', () => {
+  assert.equal(unbracketHost('[::1]'), '::1');
+  assert.equal(unbracketHost('::1'), '::1');
+  assert.equal(unbracketHost('127.0.0.1'), '127.0.0.1');
+  assert.equal(unbracketHost(' [::1] '), '::1');
 });

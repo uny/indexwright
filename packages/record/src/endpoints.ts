@@ -76,7 +76,19 @@ const ALL_ZERO = /^[0:]+$/;
  * neither DNS names nor hex literals are case-sensitive.
  */
 function normalise(host: string): string {
-  return host.trim().replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+  return unbracketHost(host).replace(/\.$/, '').toLowerCase();
+}
+
+/**
+ * An IPv6 literal without the brackets that make a `host:port` unambiguous.
+ *
+ * Exported because the classification here strips them and `net.listen` does not: a caller who wrote
+ * `[::1]` — a reasonable spelling, and the one `parseHostPort` accepts for the upstream — would
+ * otherwise pass the loopback check and then fail to bind with `ENOTFOUND [::1]`, because Node reads
+ * a bracketed value as a hostname. Both ends therefore strip before they use it.
+ */
+export function unbracketHost(host: string): string {
+  return host.trim().replace(/^\[|\]$/g, '');
 }
 
 function isLoopbackIpv4(host: string): boolean {

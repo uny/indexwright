@@ -20,7 +20,12 @@ import type {
 } from 'node:http2';
 import { connect as netConnect, createServer as createTcpServer } from 'node:net';
 import type { AddressInfo, Server as TcpServer, Socket } from 'node:net';
-import { parseHostPort, requireLoopbackBind, requireLoopbackUpstream } from './endpoints.js';
+import {
+  parseHostPort,
+  requireLoopbackBind,
+  requireLoopbackUpstream,
+  unbracketHost,
+} from './endpoints.js';
 
 // Re-exported because it was part of this module's public surface before it moved to `endpoints.ts`,
 // where both the proxy and the argument parser can reach it.
@@ -104,7 +109,10 @@ export async function startCapture(options: CaptureOptions): Promise<Capture> {
     override: 'allowRemoteUpstream: true',
     allowed: options.allowRemoteUpstream,
   });
-  const bindHost = options.host ?? '127.0.0.1';
+  // Unbracketed, because `tcp.listen` reads "[::1]" as a hostname and fails with ENOTFOUND, while
+  // the classification below strips brackets and would have called it loopback. `parseHostPort`
+  // accepts that spelling for the upstream, so a caller has every reason to write it here too.
+  const bindHost = unbracketHost(options.host ?? '127.0.0.1');
   requireLoopbackBind({
     host: bindHost,
     origin: { kind: 'option', field: 'host' },

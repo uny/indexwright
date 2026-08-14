@@ -13,6 +13,7 @@ export {
   isLoopbackHost,
   requireLoopbackBind,
   requireLoopbackUpstream,
+  unbracketHost,
   type EndpointCheck,
   type HostClass,
   type HostOrigin,
