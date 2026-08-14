@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http2';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { parseCorpus } from '../dist/index.js';
 import { parseArgs, UsageError } from '../dist/args.js';
 import { run } from '../dist/cli.js';
@@ -142,6 +144,129 @@ test('--allow-remote-emulator carries through parseArgs into the proxy, so the e
     assert.doesNotMatch(streams.stderr(), /could not start the capture proxy/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A suite that issues one query through the proxy, says so, and then does not end.
+ *
+ * It has to be a real RunQuery rather than a sleep: the property under test is that what the proxy
+ * observed before the interrupt survives it, and an empty corpus is written by the uninterrupted
+ * path too, so a sleeping child could not tell the two apart.
+ */
+const QUERYING_CHILD = `
+const { connect } = require('node:http2');
+const message = Buffer.from(process.env.INDEXWRIGHT_TEST_QUERY, 'base64');
+const header = Buffer.alloc(5);
+header.writeUInt32BE(message.length, 1);
+const client = connect('http://' + process.env.FIRESTORE_EMULATOR_HOST);
+const request = client.request({
+  ':method': 'POST',
+  ':path': '/google.firestore.v1.Firestore/RunQuery',
+  'content-type': 'application/grpc',
+  te: 'trailers',
+});
+request.on('data', () => {});
+request.on('close', () => {
+  client.close();
+  // Read by the test as the signal that a query has been captured and it is safe to interrupt.
+  console.log('recorded');
+  setTimeout(() => {}, 30_000);
+});
+request.end(Buffer.concat([header, message]));
+`;
+
+test('an interrupted run still writes the corpus, and exits 130', async () => {
+  // Spawned rather than driven through `run()` in-process: the fix installs handlers on `process`,
+  // and the thing being asserted is what a real Ctrl-C does to a real recorder — including that it
+  // does not take the recorder down before the corpus is written.
+  const upstream = createServer();
+  upstream.on('stream', (stream) => {
+    stream.on('data', () => {});
+    stream.on('end', () => {
+      stream.respond({ ':status': 200, 'content-type': 'application/grpc' }, { waitForTrailers: true });
+      stream.on('wantTrailers', () => stream.sendTrailers({ 'grpc-status': '0' }));
+      stream.end();
+    });
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-record-'));
+
+  const { cases } = JSON.parse(
+    readFileSync(fileURLToPath(new URL('fixtures/run-query.json', import.meta.url)), 'utf8'),
+  );
+  const query = cases.find((entry) => entry.name === 'a collection group query');
+  assert.ok(query, 'fixture "a collection group query" is missing');
+
+  const out = join(directory, 'corpus.json');
+  const env = { ...process.env, INDEXWRIGHT_TEST_QUERY: query.message };
+  // The recorder reads this one from the environment when `--emulator` is absent; it is not absent
+  // here, but an inherited value has no business reaching a test about something else.
+  delete env.FIRESTORE_EMULATOR_HOST;
+
+  const recorder = spawn(
+    process.execPath,
+    [
+      fileURLToPath(new URL('../dist/cli.js', import.meta.url)),
+      '--emulator',
+      `127.0.0.1:${upstream.address().port}`,
+      '--out',
+      out,
+      '--',
+      process.execPath,
+      '-e',
+      QUERYING_CHILD,
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe'], env },
+  );
+
+  let stdout = '';
+  let stderr = '';
+  recorder.stdout.setEncoding('utf8').on('data', (chunk) => {
+    stdout += chunk;
+  });
+  recorder.stderr.setEncoding('utf8').on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const exited = new Promise((resolve) => recorder.on('close', (code, signal) => resolve({ code, signal })));
+
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`the suite never issued its query\n${stdout}${stderr}`)),
+        15_000,
+      );
+      const settle = (fail) => {
+        clearTimeout(timer);
+        if (fail) reject(fail);
+        else resolve();
+      };
+      recorder.stdout.on('data', () => {
+        if (stdout.includes('recorded')) settle();
+      });
+      recorder.on('close', () => settle(new Error(`the recorder exited early\n${stdout}${stderr}`)));
+    });
+
+    // Sent to the recorder alone, not to a process group, so the suite only stops if the recorder
+    // passes the signal on — which is the half of the fix that lets the suite run its own cleanup.
+    recorder.kill('SIGINT');
+    const { code, signal } = await exited;
+
+    assert.equal(
+      signal,
+      null,
+      `the recorder was killed by ${signal} instead of handling it, so nothing after it ran\n${stderr}`,
+    );
+    assert.equal(code, 130, `128 + SIGINT, whatever the suite made of the signal\n${stderr}`);
+
+    const corpus = parseCorpus(readFileSync(out, 'utf8'));
+    assert.equal(corpus.queries.length, 1, 'the query observed before the interrupt survived it');
+    assert.match(stderr, /interrupted by SIGINT/);
+    assert.match(stderr, /1 query request\(s\) observed/);
+  } finally {
+    recorder.kill('SIGKILL');
+    rmSync(directory, { recursive: true, force: true });
+    upstream.close();
   }
 });
 

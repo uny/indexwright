@@ -71,6 +71,22 @@ again, by its own `corpusVersion`.
   being guessed at or dropped, because §3 requires `check` to decline rather than vouch for a set it
   cannot vouch for. No client and no I/O: it is fed an analysed document and an observed listing.
 
+### Fixed
+
+- **Ctrl-C during a suite no longer loses the corpus** (issue #10). `indexwright-record` runs the
+  suite with inherited stdio, so an interrupt reaches the whole foreground process group and the
+  recorder with it; nothing handled it, so Node's default terminated the recorder on the spot, before
+  the capture was closed and before the corpus was written. Everything the proxy had observed was
+  discarded — on a long suite, the entire point of the run, and a long suite is when someone
+  interrupts. `SIGINT` and `SIGTERM` are now handled for as long as the suite is running: the signal
+  is passed to the suite rather than the suite being killed out from under itself, so its own cleanup
+  runs, and once it has exited the corpus is written by the same path any other exit takes. The run
+  then reports `128 + signal` — 130 for `SIGINT` — whatever the suite made of the signal, since a
+  suite that traps it and exits 0 did not turn an interrupted run into a successful one. A second
+  interrupt is not queued behind the first: the handlers are removed when the first arrives, so
+  pressing Ctrl-C again meets Node's default and stops the recorder at once rather than waiting on a
+  suite that may not be going to exit.
+
   What it compares is exactly §5's key — collection group, query scope, fields. A set that turns on
   anything else is refused rather than matched on the key that ignores it: a `density`, which decides
   which documents an index covers and which §4 passes through unanalysed, or a Datastore-mode
