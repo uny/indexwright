@@ -373,3 +373,74 @@ test('an upstream that has gone away fails the stream rather than the recorder',
     await capture.close();
   }
 });
+
+test('a failed listen takes the upstream session down with it', async () => {
+  // The upstream connection is opened before the listener is bound, so a bind that fails has to
+  // close it on the way out. Asserted from the upstream's side, which is the only place the
+  // difference is observable: the session arrives either way, and without the cleanup it stays.
+  const upstream = createHttp2Server();
+  const closed = new Promise((resolve) => {
+    upstream.on('session', (session) => session.on('close', () => resolve('session closed')));
+  });
+  const upstreamAddress = await listen(upstream);
+
+  // Something already holding the port the proxy will ask for.
+  const squatter = createHttp2Server();
+  const busy = Number((await listen(squatter)).split(':')[1]);
+
+  try {
+    await assert.rejects(
+      () => startCapture({ upstream: upstreamAddress, port: busy, onWarning: () => {} }),
+      (error) => error.code === 'EADDRINUSE',
+    );
+    assert.equal(
+      await Promise.race([closed, new Promise((r) => setTimeout(() => r('still open'), 2000))]),
+      'session closed',
+    );
+  } finally {
+    await new Promise((resolve) => squatter.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});
+
+test('a wildcard upstream reaches the emulator on this host, which is why it is permitted', async () => {
+  // The justification for allowing 0.0.0.0 as an upstream, asserted rather than argued: the emulator
+  // listens on 127.0.0.1, the proxy is pointed at 0.0.0.0, and the call arrives. Nothing leaves the
+  // machine, so refusing this only ever refused a local emulator.
+  const upstream = stubUpstream();
+  await new Promise((resolve) => upstream.server.listen(0, '127.0.0.1', resolve));
+  const port = upstream.server.address().port;
+
+  const capture = await startCapture({ upstream: `0.0.0.0:${port}` });
+  try {
+    const path = '/google.firestore.v1.Firestore/RunQuery';
+    const { headers } = await call(capture.address, path, frame(fixtureMessage('no filters and no sort')));
+    assert.equal(headers[':status'], 200);
+    assert.deepEqual(upstream.seen, [path], 'the request reached the 127.0.0.1 emulator');
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('closing destroys a pending upstream connection, so a run does not hang after it', async () => {
+  // The upstream being unreachable is exactly the state a run ends in when it was pointed at the
+  // wrong emulator: the suite has finished and the corpus is written, and the process then has
+  // nothing left to do. A session's `destroy` does not tear down a TCP connection that has not been
+  // established yet, and `session.socket` refuses `destroy` with ERR_HTTP2_NO_SOCKET_MANIPULATION,
+  // so the socket used to survive close and hold the event loop open until the OS gave up on the
+  // connect — 75 seconds on macOS, after a capture that had in fact succeeded.
+  //
+  // 192.0.2.1 is TEST-NET-1 (RFC 5737): reserved for documentation and routed nowhere, so the
+  // connect stays pending rather than being refused. It must not be an address that could belong to
+  // someone, because it is really dialled — `http2.connect` opens the socket immediately.
+  const before = process.getActiveResourcesInfo().filter((kind) => kind === 'TCPWRAP').length;
+  const capture = await startCapture({
+    upstream: '192.0.2.1:8080',
+    allowRemoteUpstream: true,
+    onWarning: () => {},
+  });
+  await capture.close();
+  const after = process.getActiveResourcesInfo().filter((kind) => kind === 'TCPWRAP').length;
+  assert.equal(after, before, 'close left a socket open');
+});

@@ -38,9 +38,40 @@ Options:
                           else 127.0.0.1:8080)
   --out <file>            where to write the corpus (default: firestore.queries.json)
   --port <n>              port for the proxy to listen on (default: chosen by the OS)
+  --allow-remote-emulator forward to an emulator that is not on this host (refused by default)
   -h, --help              show the usage
       --version           show the version
 ```
+
+## Both ends stay on this machine
+
+The proxy listens on loopback, and forwards only to an address on this machine. `indexwright-record`
+has no option to change the first — the verb has no `--host`, deliberately, since adding one in order
+to guard it would be inventing the exposure. Neither constraint is a precaution against an exotic
+attack; both are about what a misconfiguration costs.
+
+The proxy performs no authentication — it is a transparent pass-through in front of an emulator that
+performs none either. Reachable from off the machine, it is an open read/write channel into your
+emulator's dataset for anyone who can reach the port, which on a shared CI runner is a real set of
+people. And an upstream that is not the emulator you meant routes whatever documents and credentials
+it holds through this process: `FIRESTORE_EMULATOR_HOST` is read from the environment, so that value
+can be one nobody typed.
+
+So an emulator that is not on this host is refused, and the message names where the address came
+from. A wildcard address is not one of those: `0.0.0.0:8080` as a *destination* means this machine,
+so it is a local emulator and needs nothing — it is only as a *bind* address that a wildcard is the
+exposure. If you genuinely run the emulator on another host — a container in a compose file, say —
+pass `--allow-remote-emulator` and it will proceed:
+
+```sh
+indexwright-record --allow-remote-emulator --emulator firestore:8080 -- npm test
+```
+
+The flag takes no value: `--allow-remote-emulator=false` is a usage error rather than a way to turn
+it off, because a spelling that reads as "off" must not be the one that switches the check off.
+Callers of `startCapture` have the same two opt-ins as named options, `allowRemoteUpstream` and —
+since the bind address is reachable from the API even though the verb has no flag for it —
+`allowRemoteBind`.
 
 The proxy is transparent: bodies, trailers, and gRPC errors reach your client unchanged, and
 HTTP/1.1 traffic — the emulator's REST endpoints, including the one

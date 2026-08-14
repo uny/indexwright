@@ -7,6 +7,17 @@
 
 export { buildCorpus, CorpusError, parseCorpus, serialiseCorpus, writeCorpus } from './corpus.js';
 export { decodeRunQuery, type DecodeResult } from './decode.js';
+export {
+  classifyHost,
+  EndpointError,
+  isLoopbackHost,
+  requireLoopbackBind,
+  requireLoopbackUpstream,
+  unbracketHost,
+  type EndpointCheck,
+  type HostClass,
+  type HostOrigin,
+} from './endpoints.js';
 export { classify, parseHostPort, startCapture, type Capture, type CaptureOptions, type Intent } from './proxy.js';
 export {
   DEFAULT_SETTLE_MS,

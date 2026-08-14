@@ -7,6 +7,56 @@ again, by its own `corpusVersion`.
 
 ## Unreleased
 
+### Changed
+
+- **`indexwright-record` now refuses to forward to an emulator that is not on this host**, and
+  `startCapture` refuses to bind an address other than loopback. Both were previously unconstrained
+  (issue #7). The proxy authenticates nothing and forwards verbatim, so a non-loopback upstream routes
+  whatever documents and gRPC `authorization` metadata it holds through this process, and a
+  non-loopback bind is an open read/write channel into the emulator's dataset for anyone who can reach
+  the port. The upstream is the half that arrives on its own: `FIRESTORE_EMULATOR_HOST` is read from
+  the environment, so a run can inherit an address nobody typed, and the refusal names which variable
+  is responsible for exactly that reason.
+
+  **This is a breaking change**, and the case it breaks is a legitimate one: an emulator reached by
+  container name, as in a compose file, is not loopback. Pass `--allow-remote-emulator` (or
+  `allowRemoteUpstream: true`) to proceed. `indexwright-record` gained no way to change the bind
+  address — adding a `--host` in order to guard it would have been inventing the exposure — so the
+  bind refusal can only be reached through the JavaScript API, where `allowRemoteBind: true` states
+  the intent.
+
+  A wildcard is treated differently at the two ends, because it means opposite things there. Bound,
+  `0.0.0.0` is every interface and is refused. Connected to, it is *this host* — the kernel sends it
+  to the local machine — so `FIRESTORE_EMULATOR_HOST=0.0.0.0:8080`, which is what a compose file
+  tends to leave behind, is a local emulator and passes without the override. Refusing it would have
+  refused a purely local run while telling the reader it was not on this machine, and the remedy it
+  offered was to permit remote emulators.
+
+- **`close()` now destroys a pending upstream connection.** It previously called `close()` on the
+  upstream session, which is a graceful shutdown and does nothing for a TCP connection that has not
+  been established yet — and `session.socket` is a guarded Proxy that refuses `destroy`. The socket
+  therefore survived and held the event loop open until the OS gave up on the connect, 75 seconds on
+  macOS. That is precisely the state a run pointed at an unreachable emulator ends in, so the symptom
+  was `indexwright-record` appearing to hang *after* a capture that had already written its corpus.
+  The socket is now created by this package rather than by `http2.connect`, which is the only way to
+  get a reference that can be closed.
+
+- `parseHostPort` moved to a new `endpoints` module so the argument parser and the proxy read an
+  address with one set of rules rather than two. It is still exported from the same place.
+
+- **This release takes a runtime dependency on `indexwright`**, as §3 said it would when `check`
+  arrived: reconciliation needs the linter's index model and the canonical key, so that both sides
+  are compared under one interpretation rather than a second copy of it. The direction stays one-way
+  — `indexwright` acquires no runtime dependency, in any version.
+
+  The range is `>=0.2.0 <1`, not a caret. A caret on a `0.x` version pins the minor, so the next
+  linter release would stop satisfying it — and since the two are released together, that is not a
+  hypothetical. What made it worth avoiding is that nothing would have *said* so: the workspace link
+  would quietly give way to a registry fetch, and `npm ci`, the test suite, and the tarball check
+  would all go on passing against a copy of the linter that is not the one being released. A single
+  `0.x` range also lets an adopter who depends on `indexwright` directly resolve one copy rather than
+  two, which matters because `reconcile` takes `AnalysedIndex` values their `analyse` produced.
+
 ### Added
 
 - Reconciliation of a candidate index set against the set a database actually holds, the presence
@@ -27,21 +77,6 @@ again, by its own `corpusVersion`.
   `apiScope`. Both are refused on whichever side declares them — the live side through `unreadable`,
   the candidate side through the new `incomparable` — because matching on the key alone would vouch
   for a `DENSE` live index against a `SPARSE_ANY` declaration.
-
-### Changed
-
-- **This release takes a runtime dependency on `indexwright`**, as §3 said it would when `check`
-  arrived: reconciliation needs the linter's index model and the canonical key, so that both sides
-  are compared under one interpretation rather than a second copy of it. The direction stays one-way
-  — `indexwright` acquires no runtime dependency, in any version.
-
-  The range is `>=0.2.0 <1`, not a caret. A caret on a `0.x` version pins the minor, so the next
-  linter release would stop satisfying it — and since the two are released together, that is not a
-  hypothetical. What made it worth avoiding is that nothing would have *said* so: the workspace link
-  would quietly give way to a registry fetch, and `npm ci`, the test suite, and the tarball check
-  would all go on passing against a copy of the linter that is not the one being released. A single
-  `0.x` range also lets an adopter who depends on `indexwright` directly resolve one copy rather than
-  two, which matters because `reconcile` takes `AnalysedIndex` values their `analyse` produced.
 
 ## [0.3.0] — 2026-08-13
 

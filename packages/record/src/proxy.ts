@@ -18,8 +18,18 @@ import type {
   OutgoingHttpHeaders,
   ServerHttp2Stream,
 } from 'node:http2';
-import { createServer as createTcpServer } from 'node:net';
+import { connect as netConnect, createServer as createTcpServer } from 'node:net';
 import type { AddressInfo, Server as TcpServer, Socket } from 'node:net';
+import {
+  parseHostPort,
+  requireLoopbackBind,
+  requireLoopbackUpstream,
+  unbracketHost,
+} from './endpoints.js';
+
+// Re-exported because it was part of this module's public surface before it moved to `endpoints.ts`,
+// where both the proxy and the argument parser can reach it.
+export { parseHostPort } from './endpoints.js';
 import { Recorder } from './recorder.js';
 
 const FIRESTORE_SERVICE = 'google.firestore.v1.Firestore';
@@ -53,11 +63,27 @@ const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const HTTP2_PREFACE = Buffer.from('PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n', 'latin1');
 
 export interface CaptureOptions {
-  /** `host:port` of the emulator the proxy forwards to. */
+  /** `host:port` of the emulator the proxy forwards to. Must be loopback; see `allowRemoteUpstream`. */
   readonly upstream: string;
   /** Address to listen on. Defaults to an ephemeral port on 127.0.0.1. */
   readonly host?: string;
   readonly port?: number;
+  /**
+   * Bind a non-loopback address anyway (issue #7).
+   *
+   * Off by default because the proxy authenticates nothing: reachable from off the machine, it is an
+   * open read/write channel into the emulator's dataset. `indexwright-record` exposes no way to set
+   * this — the verb has no `--host`, deliberately, since adding one to guard it would be inventing
+   * the exposure. It exists for a caller that has its own reason and is stating it.
+   */
+  readonly allowRemoteBind?: boolean;
+  /**
+   * Forward to a non-loopback upstream anyway (issue #7).
+   *
+   * Off by default because nothing makes an upstream actually be an emulator, and a wrong one routes
+   * real documents and gRPC `authorization` metadata through this process.
+   */
+  readonly allowRemoteUpstream?: boolean;
   /** Called for anything that would otherwise be silent, such as an upstream connection failure. */
   readonly onWarning?: (message: string) => void;
 }
@@ -74,10 +100,48 @@ export async function startCapture(options: CaptureOptions): Promise<Capture> {
   const warn = options.onWarning ?? ((): void => {});
   const upstream = parseHostPort(options.upstream);
 
-  // `formatHost`, not the bare host: `parseHostPort` strips the brackets off an IPv6 literal, and
-  // "http://::1:8080" is not a URL — an emulator addressed as [::1]:8080 would fail to connect at
-  // all rather than proxy.
-  const client = connect(`http://${formatHost(upstream.host)}:${upstream.port}`);
+  // Before anything is opened. A refusal that arrived after the listener was up would have already
+  // published the port it was refusing to publish.
+  requireLoopbackUpstream({
+    host: upstream.host,
+    value: options.upstream,
+    origin: { kind: 'option', field: 'upstream' },
+    override: 'allowRemoteUpstream: true',
+    allowed: options.allowRemoteUpstream,
+  });
+  // Unbracketed, because `tcp.listen` reads "[::1]" as a hostname and fails with ENOTFOUND, while
+  // the classification below strips brackets and would have called it loopback. `parseHostPort`
+  // accepts that spelling for the upstream, so a caller has every reason to write it here too.
+  const bindHost = unbracketHost(options.host ?? '127.0.0.1');
+  requireLoopbackBind({
+    host: bindHost,
+    origin: { kind: 'option', field: 'host' },
+    override: 'allowRemoteBind: true',
+    allowed: options.allowRemoteBind,
+  });
+
+  // The socket is created here rather than left to `http2.connect`, so that closing can destroy it.
+  //
+  // A session's own `destroy` does not tear down a TCP connection that has not been established yet,
+  // and `session.socket` is a guarded Proxy that answers `destroy` with
+  // ERR_HTTP2_NO_SOCKET_MANIPULATION — so a pending connect is unreachable through the session and
+  // keeps the process alive until the OS gives up, 75 seconds on macOS. That is exactly the state a
+  // run ends in when the upstream is unreachable: the suite has finished and the corpus is written,
+  // and `indexwright-record` then appears to hang after a capture that in fact succeeded. Owning the
+  // socket is the only way to close it.
+  //
+  // `formatHost`, not the bare host, in the authority: `parseHostPort` strips the brackets off an
+  // IPv6 literal, and "http://::1:8080" is not a URL — an emulator addressed as [::1]:8080 would
+  // fail to connect at all rather than proxy. The socket takes the bare host, which is what
+  // `net.connect` wants.
+  const upstreamSocket = netConnect({ host: upstream.host, port: upstream.port });
+  // Attached so a connect failure is not an unhandled 'error' event. It is deliberately silent: the
+  // session forwards the same failure, and reporting it in both places would warn twice for one
+  // cause.
+  upstreamSocket.on('error', () => {});
+  const client = connect(`http://${formatHost(upstream.host)}:${upstream.port}`, {
+    createConnection: () => upstreamSocket,
+  });
   client.on('error', (error) => warn(`upstream connection: ${error.message}`));
 
   const sessions = new Set<Http2Session>();
@@ -108,19 +172,28 @@ export async function startCapture(options: CaptureOptions): Promise<Capture> {
     route(socket, http2, http1, warn);
   });
 
-  await new Promise<void>((resolve, reject) => {
-    tcp.once('error', reject);
-    tcp.listen(options.port ?? 0, options.host ?? '127.0.0.1', () => {
-      tcp.removeListener('error', reject);
-      resolve();
+  // The upstream session is already open by now, so a listen that fails has to take it down on the
+  // way out. Left behind it keeps the event loop alive: `--port` on a port something else holds
+  // reported the error and then hung instead of exiting 2, because nothing was ever going to close
+  // the handle the rejected call had opened.
+  try {
+    await new Promise<void>((resolve, reject) => {
+      tcp.once('error', reject);
+      tcp.listen(options.port ?? 0, bindHost, () => {
+        tcp.removeListener('error', reject);
+        resolve();
+      });
     });
-  });
+  } catch (error) {
+    await close(tcp, sessions, sockets, client, upstreamSocket);
+    throw error;
+  }
 
   const address = tcp.address() as AddressInfo;
   return {
     recorder,
     address: `${formatHost(address.address)}:${address.port}`,
-    close: () => close(tcp, sessions, sockets, client),
+    close: () => close(tcp, sessions, sockets, client, upstreamSocket),
   };
 }
 
@@ -348,24 +421,6 @@ function proxyHttp1(
   request.pipe(forwarded);
 }
 
-export function parseHostPort(value: string): { host: string; port: number } {
-  const separator = value.lastIndexOf(':');
-  if (separator <= 0) throw new Error(`expected host:port, got "${value}"`);
-  const rawHost = value.slice(0, separator);
-  // A bare IPv6 literal is all colons, so `lastIndexOf` would split it into a host of "::" and a
-  // port of whatever followed the final colon. Brackets are what make the port unambiguous, and
-  // an unbracketed literal is a usage error rather than an address to guess at.
-  if (rawHost.includes(':') && !(rawHost.startsWith('[') && rawHost.endsWith(']'))) {
-    throw new Error(`expected host:port with an IPv6 literal in brackets, got "${value}"`);
-  }
-  const host = rawHost.replace(/^\[|\]$/g, '');
-  const port = Number(value.slice(separator + 1));
-  if (!/^\d+$/.test(value.slice(separator + 1)) || port < 1 || port > 65535) {
-    throw new Error(`expected host:port with a valid port, got "${value}"`);
-  }
-  return { host, port };
-}
-
 /** An IPv6 literal has to keep its brackets to survive being written back into `host:port`. */
 function formatHost(host: string): string {
   return host.includes(':') ? `[${host}]` : host;
@@ -376,8 +431,19 @@ async function close(
   sessions: Set<Http2Session>,
   sockets: Set<Socket>,
   client: ClientHttp2Session,
+  upstreamSocket: Socket,
 ): Promise<void> {
-  client.close();
+  // `destroy`, not `close`. A graceful close asks an established session to finish; it does nothing
+  // for one whose TCP connection has not been established yet, and that socket then keeps the
+  // process alive until the OS gives up on the connect — 75 seconds on macOS. The upstream being
+  // unreachable is exactly when a run reaches here, since the suite has already finished and the
+  // corpus is written, so the failure mode is `indexwright-record` appearing to hang after a
+  // successful capture. The other two collections have always been destroyed; this one was the
+  // exception.
+  client.destroy();
+  // After the session, and separately from it: see the comment where the socket is created. A
+  // pending connect survives `client.destroy()` and is unreachable through `client.socket`.
+  upstreamSocket.destroy();
   const closed = new Promise<void>((resolve) => tcp.close(() => resolve()));
   for (const session of sessions) session.destroy();
   for (const socket of sockets) socket.destroy();
