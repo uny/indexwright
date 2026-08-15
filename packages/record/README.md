@@ -45,8 +45,9 @@ Options:
 
 ## Both ends stay on this machine
 
-The proxy listens on loopback, and forwards only to an address on this machine. `indexwright-record`
-has no option to change the first — the verb has no `--host`, deliberately, since adding one in order
+The proxy listens on loopback, and forwards only to an address that reads as being on this machine —
+reads, because nothing here resolves anything, which bounds the guarantee and is what this section
+closes on. `indexwright-record` has no option to change the first — the verb has no `--host`, deliberately, since adding one in order
 to guard it would be inventing the exposure. Neither constraint is a precaution against an exotic
 attack; both are about what a misconfiguration costs.
 
@@ -74,13 +75,18 @@ since the bind address is reachable from the API even though the verb has no fla
 `allowRemoteBind`.
 
 **The check reads addresses, it does not resolve names.** `localhost` is treated as loopback because
-it is spelled that way, and every other name is refused as though it were remote. Two consequences
-are worth knowing before you rely on this. A resolver that answers `localhost` with something other
-than loopback — a `nsswitch.conf` that consults DNS ahead of files, an image with no `/etc/hosts`, a
-corporate wildcard domain — defeats the check, because nothing here looks. And a name that genuinely
-is loopback but is not spelled `localhost` — `foo.localhost`, `ip6-localhost` — is refused even
-though connecting to it would never leave the machine; pass `--allow-remote-emulator`, or give the
-address instead of the name. Verifying by resolution rather than by spelling is
+it is spelled that way — after case, a trailing dot, and brackets are normalised away, so `LOCALHOST`
+and `localhost.` are the same name — and every other name is refused as though it were remote. Two
+consequences are worth knowing before you rely on this. A resolver that answers `localhost` with
+something other than loopback — a `nsswitch.conf` that consults DNS ahead of files, an image with no
+`/etc/hosts`, a corporate wildcard domain — defeats the check, because nothing here looks. And a name
+that is loopback on your machine but is not spelled `localhost` is refused: `foo.localhost`, which
+RFC 6761 only *recommends* resolvers answer with loopback, or `ip6-localhost`, which is loopback
+because a distribution's `/etc/hosts` says so. Give the address instead of the name — that remedy
+stays correct, whereas `--allow-remote-emulator` admits the name without establishing where it
+points, and a search domain or a wildcard zone can answer either of those with a routable address.
+For a bind address rather than an upstream the opt-in is `allowRemoteBind: true`, which has no flag.
+Verifying by resolution rather than by spelling is
 [issue #24](https://github.com/uny/indexwright/issues/24).
 
 The proxy is transparent: bodies, trailers, and gRPC errors reach your client unchanged, and

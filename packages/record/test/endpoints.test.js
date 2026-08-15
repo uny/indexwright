@@ -49,7 +49,21 @@ test('localhost is trusted by name, in the spellings that resolve the same', () 
 
 test('a name that merely contains localhost is not loopback', () => {
   // The check is equality, not substring. `localhost.evil.example` resolves wherever its owner says.
-  for (const host of ['localhost.evil.example', 'notlocalhost', 'localhost-1']) {
+  //
+  // `foo.localhost` and `ip6-localhost` are here because the README now documents that they are
+  // refused, which makes it a contract rather than an incidental consequence of the equality. Both
+  // look loopback and neither is so by construction: RFC 6761 only *recommends* that a resolver
+  // answer `*.localhost` with loopback, and `ip6-localhost` is loopback only where a distribution's
+  // /etc/hosts says it is. Admitting them by spelling would extend the trust given to `localhost` to
+  // names with less behind them — and a search domain or a wildcard zone can answer either with a
+  // routable address.
+  for (const host of [
+    'localhost.evil.example',
+    'notlocalhost',
+    'localhost-1',
+    'foo.localhost',
+    'ip6-localhost',
+  ]) {
     assert.equal(classifyHost(host), 'remote', host);
   }
 });
