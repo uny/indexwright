@@ -57,27 +57,27 @@ export async function run(
     return 2;
   }
 
-  let outcome: ChildResult;
+  // The outer `finally` is what makes `release` unconditional. Every way out of the rest of this
+  // function has to reach it — including one that leaves through `capture.close()` — because a
+  // signal listener left installed refs the event loop and hangs a run that is otherwise over.
+  let outcome: ChildResult | undefined;
   try {
-    outcome = await runChild(command.argv, { ...env, FIRESTORE_EMULATOR_HOST: capture.address });
-  } catch (error) {
-    // A command that cannot be started is the user's typo, not a crash to show a stack trace for.
-    // No corpus is written: nothing ran, so there is nothing this run is evidence of.
-    streams.err(`indexwright-record: could not run ${command.argv.join(' ')}: ${(error as Error).message}\n`);
-    return 2;
-  } finally {
-    await capture.close();
-  }
+    try {
+      outcome = await runChild(command.argv, { ...env, FIRESTORE_EMULATOR_HOST: capture.address });
+    } catch (error) {
+      // A command that cannot be started is the user's typo, not a crash to show a stack trace for.
+      // No corpus is written: nothing ran, so there is nothing this run is evidence of.
+      streams.err(`indexwright-record: could not run ${command.argv.join(' ')}: ${(error as Error).message}\n`);
+      return 2;
+    } finally {
+      await capture.close();
+    }
 
-  // Written whatever the suite's verdict was: a query that failed still describes something the
-  // application issues, and the emulator does not enforce composite indexes, so a run that passes
-  // here says nothing about whether the queries it issued are indexed. That is what the corpus is
-  // for, and dropping it on a red suite would drop the queries a fix has to keep working. An
-  // interrupted run reaches here for the same reason — see `runChild`.
-  //
-  // Still under the interrupt handlers, which is the point of releasing them here rather than when
-  // the suite exited: this is the write the whole change is about, and it is unprotected otherwise.
-  try {
+    // Written whatever the suite's verdict was: a query that failed still describes something the
+    // application issues, and the emulator does not enforce composite indexes, so a run that passes
+    // here says nothing about whether the queries it issued are indexed. That is what the corpus is
+    // for, and dropping it on a red suite would drop the queries a fix has to keep working. An
+    // interrupted run reaches here for the same reason — see `runChild`.
     const out = resolve(command.out);
     try {
       writeCorpus(out, buildCorpus(capture.recorder.shapes, capture.recorder.skips.keys()));
@@ -89,7 +89,8 @@ export async function run(
     report(capture.recorder, command.out, streams, outcome.interrupted);
     return outcome.status;
   } finally {
-    outcome.release();
+    // Undefined only when the child never started, which released on its own way out.
+    outcome?.release();
   }
 }
 
@@ -235,12 +236,15 @@ function terminalAttached(): boolean {
  * same way it does for a suite that exited by itself. It is *signalled* rather than killed, and only
  * when the signal did not already reach it — see `shouldForward`.
  *
- * The handlers go up with the child and come down only once the corpus is on disk — `run` calls
- * `release` for that reason, rather than this function dropping them the moment the suite exits.
- * Closing the capture and writing the corpus is precisely the stretch this change exists to protect,
- * and the suite having exited protects none of it: an interrupt arriving a millisecond later would
- * still take the recorder down with everything it observed. Before the child there is nothing to
- * lose, so the default is right there.
+ * The handlers go up with the child, and on a run nothing interrupts they come down only once `run`
+ * has written the corpus — not the moment the suite exits. Closing the capture and writing the
+ * corpus is the stretch this change exists to protect, and the suite having exited protects none of
+ * it: a Ctrl-C landing a millisecond later would otherwise take the recorder down with everything it
+ * observed. Before the child there is nothing yet to lose, so the default is right there.
+ *
+ * A signal that does arrive releases them at once, deliberately, so a second one is not queued
+ * behind the first. The corpus write that follows it therefore runs under Node's default again,
+ * which is what makes "press it again to stop now" mean what it says.
  */
 function runChild(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<ChildResult> {
   const [command, ...args] = argv as [string, ...string[]];
@@ -280,7 +284,8 @@ function runChild(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<Chil
       reject(error);
     });
     child.on('close', (code, signal) => {
-      // No `release()` here: the handlers stay up until the corpus is written. See the docstring.
+      // No `release()` here: on an uninterrupted run the handlers stay up until `run` has written
+      // the corpus. An interrupted one released them when the signal arrived. See the docstring.
       //
       // What ended this run was the interrupt, whatever the child made of it. A suite that traps
       // `SIGINT` and exits 0 did not turn an interrupted run into a successful one, and the exit

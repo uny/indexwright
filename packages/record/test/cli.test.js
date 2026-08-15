@@ -303,10 +303,16 @@ test('an interrupted run still writes the corpus, and exits 130', async () => {
   } finally {
     // The group, not the pid: the suite is a grandchild this test never learns the pid of, and on
     // the failure paths it is still running with the recorder's stdio pipes held open.
-    try {
-      process.kill(-recorder.pid, 'SIGKILL');
-    } catch {
-      // Already gone, which is the ordinary case.
+    // Guarded on the recorder still running, because `process.kill` has no handle behind it the way
+    // `recorder.kill` does: once Node has reaped the recorder its pid is free to be reused, and a
+    // raw group kill on a stale pid would go to whatever now holds it. On the passing path there is
+    // nothing left to clean up anyway.
+    if (recorder.exitCode === null && recorder.signalCode === null) {
+      try {
+        process.kill(-recorder.pid, 'SIGKILL');
+      } catch {
+        // Raced with its own exit, which is fine — the point was only not to strand the suite.
+      }
     }
     rmSync(directory, { recursive: true, force: true });
     upstream.close();
@@ -395,10 +401,16 @@ test('a suite that traps the interrupt and exits 0 did not make the run a succes
     assert.equal(code, 130, `the suite exited 0, but the run was interrupted\n${stderr}`);
     assert.match(stderr, /interrupted by SIGINT/);
   } finally {
-    try {
-      process.kill(-recorder.pid, 'SIGKILL');
-    } catch {
-      // Already gone, which is the ordinary case.
+    // Guarded on the recorder still running, because `process.kill` has no handle behind it the way
+    // `recorder.kill` does: once Node has reaped the recorder its pid is free to be reused, and a
+    // raw group kill on a stale pid would go to whatever now holds it. On the passing path there is
+    // nothing left to clean up anyway.
+    if (recorder.exitCode === null && recorder.signalCode === null) {
+      try {
+        process.kill(-recorder.pid, 'SIGKILL');
+      } catch {
+        // Raced with its own exit, which is fine — the point was only not to strand the suite.
+      }
     }
     rmSync(directory, { recursive: true, force: true });
     upstream.close();
