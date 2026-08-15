@@ -219,8 +219,15 @@ const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
  * created without one comes back `SPARSE_ALL`, and so does one created as `DENSITY_UNSPECIFIED` —
  * the API normalises rather than echoing. So `SPARSE_ALL` is not a value that might turn up, it is
  * the only one such a database produces, and excluding it would have made every reconciliation
- * `indeterminate` and `check` unable to vouch for anything. `DENSITY_UNSPECIFIED` has never been
- * observed coming back and is kept for the proto3 default rather than for a listing.
+ * `indeterminate` and `check` unable to vouch for anything.
+ *
+ * `DENSITY_UNSPECIFIED` has never been observed coming back, and it is not here for the proto3
+ * default — that is an *absent* field, which `comparableUnder` clears on its nullish branch before
+ * this set is consulted at all. It is here for the two ways the name itself can arrive: a
+ * declaration that writes it out, which SPEC §4 passes through unanalysed and which the suite
+ * covers, and a client that renders enums as names rather than omitting the default one — which is
+ * what the admin client was observed doing for every enum it returns. Deleting the member would
+ * refuse both.
  *
  * `SPARSE_ANY` and `DENSE` are refused at *creation* on that database — "Indexes with api scope
  * ANY_API does not support SPARSE_ANY density on standard database" — so no listing there can carry
