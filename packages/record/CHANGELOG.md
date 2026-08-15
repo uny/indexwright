@@ -32,6 +32,26 @@ again, by its own `corpusVersion`.
   refused a purely local run while telling the reader it was not on this machine, and the remedy it
   offered was to permit remote emulators.
 
+  **The classification is literal and resolves nothing**, which bounds what the guard is worth.
+  `localhost` counts as loopback because of how it is spelled — normalised first for case, a trailing
+  dot, brackets, and surrounding whitespace — so a resolver that answers it with something else — DNS
+  consulted ahead of files, an image without `/etc/hosts`, a corporate wildcard domain — passes the
+  check while the connection leaves the machine. In the other direction, a name that is loopback on
+  the machine in question but is spelled otherwise, such as `foo.localhost` or `ip6-localhost`, is
+  refused. The address is the remedy that stays correct: neither of those names is loopback by
+  construction — RFC 6761 only recommends the first, and the second is a line in a distribution's
+  `/etc/hosts` — so `--allow-remote-emulator`, or `allowRemoteBind: true` at the bind end, admits the
+  name without establishing where it points. Being spelling-bound cuts both ways, so the address has
+  to be written in a spelling the check knows: a dotted quad in `127.0.0.0/8`, `::1`,
+  `0:0:0:0:0:0:0:1` and IPv4-mapped forms are recognised, while `0::1` and `127.1` are loopback to a
+  resolver and `remote` here — [issue #27](https://github.com/uny/indexwright/issues/27).
+
+  Resolving instead of reading is [issue #24](https://github.com/uny/indexwright/issues/24) and is a
+  design change rather than a patch — `parseArgs` refuses before it returns, and `classifyHost` and
+  `isLoopbackHost` are exported as synchronous predicates, so the refusal happens before anything is
+  opened. (What lets the message name where the address came from is separate from that: `parseArgs`
+  tracks whether the value was typed or inherited and passes it along.)
+
 - **`close()` now destroys a pending upstream connection.** It previously called `close()` on the
   upstream session, which is a graceful shutdown and does nothing for a TCP connection that has not
   been established yet — and `session.socket` is a guarded Proxy that refuses `destroy`. The socket

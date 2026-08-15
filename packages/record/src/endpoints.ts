@@ -108,6 +108,11 @@ export function classifyHost(host: string): HostClass {
   // anyone who can edit that file already has more authority over this process than the proxy could
   // grant them, and refusing the name would reject the overwhelmingly common spelling of the safe
   // case — including this package's own default.
+  //
+  // That argument does not reach answers from somewhere other than /etc/hosts — a resolver ordered
+  // `dns files`, an image carrying no hosts file, a wildcard domain — where the name is approved
+  // here and the connection leaves the machine. Closing that means resolving, which this module is
+  // built not to do; issue #24 holds the design.
   if (value === 'localhost') return 'loopback';
 
   if (isLoopbackIpv4(value)) return 'loopback';
