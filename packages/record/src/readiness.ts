@@ -167,6 +167,10 @@ export class ReadinessGate {
       // `null`, and proto3 JSON omits the field entirely when it is `STATE_UNSPECIFIED`. Those all
       // classify as unrecognised either way — coercing only keeps the declared type honest for a
       // caller that builds a message out of it.
+      //
+      // The numeric case is a possibility the *types* allow rather than one measured coming back:
+      // issue #20 observed `v1.FirestoreAdminClient` returning enum names, identically over gRPC and
+      // over `fallback: true`. The coercion stays, since the type is what a caller compiles against.
       const states = [...new Set(unrecognised.map((index) => String(index.state)))].sort(
         compareByCodePoint,
       );
