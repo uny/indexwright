@@ -643,18 +643,25 @@ test('the fields a live index carries beyond SPEC §5 arrive at their defaults',
   assert.equal(liveFixture.liveByAdminClient.shardCount, 0);
 });
 
-test('a live index setting a field beyond SPEC §5 is vouched for anyway, which is the open hole', () => {
+test('a field beyond SPEC §5 is vouched for from either side, which is the open hole', () => {
   // The other half, and it is asserted against `reconcile` rather than against the fixture:
-  // `unique`, `multikey` and `shardCount` are invisible to §5's key, so a live index setting one is
+  // `unique`, `multikey` and `shardCount` are invisible to §5's key, so an index setting one is
   // matched on a key that cannot see it — the same false vouch the `density` refusal exists to
   // prevent, arriving by a route nothing refuses. The three assertions above cannot catch that; only
-  // feeding the module a contrary entry can, and this is that.
+  // feeding the module a contrary set can, and this is that.
   //
-  // So the expectation here is deliberately the *wrong* answer: `identical`, for a declaration that
-  // asks for a non-unique index against a listing that is unique. It is pinned rather than fixed
-  // because refusing the three needs observations issue #20 could not reach — a live index actually
-  // setting one — and pinned rather than left undocumented so that closing the hole announces
-  // itself as a failure here instead of passing silently.
+  // Both directions, because refusing only one side would be half a guard — the reason
+  // `INCOMPARABLE_REASONS` exists at all. `density` is refused on the live side by `readLive` and on
+  // the declared side by `incomparableReason`; these three are refused by neither, so the false
+  // vouch runs both ways: a non-unique declaration is vouched for by a `unique` live index, and a
+  // declaration that went out of its way to ask for `unique` is vouched for by a live index that is
+  // not one. SPEC §4 keeps unknown keys, so the declared direction is reachable from any
+  // `firestore.indexes.json` that names them.
+  //
+  // So the expectation here is deliberately the *wrong* answer: `identical`, both ways. It is
+  // pinned rather than fixed because refusing the three needs observations issue #20 could not
+  // reach, and pinned rather than left undocumented so that closing the hole announces itself as a
+  // failure here instead of passing silently — on whichever side it gets closed first.
   const declared = {
     collectionGroup: 'probe',
     queryScope: 'COLLECTION',
@@ -665,12 +672,23 @@ test('a live index setting a field beyond SPEC §5 is vouched for anyway, which 
   };
 
   for (const beyond of [{ unique: true }, { multikey: true }, { shardCount: 7 }]) {
-    const result = reconcile(analyse({ indexes: [declared] }), [
+    const what = JSON.stringify(beyond);
+
+    // Set on the live side, absent from the declaration.
+    const live = reconcile(analyse({ indexes: [declared] }), [
       { ...liveFixture.liveByAdminClient, ...beyond },
     ]);
-    const what = JSON.stringify(beyond);
-    assert.equal(result.verdict, 'identical', what);
-    assert.ok(isVouched(result), what);
-    assert.deepEqual(result.unreadable, [], what);
+    assert.equal(live.verdict, 'identical', `live ${what}`);
+    assert.ok(isVouched(live), `live ${what}`);
+    assert.deepEqual(live.unreadable, [], `live ${what}`);
+
+    // Set on the declaration, absent from the live index — the mirror, and the one a live-side-only
+    // refusal would leave behind.
+    const decl = reconcile(analyse({ indexes: [{ ...declared, ...beyond }] }), [
+      liveFixture.liveByAdminClient,
+    ]);
+    assert.equal(decl.verdict, 'identical', `declared ${what}`);
+    assert.ok(isVouched(decl), `declared ${what}`);
+    assert.deepEqual(decl.incomparable, [], `declared ${what}`);
   }
 });

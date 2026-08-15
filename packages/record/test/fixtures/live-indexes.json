@@ -1,7 +1,7 @@
 {
-  "note": "One composite index, as three different tools report it. Observed 2026-08-15 against a standard Firestore-native database (project indexwright-probe, database '(default)'), for issue #20 — before this, every reconcile test fed the module a listing the module's own author wrote. Regenerate with the commands in `source`.",
+  "note": "One composite index, as three different tools report it. Observed 2026-08-15 against a standard Firestore-native database, for issue #20 — before this, every reconcile test fed the module a listing the module's own author wrote. Verbatim except for the project id, which is the placeholder `demo-fixtures` rather than the disposable project actually used, matching `scripts/capture-fixtures.mjs`; nothing here reads the project segment, so the substitution costs no observation. Only the creation command is recorded below — how each rendering was read back is not, so this cannot yet be regenerated end to end.",
   "source": {
-    "project": "indexwright-probe",
+    "project": "demo-fixtures (placeholder; the observation was made against a disposable project)",
     "database": "(default)",
     "edition": "standard, Firestore-native",
     "declared": "created with no density: `gcloud firestore indexes composite create --collection-group probe --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending`"
@@ -19,7 +19,7 @@
       { "fieldPath": "z", "order": "ASCENDING", "valueMode": "order" },
       { "fieldPath": "__name__", "order": "ASCENDING", "valueMode": "order" }
     ],
-    "name": "projects/indexwright-probe/databases/(default)/collectionGroups/probe/indexes/CICAgOjXh4EK",
+    "name": "projects/demo-fixtures/databases/(default)/collectionGroups/probe/indexes/CICAgOjXh4EK",
     "queryScope": "COLLECTION",
     "state": "READY",
     "apiScope": "ANY_API",
@@ -35,7 +35,7 @@
       { "fieldPath": "z", "order": "ASCENDING" },
       { "fieldPath": "__name__", "order": "ASCENDING" }
     ],
-    "name": "projects/indexwright-probe/databases/(default)/collectionGroups/probe/indexes/CICAgOjXh4EK",
+    "name": "projects/demo-fixtures/databases/(default)/collectionGroups/probe/indexes/CICAgOjXh4EK",
     "queryScope": "COLLECTION",
     "state": "READY"
   },

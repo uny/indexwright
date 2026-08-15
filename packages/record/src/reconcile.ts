@@ -62,19 +62,28 @@ export interface LiveCompositeIndex extends LiveIndex {
 // `unique`, `multikey`, `shardCount`. Written as line comments rather than a doc block because a
 // `/** */` here would attach to `UNREADABLE_REASONS` and ship as its documentation.
 //
-// Each is invisible to §5's key, so a live index setting one reconciles as `identical` against a
-// declaration that does not — the false vouch the `density` refusal exists to prevent, by another
-// route. That is measured rather than feared: `reconcile.test.js` puts a `unique: true` entry
-// through `reconcile` and pins the vouch it currently produces, so the hole is executable and
-// closing it fails a test rather than passing unnoticed.
+// Each is invisible to §5's key, so an index setting one is matched on a key that cannot see it —
+// the false vouch the `density` refusal exists to prevent, by another route. Unlike `density`, which
+// is refused on the live side by `readLive` and on the declared side by `incomparableReason`, these
+// are refused by neither, so it runs *both* ways: a declaration without `unique` is vouched for by a
+// live index that has it, and a declaration that went out of its way to ask for `unique` is vouched
+// for by a live index that is not one. SPEC §4 keeps unknown keys, so the declared direction is
+// reachable from any `firestore.indexes.json` that names them — on any database kind, including the
+// one below. Closing only the live half would leave that behind, which is the half-a-guard
+// `INCOMPARABLE_REASONS` exists to warn against.
 //
-// They are recorded rather than refused because that hole is out of reach on the database kind this
-// version targets: `unique` is rejected at creation outside the Enterprise edition, and a standard
-// native database returns `false`, `false` and `0` — `test/fixtures/live-indexes.json`. `multikey`
-// is documented as belonging to the `MONGODB_COMPATIBLE_API` scope `COMPARABLE_API_SCOPES` already
-// refuses, but the only observation here is `false` under `ANY_API`, which does not establish that
-// `true` is unreachable there. Refusing all three is what would close it, and needs the Enterprise
-// and MongoDB-compatible observations issue #20 could not reach.
+// That is measured rather than feared: `reconcile.test.js` puts all three through `reconcile` from
+// both sides and pins the vouch each currently produces, so the hole is executable and closing it
+// fails a test rather than passing unnoticed.
+//
+// They are recorded rather than refused because the *live* direction is out of reach on the database
+// kind this version targets: `unique` is rejected at creation outside the Enterprise edition, and a
+// standard native database returns `false`, `false` and `0` — `test/fixtures/live-indexes.json`.
+// `multikey` is documented as belonging to the `MONGODB_COMPATIBLE_API` scope `COMPARABLE_API_SCOPES`
+// already refuses, but the only observation here is `false` under `ANY_API`, which does not
+// establish that `true` is unreachable there. Refusing all three, on both sides, is what would close
+// it, and the live half needs the Enterprise and MongoDB-compatible observations issue #20 could not
+// reach.
 
 export const UNREADABLE_REASONS = [
   /** The resource name did not have the shape the collection group is read out of. */
