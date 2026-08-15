@@ -134,8 +134,18 @@ jobs:
       # `uses:` here is a decision to extend the publishing credential's blast radius.
       id-token: write
     steps:
-      # Checked out for the committed .npmrc, which pins the registry. Nothing else here reads the
-      # tree, and nothing installs from it.
+      # Checked out for two things now, and narrowing it to one file would break the second: the
+      # committed .npmrc, which pins the registry, and `packages/indexwright/package.json`, which
+      # the publish step reads as the statement of what this tag was supposed to publish. Nothing
+      # installs from the tree.
+      #
+      # Holding that statement in a file rather than in a literal here makes the step order load-
+      # bearing, because the artifact is unpacked after this checkout. `actions/download-artifact`
+      # at the pin below neutralises `..` segments in zip entry paths before writing them — the
+      # unzip it bundles does so under the comment "protect against malicious zip files which want
+      # to extract to parent dirs" — so an artifact from the unprivileged job cannot reach back
+      # over the checkout and rewrite what it is about to be compared against. Read at that pinned
+      # SHA rather than assumed.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

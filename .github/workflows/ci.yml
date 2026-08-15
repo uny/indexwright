@@ -74,7 +74,9 @@ jobs:
         run: |
           shopt -s nullglob
           render='const m = JSON.parse(require("fs").readFileSync(0, "utf8")); const pc = m.publishConfig ?? {}; console.log(m.name + "@" + m.version + " publishConfig[" + Object.keys(pc).sort().map((k) => k + "=" + JSON.stringify(pc[k])).join(",") + "]");'
+          rehearsed=0
           for dir in packages/*/; do
+            dir="${dir%/}"
             pkg="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).name);' < "$dir/package.json")"
             rm -rf release-tarball
             mkdir -p release-tarball
@@ -94,5 +96,13 @@ jobs:
               exit 1
             fi
             echo "ok: $packed"
+            rehearsed=$((rehearsed + 1))
           done
           rm -rf release-tarball
+          # `nullglob` is set for the tarball array above, so it also applies to `packages/*/`: a
+          # restructure that moves the packages would otherwise leave this step green having
+          # rehearsed nothing, which is the one result it must never report.
+          if [ "$rehearsed" -eq 0 ]; then
+            echo "rehearsed no packages — packages/*/ matched nothing" >&2
+            exit 1
+          fi
