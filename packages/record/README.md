@@ -90,9 +90,9 @@ name without establishing where it points, and a search domain or a wildcard zon
 of those names with a routable address. Being spelling-bound cuts the same way here: `0::1` and
 `127.1` are loopback to a resolver and `remote` to this check, so an address is not automatically
 accepted either — write one of the spellings above, and see
-[issue #27](https://github.com/uny/indexwright/issues/27) for widening them. All of that holds at the bind end too, where the
-opt-in is `allowRemoteBind: true` and there is no flag; it buys the same thing
-`--allow-remote-emulator` does, which is why the address is the better answer there as well.
+[issue #27](https://github.com/uny/indexwright/issues/27) for widening them. All of that holds at the
+bind end too, where the opt-in is `allowRemoteBind: true` and there is no flag; it buys the same
+thing `--allow-remote-emulator` does, which is why the address is the better answer there as well.
 Verifying by resolution rather than by spelling is
 [issue #24](https://github.com/uny/indexwright/issues/24).
 
