@@ -45,7 +45,7 @@ again, by its own `corpusVersion`.
   establishing where it points. Being spelling-bound cuts both ways, so the address has to be written
   in a spelling the check knows: a dotted quad in `127.0.0.0/8`, `::1`, `0:0:0:0:0:0:0:1` and
   IPv4-mapped forms are recognised, while `0::1` and `127.1` are loopback to a resolver and `remote`
-  here. Resolving
+  here — [issue #27](https://github.com/uny/indexwright/issues/27). Resolving
   instead of reading is [issue #24](https://github.com/uny/indexwright/issues/24) and is a design
   change rather than a patch — `parseArgs` refuses before it returns, and `classifyHost` and
   `isLoopbackHost` are exported as synchronous predicates, so the refusal happens before anything is
