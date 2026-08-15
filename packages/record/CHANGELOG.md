@@ -78,6 +78,35 @@ again, by its own `corpusVersion`.
   the candidate side through the new `incomparable` — because matching on the key alone would vouch
   for a `DENSE` live index against a `SPARSE_ANY` declaration.
 
+### Fixed
+
+- **Ctrl-C during a suite no longer loses the corpus** (issue #10). `indexwright-record` runs the
+  suite with inherited stdio, so an interrupt reaches the whole foreground process group and the
+  recorder with it; nothing handled it, so Node's default terminated the recorder on the spot, before
+  the capture was closed and before the corpus was written. Everything the proxy had observed was
+  discarded — on a long suite, the entire point of the run, and a long suite is when someone
+  interrupts. `SIGINT` and `SIGTERM` are now handled for as long as the suite is running: the suite
+  is awaited rather than killed out from under itself, so its own cleanup runs, and once it has
+  exited the corpus is written by the same path any other exit takes. The run
+  then reports `128 + signal` — 130 for `SIGINT` — whatever the suite made of the signal, since a
+  suite that traps it and exits 0 did not turn an interrupted run into a successful one. A second
+  interrupt is not queued behind the first: the handlers are removed when the first arrives, so
+  pressing Ctrl-C again meets Node's default and stops the recorder at once rather than waiting on a
+  suite that may not be going to exit.
+
+  The suite is sent the signal only when it did not already have it. A terminal delivers `SIGINT` to
+  the whole foreground process group, which the suite is in, so on a terminal it has its own copy
+  and a forwarded second one would be read by `vitest`, `mocha` and others as "quit now" — cutting
+  short the very cleanup this change exists to let them finish, and making Ctrl-C behave worse under
+  `indexwright-record` than without it. What counts as "on a terminal" is whether the process has a
+  controlling terminal, not whether its streams are ttys: a run whose output is redirected still has
+  one, and still had its Ctrl-C delivered to the group.
+
+  `SIGTERM` is always passed on. No terminal generates one, and declining would lose the case it
+  usually is — a supervisor or a container runtime signalling this process alone, which nothing else
+  will pass on. A process manager that signals the whole group instead, as systemd does by default,
+  does hand the suite a duplicate; nothing at delivery time tells the two apart.
+
 ## [0.3.0] — 2026-08-13
 
 The parts of the v0.3 coverage check that are decidable without a Firestore client. The `check`

@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http2';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { parseCorpus } from '../dist/index.js';
 import { parseArgs, UsageError } from '../dist/args.js';
-import { run } from '../dist/cli.js';
+import { run, shouldForward } from '../dist/cli.js';
 
 function collect() {
   const out = [];
@@ -142,6 +144,276 @@ test('--allow-remote-emulator carries through parseArgs into the proxy, so the e
     assert.doesNotMatch(streams.stderr(), /could not start the capture proxy/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A suite that issues one query through the proxy, says so, and then does not end.
+ *
+ * It has to be a real RunQuery rather than a sleep: the property under test is that what the proxy
+ * observed before the interrupt survives it, and an empty corpus is written by the uninterrupted
+ * path too, so a sleeping child could not tell the two apart.
+ */
+const QUERYING_CHILD = `
+const { connect } = require('node:http2');
+const message = Buffer.from(process.env.INDEXWRIGHT_TEST_QUERY, 'base64');
+const header = Buffer.alloc(5);
+header.writeUInt32BE(message.length, 1);
+const client = connect('http://' + process.env.FIRESTORE_EMULATOR_HOST);
+const request = client.request({
+  ':method': 'POST',
+  ':path': '/google.firestore.v1.Firestore/RunQuery',
+  'content-type': 'application/grpc',
+  te: 'trailers',
+});
+request.on('data', () => {});
+request.on('close', () => {
+  client.close();
+  // Read by the test as the signal that a query has been captured and it is safe to interrupt.
+  console.log('recorded');
+  setTimeout(() => {}, 30_000);
+});
+request.end(Buffer.concat([header, message]));
+`;
+
+test('a terminal has already given the suite the interrupt, so it is not sent twice', () => {
+  // The suite shares this process group, so a tty's Ctrl-C reached it directly. A second copy is not
+  // a duplicate that costs nothing: runners read a repeated interrupt as "quit now" and skip the
+  // cleanup that handling the signal at all is meant to let them finish.
+  assert.equal(shouldForward('SIGINT', true), false);
+  assert.equal(shouldForward('SIGINT', false), true);
+  // Always passed on, including on a tty where SIGINT is not. No terminal generates a SIGTERM, so
+  // declining would lose the case it usually is — one aimed at this process alone, which nothing
+  // else will pass on. A process manager that signals the whole group does hand the suite a
+  // duplicate here, and nothing at delivery time tells that apart from a targeted one.
+  assert.equal(shouldForward('SIGTERM', true), true);
+  assert.equal(shouldForward('SIGTERM', false), true);
+});
+
+test('an interrupted run still writes the corpus, and exits 130', async () => {
+  // Spawned rather than driven through `run()` in-process: the fix installs handlers on `process`,
+  // and the thing being asserted is what a real Ctrl-C does to a real recorder — including that it
+  // does not take the recorder down before the corpus is written.
+  //
+  // Read before anything is opened. A throw between `listen` and the `try` below would skip the
+  // `finally`, and a listening server is a ref'd handle: a renamed fixture would then arrive as a
+  // test file that never exits rather than as the assertion failure it is.
+  const { cases } = JSON.parse(
+    readFileSync(fileURLToPath(new URL('fixtures/run-query.json', import.meta.url)), 'utf8'),
+  );
+  const query = cases.find((entry) => entry.name === 'a collection group query');
+  assert.ok(query, 'fixture "a collection group query" is missing');
+
+  const upstream = createServer();
+  upstream.on('stream', (stream) => {
+    stream.on('data', () => {});
+    stream.on('end', () => {
+      stream.respond({ ':status': 200, 'content-type': 'application/grpc' }, { waitForTrailers: true });
+      stream.on('wantTrailers', () => stream.sendTrailers({ 'grpc-status': '0' }));
+      stream.end();
+    });
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-record-'));
+
+  const out = join(directory, 'corpus.json');
+  const env = { ...process.env, INDEXWRIGHT_TEST_QUERY: query.message };
+  // The recorder reads this one from the environment when `--emulator` is absent; it is not absent
+  // here, but an inherited value has no business reaching a test about something else.
+  delete env.FIRESTORE_EMULATOR_HOST;
+
+  const recorder = spawn(
+    process.execPath,
+    [
+      fileURLToPath(new URL('../dist/cli.js', import.meta.url)),
+      '--emulator',
+      `127.0.0.1:${upstream.address().port}`,
+      '--out',
+      out,
+      '--',
+      process.execPath,
+      '-e',
+      QUERYING_CHILD,
+    ],
+    // `detached`, so the recorder leads its own session with no controlling terminal. Without it the
+    // test asserts different things depending on where it runs: from a terminal the recorder would
+    // inherit that terminal, decide the suite already had the interrupt, and forward nothing — and
+    // the suite would then live out its own timer and satisfy every assertion below anyway. It also
+    // gives the `finally` a process group to kill, so a failure cannot strand the suite.
+    // `recorder.kill` still targets the one pid, which is what makes the forwarding load-bearing.
+    { stdio: ['ignore', 'pipe', 'pipe'], env, detached: true },
+  );
+
+  let stdout = '';
+  let stderr = '';
+  recorder.stdout.setEncoding('utf8').on('data', (chunk) => {
+    stdout += chunk;
+  });
+  recorder.stderr.setEncoding('utf8').on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const exited = new Promise((resolve) => recorder.on('close', (code, signal) => resolve({ code, signal })));
+
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`the suite never issued its query\n${stdout}${stderr}`)),
+        15_000,
+      );
+      const settle = (fail) => {
+        clearTimeout(timer);
+        if (fail) reject(fail);
+        else resolve();
+      };
+      recorder.stdout.on('data', () => {
+        if (stdout.includes('recorded')) settle();
+      });
+      recorder.on('close', () => settle(new Error(`the recorder exited early\n${stdout}${stderr}`)));
+    });
+
+    // Sent to the recorder alone, not to a process group, so the suite only stops if the recorder
+    // passes the signal on — which is the half of the fix that lets the suite run its own cleanup.
+    recorder.kill('SIGINT');
+    // Bounded, because the regressions worth catching here are slow rather than wrong. A recorder
+    // that stops forwarding leaves the suite to reach its own 30s timer and exit, after which every
+    // assertion below still holds; one that stops handling the signal dies at once and leaves the
+    // suite holding the inherited stdio this promise waits on. Both are a pass that took half a
+    // minute unless the wait itself can fail.
+    const { code, signal } = await Promise.race([
+      exited,
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`the recorder did not exit within 10s of the interrupt\n${stdout}${stderr}`)),
+          10_000,
+        ).unref();
+      }),
+    ]);
+
+    assert.equal(
+      signal,
+      null,
+      `the recorder was killed by ${signal} instead of handling it, so nothing after it ran\n${stderr}`,
+    );
+    assert.equal(code, 130, `128 + SIGINT, whatever the suite made of the signal\n${stderr}`);
+
+    const corpus = parseCorpus(readFileSync(out, 'utf8'));
+    assert.equal(corpus.queries.length, 1, 'the query observed before the interrupt survived it');
+    assert.match(stderr, /interrupted by SIGINT/);
+    assert.match(stderr, /1 query request\(s\) observed/);
+  } finally {
+    // The group, not the pid: the suite is a grandchild this test never learns the pid of, and on
+    // the failure paths it is still running with the recorder's stdio pipes held open.
+    // Guarded on the recorder still running, because `process.kill` has no handle behind it the way
+    // `recorder.kill` does: once Node has reaped the recorder its pid is free to be reused, and a
+    // raw group kill on a stale pid would go to whatever now holds it. On the passing path there is
+    // nothing left to clean up anyway.
+    if (recorder.exitCode === null && recorder.signalCode === null) {
+      try {
+        process.kill(-recorder.pid, 'SIGKILL');
+      } catch {
+        // Raced with its own exit, which is fine — the point was only not to strand the suite.
+      }
+    }
+    rmSync(directory, { recursive: true, force: true });
+    upstream.close();
+  }
+});
+
+/**
+ * A suite that handles the interrupt itself and then reports success.
+ *
+ * The distinguishing case for the exit code. The querying child above dies *from* the signal, so
+ * `close` reports `signal: 'SIGINT'` and the pre-existing `128 + signal` fallback arrives at 130 on
+ * its own — the new rule could be deleted and that test would not notice. Here `close` reports a
+ * clean `code: 0` and no signal, so 130 can only come from the interrupt having been what ended the
+ * run.
+ */
+const TRAPPING_CHILD = `
+process.on('SIGINT', () => {
+  // Its own cleanup, on its own terms, and then a verdict of its own.
+  setTimeout(() => process.exit(0), 10);
+});
+// Read by the test as the signal that the handler is installed and it is safe to interrupt.
+console.log('trapping');
+setTimeout(() => {}, 30_000);
+`;
+
+test('a suite that traps the interrupt and exits 0 did not make the run a success', async () => {
+  const upstream = createServer();
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-record-'));
+  const env = { ...process.env };
+  delete env.FIRESTORE_EMULATOR_HOST;
+
+  const recorder = spawn(
+    process.execPath,
+    [
+      fileURLToPath(new URL('../dist/cli.js', import.meta.url)),
+      '--emulator',
+      `127.0.0.1:${upstream.address().port}`,
+      '--out',
+      join(directory, 'corpus.json'),
+      '--',
+      process.execPath,
+      '-e',
+      TRAPPING_CHILD,
+    ],
+    // Detached for the same reason as the test above: a controlling terminal would suppress the
+    // forward, and the suite would never see the signal it is here to trap.
+    { stdio: ['ignore', 'pipe', 'pipe'], env, detached: true },
+  );
+
+  let stdout = '';
+  let stderr = '';
+  recorder.stdout.setEncoding('utf8').on('data', (chunk) => {
+    stdout += chunk;
+  });
+  recorder.stderr.setEncoding('utf8').on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const exited = new Promise((resolve) => recorder.on('close', (code, signal) => resolve({ code, signal })));
+
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`the suite never armed its trap\n${stdout}${stderr}`)), 10_000);
+      timer.unref();
+      recorder.stdout.on('data', () => {
+        if (stdout.includes('trapping')) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      recorder.on('close', () => reject(new Error(`the recorder exited early\n${stdout}${stderr}`)));
+    });
+
+    recorder.kill('SIGINT');
+    const { code, signal } = await Promise.race([
+      exited,
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`the recorder did not exit within 10s of the interrupt\n${stdout}${stderr}`)),
+          10_000,
+        ).unref();
+      }),
+    ]);
+
+    assert.equal(signal, null, `the recorder was killed by ${signal} instead of handling it\n${stderr}`);
+    assert.equal(code, 130, `the suite exited 0, but the run was interrupted\n${stderr}`);
+    assert.match(stderr, /interrupted by SIGINT/);
+  } finally {
+    // Guarded on the recorder still running, because `process.kill` has no handle behind it the way
+    // `recorder.kill` does: once Node has reaped the recorder its pid is free to be reused, and a
+    // raw group kill on a stale pid would go to whatever now holds it. On the passing path there is
+    // nothing left to clean up anyway.
+    if (recorder.exitCode === null && recorder.signalCode === null) {
+      try {
+        process.kill(-recorder.pid, 'SIGKILL');
+      } catch {
+        // Raced with its own exit, which is fine — the point was only not to strand the suite.
+      }
+    }
+    rmSync(directory, { recursive: true, force: true });
+    upstream.close();
   }
 });
 
