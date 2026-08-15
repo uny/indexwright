@@ -165,9 +165,10 @@ jobs:
       # The trusted-publisher trust is bound to the workflow *file*, so splitting one job into two
       # inside the same file does not disturb it.
       #
-      # The count is checked rather than trusted to a glob, and then the tarball's own manifest is
-      # checked against the tag. This step publishes whatever it is handed, under an identity that
-      # can publish this package, and a version cannot be replaced once it is out.
+      # The count is checked rather than trusted to a glob; then the tarball's own manifest is
+      # checked against the checkout's, and the checkout's against the tag. This step publishes
+      # whatever it is handed, under an identity that can publish this package, and a version
+      # cannot be replaced once it is out.
       #
       # Counting is not enough on its own, because the tag-versus-version check in `verify` runs
       # *before* `npm ci` — deliberately, so that a tag typo costs nothing — and therefore before
