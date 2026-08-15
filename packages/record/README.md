@@ -47,9 +47,9 @@ Options:
 
 The proxy listens on loopback, and forwards only to an address that reads as being on this machine —
 reads, because nothing here resolves anything, which bounds the guarantee and is what this section
-closes on. `indexwright-record` has no option to change the first — the verb has no `--host`, deliberately, since adding one in order
-to guard it would be inventing the exposure. Neither constraint is a precaution against an exotic
-attack; both are about what a misconfiguration costs.
+closes on. `indexwright-record` has no option to change the first — the verb has no `--host`,
+deliberately, since adding one in order to guard it would be inventing the exposure. Neither
+constraint is a precaution against an exotic attack; both are about what a misconfiguration costs.
 
 The proxy performs no authentication — it is a transparent pass-through in front of an emulator that
 performs none either. Reachable from off the machine, it is an open read/write channel into your
@@ -89,8 +89,7 @@ without establishing where it points, and a search domain or a wildcard zone can
 those names with a routable address. Being spelling-bound cuts the same way here: `0::1` and `127.1`
 are loopback to a resolver and `remote` to this check, so an address is not automatically accepted
 either — write one of the spellings above. For a bind address rather than an upstream the opt-in is
-`allowRemoteBind: true`, which has no flag.
-Verifying by resolution rather than by spelling is
+`allowRemoteBind: true`, which has no flag. Verifying by resolution rather than by spelling is
 [issue #24](https://github.com/uny/indexwright/issues/24).
 
 The proxy is transparent: bodies, trailers, and gRPC errors reach your client unchanged, and
