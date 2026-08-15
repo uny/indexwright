@@ -8,7 +8,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # Two actions, updated in lockstep across both workflows: one PR, not four.
+    # Four actions across three workflows, updated in lockstep: one PR, not a dozen.
     groups:
       actions:
         patterns: ['*']

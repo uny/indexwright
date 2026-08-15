@@ -17,7 +17,10 @@ jobs:
         # The floor declared in engines, and current.
         node: ['22', '24']
     steps:
-      # SHA-pinned to match release.yml, so CI exercises the actions the release actually runs.
+      # SHA-pinned to match release.yml, so CI exercises these two actions before a release does.
+      # It does not cover all of them: the release jobs also run upload-artifact and
+      # download-artifact, which nothing here invokes, so a Dependabot bump to either of those
+      # first executes on a tag push.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -46,3 +49,36 @@ jobs:
       # A published version cannot be replaced, so the tarball is exercised on every change.
       # verify-package builds first, so there is no separate build step to fall out of step with it.
       - run: npm run verify-package
+
+      # The same reasoning as the `--ignore-scripts` above, applied to the rest of the release path.
+      # A release no longer publishes from the package directory: `verify` packs a tarball and
+      # `publish` accepts one, so the steps that produce and accept it are the release's new moving
+      # parts — and none of them is the pack that verify-package performs, which runs from the
+      # package directory with no `-w` and into a mkdtemp. So this rehearses the release's own form:
+      # the `-w` selector (a scoped name for one of the two packages), `--pack-destination` with a
+      # relative path resolved from the workspace root, the count guard, and the manifest read that
+      # the publish step gates on. `--pack-destination` not creating its directory was found this
+      # way rather than during a release; the point of this step is that the next one like it is
+      # too. Everything up to `npm publish` itself needs no credential, no registry and no OIDC,
+      # which is exactly the part that can be exercised here — the exchange and the attestation
+      # are what genuinely cannot.
+      - name: Rehearse the release's pack and hand-off
+        run: |
+          shopt -s nullglob
+          for pkg in indexwright @indexwright/record; do
+            rm -rf release-tarball
+            mkdir -p release-tarball
+            npm pack -w "$pkg" --pack-destination release-tarball
+            tarballs=(./release-tarball/*.tgz)
+            if [ "${#tarballs[@]}" -ne 1 ]; then
+              echo "expected exactly one tarball for $pkg, found ${#tarballs[@]}: ${tarballs[*]}" >&2
+              exit 1
+            fi
+            manifest="$(tar -xzOf "${tarballs[0]}" package/package.json)"
+            name="$(printf '%s' "$manifest" | node -e 'let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => { process.stdout.write(JSON.parse(s).name); })')"
+            if [ "$name" != "$pkg" ]; then
+              echo "tarball holds $name, expected $pkg" >&2
+              exit 1
+            fi
+          done
+          rm -rf release-tarball

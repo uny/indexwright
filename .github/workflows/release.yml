@@ -20,6 +20,14 @@ jobs:
   # that, because the separation is a permission boundary rather than a flag.
   verify:
     runs-on: ubuntu-latest
+    # Stated here rather than left to the workflow-level block, even though it is identical to it.
+    # What keeps this job unprivileged is the *absence* of a line that this file carried until the
+    # commit that split it, so restoring `id-token: write` at workflow level — a plausible edit the
+    # day a second artifact wants provenance — would silently re-grant OIDC to the job that runs
+    # third-party code, while the job names and every comment below still read as isolated. A
+    # permissions block on the job it protects makes that edit visible in review.
+    permissions:
+      contents: read
     steps:
       # Pinned to commit SHAs, not to tags, in both jobs. This job cannot publish, but it produces
       # the artifact the one that can will publish, so a retagged action is still a path into a
@@ -95,15 +103,29 @@ jobs:
           name: linter-tarball
           path: release-tarball/*.tgz
           if-no-files-found: error
-          retention-days: 1
+          # Long enough that "Re-run failed jobs" still works. If `publish` fails on a registry 5xx,
+          # that button is what an operator reaches for, and it re-runs only `publish` — which
+          # downloads this artifact. At one day, coming back the next morning meant the download
+          # failed instead, for a release that had already spent its tag.
+          retention-days: 7
+          # A full "Re-run all jobs" repeats the upload under a name the run already carries.
+          # Whether GitHub scopes artifacts per run *attempt* — and so whether that is a 409 — was
+          # not established here; `overwrite` makes the question moot in the only direction that
+          # matters, and it can only ever replace an artifact this same job produced.
+          overwrite: true
 
   publish:
     needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Scoped to this job, which runs no third-party code: it installs nothing, so there is no
-      # node_modules for anything to execute out of. npm itself is the runner's, not this tree's.
+      # Scoped to this job, which runs none of *this tree's* dependency code: it installs nothing,
+      # so there is no node_modules for anything to execute out of, and npm, node and tar are the
+      # runner's rather than this tree's. That is the boundary — not "no third-party code at all",
+      # which would be false: the three actions below are bundled programs from other repositories
+      # and setup-node fetches a toolchain, all running here with the OIDC request variables set.
+      # Which is why the SHA pins matter more in this job than in `verify`, and why adding a fourth
+      # `uses:` here is a decision to extend the publishing credential's blast radius.
       id-token: write
     steps:
       # Checked out for the committed .npmrc, which pins the registry. Nothing else here reads the
@@ -130,9 +152,22 @@ jobs:
       # The trusted-publisher trust is bound to the workflow *file*, so splitting one job into two
       # inside the same file does not disturb it.
       #
-      # The count is checked rather than trusted to a glob. This step publishes whatever it is
-      # handed, under an identity that can publish this package, and a version cannot be replaced
-      # once it is out — so "exactly one tarball, or stop" is worth two lines.
+      # The count is checked rather than trusted to a glob, and then the tarball's own manifest is
+      # checked against the tag. This step publishes whatever it is handed, under an identity that
+      # can publish this package, and a version cannot be replaced once it is out.
+      #
+      # Counting is not enough on its own, because the tag-versus-version check in `verify` runs
+      # *before* `npm ci` — deliberately, so that a tag typo costs nothing — and therefore before
+      # any dependency code has run. A compromised build-time dependency that rewrites this
+      # package's `version` between the install and the pack produces exactly one tarball, passes
+      # the count, and burns a version number that can never be reclaimed. `dist/version.js` reads
+      # the same package.json at runtime, so `verify-package`'s version assertion moves with the
+      # tamper and does not catch it either. Reading the manifest out of the tarball is the only
+      # check that sees what is actually about to be published; it is also what makes the tag
+      # filters' promise — that these two workflows cannot publish each other's package — hold
+      # here rather than only at npmjs.com's end of the trusted-publisher binding.
+      #
+      # `tar` and `node` are the runner's own, so this adds nothing to what the job executes.
       #
       # `--provenance` is kept although trusted publishing generates an attestation without it. The
       # flag is what makes a failure to generate one loud: this is the first release to publish a
@@ -145,6 +180,13 @@ jobs:
           tarballs=(./release-tarball/*.tgz)
           if [ "${#tarballs[@]}" -ne 1 ]; then
             echo "expected exactly one tarball, found ${#tarballs[@]}: ${tarballs[*]}" >&2
+            exit 1
+          fi
+          manifest="$(tar -xzOf "${tarballs[0]}" package/package.json)"
+          identity="$(printf '%s' "$manifest" | node -e 'let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => { const m = JSON.parse(s); console.log(m.name + "@" + m.version); })')"
+          expected="indexwright@${GITHUB_REF_NAME#v}"
+          if [ "$identity" != "$expected" ]; then
+            echo "tarball holds $identity, expected $expected" >&2
             exit 1
           fi
           npm publish "${tarballs[0]}" --provenance --access public

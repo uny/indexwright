@@ -70,10 +70,13 @@ export function withInstalledTarball(packageRoot, body, options = {}) {
       join(consumer, 'package.json'),
       JSON.stringify({ name: 'consumer', private: true, type: 'module' }),
     );
-    // --ignore-scripts for the same reason the release workflows carry it on their own `npm ci`:
-    // verify-package runs inside those jobs, which hold `id-token: write`, so an install-time
-    // script reached from here could mint the publishing credential from the job's OIDC identity
-    // before the publish step runs. Nothing is fetched from the registry today — `alongside` above
+    // --ignore-scripts for the same reason the release workflows carry it on their own `npm ci`.
+    // That reason used to be the OIDC identity: verify-package ran in a job holding
+    // `id-token: write`, so an install script reached from here could have minted the publishing
+    // credential before the publish step ran. Since the release jobs were split it runs in
+    // `verify`, which holds no `id-token` at all — but the flag is not thereby spare. This is the
+    // job that packs the tarball the privileged job publishes, so an install script here still
+    // reaches the released bytes. Nothing is fetched from the registry today — `alongside` above
     // is what keeps it that way — but this is the one install in the release that resolves against
     // a semver range with no lockfile, so it is the widest of them the day SPEC §3's Firestore
     // client lands. It costs the check nothing: neither package ships an install script, and what
