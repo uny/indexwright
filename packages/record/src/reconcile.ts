@@ -58,6 +58,19 @@ export interface LiveCompositeIndex extends LiveIndex {
   readonly fields?: readonly IndexField[] | null;
 }
 
+/**
+ * Not modelled above, and observed arriving at their defaults: `unique`, `multikey`, `shardCount`.
+ *
+ * Each is invisible to §5's key, so a live index setting one would reconcile as `identical` against
+ * a declaration that does not — the false vouch the `density` refusal exists to prevent, by another
+ * route. It does not bite on the database kind this version targets, which is why they are recorded
+ * here rather than refused: `unique` is rejected at creation outside the Enterprise edition,
+ * `multikey` applies only to the `MONGODB_COMPATIBLE_API` scope that `COMPARABLE_API_SCOPES` already
+ * refuses, and a standard native database returns `false`, `false` and `0`. Pinned in
+ * `reconcile.test.js` against `test/fixtures/live-indexes.json`, so an observation to the contrary
+ * arrives as a failing test rather than as a set vouched for on a key that could not see it.
+ */
+
 export const UNREADABLE_REASONS = [
   /** The resource name did not have the shape the collection group is read out of. */
   'name-unparseable',
@@ -159,10 +172,15 @@ const RESOURCE_NAME =
  * The `apiScope` values this module is willing to compare under.
  *
  * An absent `apiScope` is native-mode Firestore: proto3 JSON omits the field when it holds the
- * default, and the default is `ANY_API`. A value outside this set is classified unreadable rather
- * than `extra` — a Datastore-mode index is not a divergence from a Firestore declaration, it is a
- * thing the canonical key of §5 says nothing about, and reporting it as extra would manufacture a
- * disagreement that stops a correct run.
+ * default, and the default is `ANY_API`. Absent really happens — `gcloud` omits it while the admin
+ * client fills it in, and both are listings this module has to read.
+ *
+ * A value outside this set is classified unreadable rather than `extra` — a Datastore-mode index is
+ * not a divergence from a Firestore declaration, it is a thing the canonical key of §5 says nothing
+ * about, and reporting it as extra would manufacture a disagreement that stops a correct run. The
+ * enum holds a third value, `MONGODB_COMPATIBLE_API`, which is refused on the same grounds and
+ * carries the same consequence — and incidentally covers `multikey` and `searchIndexOptions`, which
+ * the key cannot express either and which the API accepts only under that scope.
  */
 const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
 
@@ -182,9 +200,18 @@ const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
  *
  * `SPARSE_ALL` is comparable, and that is not a concession — it is the covering behaviour a
  * declaration *without* a density already asks for, so it is what the §5 key assumes when it says
- * nothing. Refusing it would refuse the ordinary case: whether the Admin API returns a density on
- * every index or omits it as the proto3 default is not settled here, and a set that comes back
- * uniformly `SPARSE_ALL` must still reconcile, or `check` could never vouch for anything.
+ * nothing. Refusing it would refuse the ordinary case, which issue #20 has since measured rather
+ * than assumed: a standard Firestore-native database stamps a density on every index, an index
+ * created without one comes back `SPARSE_ALL`, and so does one created as `DENSITY_UNSPECIFIED` —
+ * the API normalises rather than echoing. So `SPARSE_ALL` is not a value that might turn up, it is
+ * the only one such a database produces, and excluding it would have made every reconciliation
+ * `indeterminate` and `check` unable to vouch for anything. `DENSITY_UNSPECIFIED` has never been
+ * observed coming back and is kept for the proto3 default rather than for a listing.
+ *
+ * `SPARSE_ANY` and `DENSE` are refused at *creation* on that database — "Indexes with api scope
+ * ANY_API does not support SPARSE_ANY density on standard database" — so the refusal below is
+ * unreachable there and guards the database kinds that do accept them. See
+ * `test/fixtures/live-indexes.json`.
  */
 const COMPARABLE_DENSITIES: ReadonlySet<string> = new Set([
   'DENSITY_UNSPECIFIED',

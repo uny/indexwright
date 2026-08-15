@@ -1,0 +1,52 @@
+{
+  "note": "One composite index, as three different tools report it. Observed 2026-08-15 against a standard Firestore-native database (project indexwright-probe, database '(default)'), for issue #20 — before this, every reconcile test fed the module a listing the module's own author wrote. Regenerate with the commands in `source`.",
+  "source": {
+    "project": "indexwright-probe",
+    "database": "(default)",
+    "edition": "standard, Firestore-native",
+    "declared": "created with no density: `gcloud firestore indexes composite create --collection-group probe --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending`"
+  },
+  "observations": {
+    "densityIsAlwaysStamped": "An index created with no density comes back SPARSE_ALL, and so does one created with --density density-unspecified: the API normalises rather than echoing. DENSITY_UNSPECIFIED was never returned.",
+    "enumsAreStrings": "v1.FirestoreAdminClient returns state, density, apiScope and queryScope as enum names, identically over gRPC and over `fallback: true`. Not numbers, which `readiness.ts` warns the generated protos can deliver.",
+    "sparseAnyAndDenseAreUnreachableHere": "`--density sparse-any` and `--density dense` are refused at creation: 'Indexes with api scope ANY_API does not support SPARSE_ANY density on standard database'. So SPARSE_ALL is the only density a standard native database produces.",
+    "uniqueIsEnterpriseOnly": "`--unique` is refused: 'Unique index is only supported in the Enterprise database.' The field is still returned, as false.",
+    "renderingsDiffer": "Only the admin client fills in the fields holding their proto3 default — apiScope, unique, multikey, shardCount. gcloud omits them. That is why an absent apiScope has to count as comparable."
+  },
+  "liveByAdminClient": {
+    "fields": [
+      { "fieldPath": "x", "order": "ASCENDING", "valueMode": "order" },
+      { "fieldPath": "z", "order": "ASCENDING", "valueMode": "order" },
+      { "fieldPath": "__name__", "order": "ASCENDING", "valueMode": "order" }
+    ],
+    "name": "projects/indexwright-probe/databases/(default)/collectionGroups/probe/indexes/CICAgOjXh4EK",
+    "queryScope": "COLLECTION",
+    "state": "READY",
+    "apiScope": "ANY_API",
+    "density": "SPARSE_ALL",
+    "multikey": false,
+    "shardCount": 0,
+    "unique": false
+  },
+  "liveByGcloud": {
+    "density": "SPARSE_ALL",
+    "fields": [
+      { "fieldPath": "x", "order": "ASCENDING" },
+      { "fieldPath": "z", "order": "ASCENDING" },
+      { "fieldPath": "__name__", "order": "ASCENDING" }
+    ],
+    "name": "projects/indexwright-probe/databases/(default)/collectionGroups/probe/indexes/CICAgOjXh4EK",
+    "queryScope": "COLLECTION",
+    "state": "READY"
+  },
+  "declarationByFirebaseCli": {
+    "collectionGroup": "probe",
+    "queryScope": "COLLECTION",
+    "fields": [
+      { "fieldPath": "x", "order": "ASCENDING" },
+      { "fieldPath": "z", "order": "ASCENDING" },
+      { "fieldPath": "__name__", "order": "ASCENDING" }
+    ],
+    "density": "SPARSE_ALL"
+  }
+}
