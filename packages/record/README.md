@@ -82,10 +82,14 @@ something other than loopback — a `nsswitch.conf` that consults DNS ahead of f
 `/etc/hosts`, a corporate wildcard domain — defeats the check, because nothing here looks. And a name
 that is loopback on your machine but is not spelled `localhost` is refused: `foo.localhost`, which
 RFC 6761 only *recommends* resolvers answer with loopback, or `ip6-localhost`, which is loopback
-because a distribution's `/etc/hosts` says so. Give the address instead of the name — that remedy
-stays correct, whereas `--allow-remote-emulator` admits the name without establishing where it
-points, and a search domain or a wildcard zone can answer either of those with a routable address.
-For a bind address rather than an upstream the opt-in is `allowRemoteBind: true`, which has no flag.
+because a distribution's `/etc/hosts` says so. Give the address instead of the name, in a spelling
+this check recognises — anything in `127.0.0.0/8`, `::1`, `0:0:0:0:0:0:0:1`, or an IPv4-mapped form
+of those. That is the remedy that stays correct, whereas `--allow-remote-emulator` admits the name
+without establishing where it points, and a search domain or a wildcard zone can answer either of
+those names with a routable address. Being spelling-bound cuts the same way here: `0::1` and `127.1`
+are loopback to a resolver and `remote` to this check, so an address is not automatically accepted
+either — write one of the spellings above. For a bind address rather than an upstream the opt-in is
+`allowRemoteBind: true`, which has no flag.
 Verifying by resolution rather than by spelling is
 [issue #24](https://github.com/uny/indexwright/issues/24).
 
