@@ -107,6 +107,12 @@ jobs:
           # that button is what an operator reaches for, and it re-runs only `publish` — which
           # downloads this artifact. At one day, coming back the next morning meant the download
           # failed instead, for a release that had already spent its tag.
+          #
+          # The cost of the longer window, since it is a real one: re-running `publish` alone
+          # publishes the bytes `verify` packed *then*, and none of `verify`'s checks re-run. If the
+          # tag has been moved to a different commit in the meantime, the guard below will not
+          # notice — name, version and publishConfig are the same on both commits — and the release
+          # ships the older tree. Move a tag and re-run the whole workflow, not one job.
           retention-days: 7
           # A full "Re-run all jobs" repeats the upload under a name the run already carries.
           # Whether GitHub scopes artifacts per run *attempt* — and so whether that is a 409 — was
@@ -180,9 +186,17 @@ jobs:
       # the command line and so cannot be overridden; nothing else is, which is why the check is a
       # whole-object comparison rather than a list of keys to reject.
       #
-      # It follows that a deliberate change to either package's `publishConfig` now has to be made
-      # here as well. That is the intended cost, and ci.yml asserts the same shape so the mismatch
-      # fails on the pull request rather than on the tag.
+      # What it is compared against is the package.json of the checkout above, not a copy of the
+      # expected shape written into this file. The distinction is the whole check: a literal here
+      # would have to be kept in step with `packages/indexwright/package.json` by hand, and the
+      # release is the place that discovers it was not — after the tag exists and the version is
+      # spent. This job's checkout comes from GitHub at the tag, never through the job that runs
+      # third-party code, so it is a trustworthy statement of what the tag was supposed to publish;
+      # the tarball is the untrusted side, and the comparison is between the two. A `publishConfig`
+      # change is then just an edit to the package, with nothing here to keep in step.
+      #
+      # The tag is checked against the same pair, so the chain is closed inside this job rather
+      # than delegated to `verify`'s check, which ran before any dependency code did.
       #
       # `tar` and `node` are the runner's own, so this adds nothing to what the job executes.
       #
@@ -199,11 +213,18 @@ jobs:
             echo "expected exactly one tarball, found ${#tarballs[@]}: ${tarballs[*]}" >&2
             exit 1
           fi
-          manifest="$(tar -xzOf "${tarballs[0]}" package/package.json)"
-          identity="$(printf '%s' "$manifest" | node -e 'let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => { const m = JSON.parse(s); const pc = m.publishConfig ?? {}; console.log(m.name + "@" + m.version + " publishConfig[" + Object.keys(pc).sort().map((k) => k + "=" + JSON.stringify(pc[k])).join(",") + "]"); })')"
-          expected="indexwright@${GITHUB_REF_NAME#v} publishConfig[access=\"public\"]"
-          if [ "$identity" != "$expected" ]; then
-            echo "tarball holds $identity, expected $expected" >&2
+          render='const m = JSON.parse(require("fs").readFileSync(0, "utf8")); const pc = m.publishConfig ?? {}; console.log(m.name + "@" + m.version + " publishConfig[" + Object.keys(pc).sort().map((k) => k + "=" + JSON.stringify(pc[k])).join(",") + "]");'
+          packed="$(tar -xzOf "${tarballs[0]}" package/package.json | node -e "$render")"
+          committed="$(node -e "$render" < ./packages/indexwright/package.json)"
+          if [ "$packed" != "$committed" ]; then
+            echo "tarball holds $packed; the tag's own package.json says $committed" >&2
             exit 1
           fi
+          case "$committed" in
+            "indexwright@${GITHUB_REF_NAME#v} "*) ;;
+            *)
+              echo "$committed is not indexwright at the version $GITHUB_REF_NAME names" >&2
+              exit 1
+              ;;
+          esac
           npm publish "${tarballs[0]}" --provenance --access public

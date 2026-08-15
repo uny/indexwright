@@ -62,10 +62,20 @@ jobs:
       # too. Everything up to `npm publish` itself needs no credential, no registry and no OIDC,
       # which is exactly the part that can be exercised here — the exchange and the attestation
       # are what genuinely cannot.
+      #
+      # On 24, not this job's 22: the release packs on 24, and the two differ by an npm major (the
+      # note in release.yml records why the release needs one). A rehearsal on npm 10 of a step the
+      # release only ever runs on npm 11 would pass on exactly the change it exists to catch. The
+      # install and the build above stay on the engines floor, which is what they are here for.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
       - name: Rehearse the release's pack and hand-off
         run: |
           shopt -s nullglob
-          for pkg in indexwright @indexwright/record; do
+          render='const m = JSON.parse(require("fs").readFileSync(0, "utf8")); const pc = m.publishConfig ?? {}; console.log(m.name + "@" + m.version + " publishConfig[" + Object.keys(pc).sort().map((k) => k + "=" + JSON.stringify(pc[k])).join(",") + "]");'
+          for dir in packages/*/; do
+            pkg="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).name);' < "$dir/package.json")"
             rm -rf release-tarball
             mkdir -p release-tarball
             npm pack -w "$pkg" --pack-destination release-tarball
@@ -74,12 +84,15 @@ jobs:
               echo "expected exactly one tarball for $pkg, found ${#tarballs[@]}: ${tarballs[*]}" >&2
               exit 1
             fi
-            manifest="$(tar -xzOf "${tarballs[0]}" package/package.json)"
-            identity="$(printf '%s' "$manifest" | node -e 'let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => { const m = JSON.parse(s); const pc = m.publishConfig ?? {}; console.log(m.name + " publishConfig[" + Object.keys(pc).sort().map((k) => k + "=" + JSON.stringify(pc[k])).join(",") + "]"); })')"
-            expected="$pkg publishConfig[access=\"public\"]"
-            if [ "$identity" != "$expected" ]; then
-              echo "tarball holds $identity, expected $expected" >&2
+            # The comparison the publish step makes, against the same file it makes it against.
+            # Nothing here states what the answer should be, so this cannot fall out of step with
+            # the package the way a copy of the expected shape would.
+            packed="$(tar -xzOf "${tarballs[0]}" package/package.json | node -e "$render")"
+            committed="$(node -e "$render" < "$dir/package.json")"
+            if [ "$packed" != "$committed" ]; then
+              echo "tarball holds $packed; $dir/package.json says $committed" >&2
               exit 1
             fi
+            echo "ok: $packed"
           done
           rm -rf release-tarball
