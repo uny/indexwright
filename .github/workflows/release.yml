@@ -167,6 +167,23 @@ jobs:
       # filters' promise — that these two workflows cannot publish each other's package — hold
       # here rather than only at npmjs.com's end of the trusted-publisher binding.
       #
+      # `publishConfig` is asserted along with the name and the version, and it is the part that
+      # matters most. npm's own comment above the import in lib/commands/publish.js is that "for
+      # historical reasons, publishConfig in package.json can contain ANY config keys that npm
+      # supports in .npmrc files and elsewhere" — and `#getManifest` runs `flatten(publishConfig,
+      # opts)` for a *tarball* spec too, filtering out only keys given as CLI flags. `opts` is what
+      # `pickRegistry` and the OIDC exchange then read. So the tarball, which is the one thing that
+      # crosses from the unprivileged job into this one, can rewrite where this step authenticates:
+      # `registry` sends the publish and a repo-identifying OIDC token to someone else's server,
+      # and `https-proxy` with `strict-ssl: false` keeps the npm audience while routing the real
+      # exchange through a MITM that can take the credential. `--access` and `--provenance` are on
+      # the command line and so cannot be overridden; nothing else is, which is why the check is a
+      # whole-object comparison rather than a list of keys to reject.
+      #
+      # It follows that a deliberate change to either package's `publishConfig` now has to be made
+      # here as well. That is the intended cost, and ci.yml asserts the same shape so the mismatch
+      # fails on the pull request rather than on the tag.
+      #
       # `tar` and `node` are the runner's own, so this adds nothing to what the job executes.
       #
       # `--provenance` is kept although trusted publishing generates an attestation without it. The
@@ -183,8 +200,8 @@ jobs:
             exit 1
           fi
           manifest="$(tar -xzOf "${tarballs[0]}" package/package.json)"
-          identity="$(printf '%s' "$manifest" | node -e 'let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => { const m = JSON.parse(s); console.log(m.name + "@" + m.version); })')"
-          expected="indexwright@${GITHUB_REF_NAME#v}"
+          identity="$(printf '%s' "$manifest" | node -e 'let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => { const m = JSON.parse(s); const pc = m.publishConfig ?? {}; console.log(m.name + "@" + m.version + " publishConfig[" + Object.keys(pc).sort().map((k) => k + "=" + JSON.stringify(pc[k])).join(",") + "]"); })')"
+          expected="indexwright@${GITHUB_REF_NAME#v} publishConfig[access=\"public\"]"
           if [ "$identity" != "$expected" ]; then
             echo "tarball holds $identity, expected $expected" >&2
             exit 1

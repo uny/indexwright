@@ -75,9 +75,10 @@ jobs:
               exit 1
             fi
             manifest="$(tar -xzOf "${tarballs[0]}" package/package.json)"
-            name="$(printf '%s' "$manifest" | node -e 'let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => { process.stdout.write(JSON.parse(s).name); })')"
-            if [ "$name" != "$pkg" ]; then
-              echo "tarball holds $name, expected $pkg" >&2
+            identity="$(printf '%s' "$manifest" | node -e 'let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => { const m = JSON.parse(s); const pc = m.publishConfig ?? {}; console.log(m.name + " publishConfig[" + Object.keys(pc).sort().map((k) => k + "=" + JSON.stringify(pc[k])).join(",") + "]"); })')"
+            expected="$pkg publishConfig[access=\"public\"]"
+            if [ "$identity" != "$expected" ]; then
+              echo "tarball holds $identity, expected $expected" >&2
               exit 1
             fi
           done
