@@ -605,12 +605,16 @@ test('a real listing is readable, whichever tool rendered it', () => {
   // holding their proto3 default, so `apiScope` is present in one and absent in the other. Both have
   // to read, which is what `comparableUnder` treating absent as comparable buys.
   //
-  // The asymmetry is asserted rather than assumed. It is the whole point of the test, and it lives
-  // in a fixture whose own note invites regeneration — against a `gcloud` that filled the defaults
-  // in, both iterations would exercise the present-`apiScope` path, the absent one would go
-  // uncovered, and this test would still pass while covering half of what it names.
-  assert.equal(liveFixture.liveByAdminClient.apiScope, 'ANY_API');
-  assert.equal(liveFixture.liveByGcloud.apiScope, undefined);
+  // The asymmetry is asserted rather than assumed. It is the whole point of the test, and the
+  // fixture is meant to be re-observed — against a `gcloud` that filled the defaults in, both
+  // iterations would exercise the present-`apiScope` path, the absent one would go uncovered, and
+  // this test would still pass while covering half of what it names.
+  //
+  // Absence, not nullishness: `assert.equal` would accept a `null` here, and "gcloud omits it" is
+  // the claim. `comparableUnder` treats the two alike, so this pins the observation rather than the
+  // code path — which is the half that can drift when the file is regenerated.
+  assert.strictEqual(liveFixture.liveByAdminClient.apiScope, 'ANY_API');
+  assert.ok(!('apiScope' in liveFixture.liveByGcloud));
 
   const candidate = analyse({ indexes: [liveFixture.declarationByFirebaseCli] });
   for (const rendering of ['liveByAdminClient', 'liveByGcloud']) {
