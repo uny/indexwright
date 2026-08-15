@@ -574,7 +574,9 @@ test('the unreadable reasons are the ones the module can actually produce', () =
  * is reading the Admin API cannot check its reading against a listing its own author wrote. These
  * run against one a real database returned.
  */
-const observed = JSON.parse(
+// Not `observed`: that name is a local in most of the tests above, and a module-scope binding it
+// shadows is a trap for the next test written by pattern-matching them.
+const liveFixture = JSON.parse(
   readFileSync(fileURLToPath(new URL('fixtures/live-indexes.json', import.meta.url)), 'utf8'),
 );
 
@@ -583,10 +585,14 @@ test('the file firebase generates reconciles against the database it was generat
   // file, and `check` reconciles it against the same target. If that does not come back vouched,
   // nothing else about the verb matters. It carries `density: SPARSE_ALL`, which is not incidental —
   // the CLI round-trips density, so every generated file has one.
-  const candidate = analyse({ indexes: [observed.declarationByFirebaseCli] });
-  const result = reconcile(candidate, [observed.liveByAdminClient]);
+  const candidate = analyse({ indexes: [liveFixture.declarationByFirebaseCli] });
+  const result = reconcile(candidate, [liveFixture.liveByAdminClient]);
 
-  assert.equal(result.verdict, 'identical', JSON.stringify(result.unreadable));
+  // Both buckets in the diagnostic, because the density this test turns on is carried by *both*
+  // sides: a refused declaration lands in `incomparable` and a refused listing in `unreadable`, and
+  // reporting only one of them points a maintainer at an empty list.
+  const refused = JSON.stringify({ unreadable: result.unreadable, incomparable: result.incomparable });
+  assert.equal(result.verdict, 'identical', refused);
   assert.ok(isVouched(result));
   assert.deepEqual(result.unreadable, []);
   assert.deepEqual(result.incomparable, []);
@@ -598,9 +604,17 @@ test('a real listing is readable, whichever tool rendered it', () => {
   // The two renderings differ in what they leave out: only the admin client fills in the fields
   // holding their proto3 default, so `apiScope` is present in one and absent in the other. Both have
   // to read, which is what `comparableUnder` treating absent as comparable buys.
-  const candidate = analyse({ indexes: [observed.declarationByFirebaseCli] });
+  //
+  // The asymmetry is asserted rather than assumed. It is the whole point of the test, and it lives
+  // in a fixture whose own note invites regeneration — against a `gcloud` that filled the defaults
+  // in, both iterations would exercise the present-`apiScope` path, the absent one would go
+  // uncovered, and this test would still pass while covering half of what it names.
+  assert.equal(liveFixture.liveByAdminClient.apiScope, 'ANY_API');
+  assert.equal(liveFixture.liveByGcloud.apiScope, undefined);
+
+  const candidate = analyse({ indexes: [liveFixture.declarationByFirebaseCli] });
   for (const rendering of ['liveByAdminClient', 'liveByGcloud']) {
-    const result = reconcile(candidate, [observed[rendering]]);
+    const result = reconcile(candidate, [liveFixture[rendering]]);
     assert.equal(result.verdict, 'identical', `${rendering}: ${JSON.stringify(result.unreadable)}`);
   }
 });
@@ -611,23 +625,52 @@ test('the density a database actually stamps is one this version compares under'
   // the API normalises rather than echoing. Had `COMPARABLE_DENSITIES` excluded it, every live entry
   // would be `density-unrecognised`, every reconciliation `indeterminate`, and `check` unable to
   // vouch for anything — while this suite stayed green on its hand-written listings.
-  assert.equal(observed.liveByAdminClient.density, 'SPARSE_ALL');
-  const result = reconcile(analyse({ indexes: [] }), [observed.liveByAdminClient]);
+  assert.equal(liveFixture.liveByAdminClient.density, 'SPARSE_ALL');
+  const result = reconcile(analyse({ indexes: [] }), [liveFixture.liveByAdminClient]);
   assert.deepEqual(result.unreadable, []);
   // Undeclared rather than unreadable: the entry was read, and it is a divergence from an empty
   // candidate set rather than something the module declined to interpret.
   assert.equal(result.extra.length, 1);
 });
 
-test('the fields a live index carries beyond SPEC §5 arrive at their defaults, and are ignored', () => {
-  // `unique`, `multikey` and `shardCount` are invisible to §5's key, so a live index setting one
-  // would reconcile as identical against a declaration that does not — the same false vouch the
-  // density refusal exists to prevent. It does not bite here: a standard database refuses `--unique`
-  // outright ('only supported in the Enterprise database'), `multikey` applies only to the
-  // MONGODB_COMPATIBLE_API scope that `api-scope-unrecognised` already refuses, and all three come
-  // back at their defaults. Pinned so that an observation contradicting it is a failing test rather
-  // than a silent vouch.
-  assert.equal(observed.liveByAdminClient.unique, false);
-  assert.equal(observed.liveByAdminClient.multikey, false);
-  assert.equal(observed.liveByAdminClient.shardCount, 0);
+test('the fields a live index carries beyond SPEC §5 arrive at their defaults', () => {
+  // Half of why the hole below does not bite on the database this was observed against: all three
+  // come back at their defaults, so nothing in the recorded listing reaches it. This much really is
+  // a pin on the fixture rather than on the module — it fails when the file is regenerated against
+  // a database that answers differently, which is the only way an observation can change.
+  assert.equal(liveFixture.liveByAdminClient.unique, false);
+  assert.equal(liveFixture.liveByAdminClient.multikey, false);
+  assert.equal(liveFixture.liveByAdminClient.shardCount, 0);
+});
+
+test('a live index setting a field beyond SPEC §5 is vouched for anyway, which is the open hole', () => {
+  // The other half, and it is asserted against `reconcile` rather than against the fixture:
+  // `unique`, `multikey` and `shardCount` are invisible to §5's key, so a live index setting one is
+  // matched on a key that cannot see it — the same false vouch the `density` refusal exists to
+  // prevent, arriving by a route nothing refuses. The three assertions above cannot catch that; only
+  // feeding the module a contrary entry can, and this is that.
+  //
+  // So the expectation here is deliberately the *wrong* answer: `identical`, for a declaration that
+  // asks for a non-unique index against a listing that is unique. It is pinned rather than fixed
+  // because refusing the three needs observations issue #20 could not reach — a live index actually
+  // setting one — and pinned rather than left undocumented so that closing the hole announces
+  // itself as a failure here instead of passing silently.
+  const declared = {
+    collectionGroup: 'probe',
+    queryScope: 'COLLECTION',
+    fields: [
+      { fieldPath: 'x', order: 'ASCENDING' },
+      { fieldPath: 'z', order: 'ASCENDING' },
+    ],
+  };
+
+  for (const beyond of [{ unique: true }, { multikey: true }, { shardCount: 7 }]) {
+    const result = reconcile(analyse({ indexes: [declared] }), [
+      { ...liveFixture.liveByAdminClient, ...beyond },
+    ]);
+    const what = JSON.stringify(beyond);
+    assert.equal(result.verdict, 'identical', what);
+    assert.ok(isVouched(result), what);
+    assert.deepEqual(result.unreadable, [], what);
+  }
 });

@@ -58,18 +58,23 @@ export interface LiveCompositeIndex extends LiveIndex {
   readonly fields?: readonly IndexField[] | null;
 }
 
-/**
- * Not modelled above, and observed arriving at their defaults: `unique`, `multikey`, `shardCount`.
- *
- * Each is invisible to §5's key, so a live index setting one would reconcile as `identical` against
- * a declaration that does not — the false vouch the `density` refusal exists to prevent, by another
- * route. It does not bite on the database kind this version targets, which is why they are recorded
- * here rather than refused: `unique` is rejected at creation outside the Enterprise edition,
- * `multikey` applies only to the `MONGODB_COMPATIBLE_API` scope that `COMPARABLE_API_SCOPES` already
- * refuses, and a standard native database returns `false`, `false` and `0`. Pinned in
- * `reconcile.test.js` against `test/fixtures/live-indexes.json`, so an observation to the contrary
- * arrives as a failing test rather than as a set vouched for on a key that could not see it.
- */
+// Three fields are deliberately not modelled above, and were observed arriving at their defaults:
+// `unique`, `multikey`, `shardCount`. Written as line comments rather than a doc block because a
+// `/** */` here would attach to `UNREADABLE_REASONS` and ship as its documentation.
+//
+// Each is invisible to §5's key, so a live index setting one reconciles as `identical` against a
+// declaration that does not — the false vouch the `density` refusal exists to prevent, by another
+// route. That is measured rather than feared: `reconcile.test.js` puts a `unique: true` entry
+// through `reconcile` and pins the vouch it currently produces, so the hole is executable and
+// closing it fails a test rather than passing unnoticed.
+//
+// They are recorded rather than refused because that hole is out of reach on the database kind this
+// version targets: `unique` is rejected at creation outside the Enterprise edition, and a standard
+// native database returns `false`, `false` and `0` — `test/fixtures/live-indexes.json`. `multikey`
+// is documented as belonging to the `MONGODB_COMPATIBLE_API` scope `COMPARABLE_API_SCOPES` already
+// refuses, but the only observation here is `false` under `ANY_API`, which does not establish that
+// `true` is unreachable there. Refusing all three is what would close it, and needs the Enterprise
+// and MongoDB-compatible observations issue #20 could not reach.
 
 export const UNREADABLE_REASONS = [
   /** The resource name did not have the shape the collection group is read out of. */
@@ -209,8 +214,12 @@ const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
  * observed coming back and is kept for the proto3 default rather than for a listing.
  *
  * `SPARSE_ANY` and `DENSE` are refused at *creation* on that database — "Indexes with api scope
- * ANY_API does not support SPARSE_ANY density on standard database" — so the refusal below is
- * unreachable there and guards the database kinds that do accept them. See
+ * ANY_API does not support SPARSE_ANY density on standard database" — so no listing there can carry
+ * one, and the *live* half of the refusal guards the database kinds that do accept them. The
+ * *declared* half is reachable everywhere, and stays load-bearing: SPEC §4 passes `density` through
+ * unanalysed, so a lint-clean `firestore.indexes.json` saying `DENSE` reaches `incomparableReason`
+ * on any database at all, and refusing it is the only thing standing between that declaration and a
+ * match against a `SPARSE_ALL` live index on a key that cannot see the difference. See
  * `test/fixtures/live-indexes.json`.
  */
 const COMPARABLE_DENSITIES: ReadonlySet<string> = new Set([
