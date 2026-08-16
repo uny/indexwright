@@ -4,44 +4,53 @@ on:
   push:
     tags: ['v*']
 
+# Deliberately *not* `id-token: write` here. At workflow level it applies to every job, and GitHub
+# exports ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN to every step of a job
+# that holds it. The `publish` job below asks for it; nothing else gets it (issue #22).
 permissions:
   contents: read
-  # Required for npm provenance.
-  id-token: write
 
 jobs:
-  publish:
+  # Everything that runs code this repository did not write. It holds no OIDC permission, so a
+  # compromised dependency here has nothing to mint a publishing credential from.
+  #
+  # #21 stopped dependency *lifecycle scripts* from running during installs. It could not stop the
+  # dependency code these steps invoke on purpose: `npm run typecheck` executes `tsc` out of
+  # node_modules, and the suite loads whatever the tree resolves. Splitting the jobs is what covers
+  # that, because the separation is a permission boundary rather than a flag.
+  verify:
     runs-on: ubuntu-latest
+    # Stated here rather than left to the workflow-level block, even though it is identical to it.
+    # What keeps this job unprivileged is the *absence* of a line that this file carried until the
+    # commit that split it, so restoring `id-token: write` at workflow level — a plausible edit the
+    # day a second artifact wants provenance — would silently re-grant OIDC to the job that runs
+    # third-party code, while the job names and every comment below still read as isolated. A
+    # permissions block on the job it protects makes that edit visible in review.
+    permissions:
+      contents: read
     steps:
-      # Pinned to commit SHAs, not to tags: this job can mint an npm publishing credential from
-      # its OIDC identity, so a retagged action would be a supply-chain path into a released
-      # version. The trailing comment is the human-readable version and what Dependabot bumps.
+      # Pinned to commit SHAs, not to tags, in both jobs. This job cannot publish, but it produces
+      # the artifact the one that can will publish, so a retagged action is still a path into a
+      # released version. The trailing comment is the human-readable version and what Dependabot
+      # bumps.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Nothing here pushes to git, so there is nothing for a stored credential to be for.
-          # The steps below no longer run dependency lifecycle scripts — that takes both the flag
-          # on the `npm ci` step and the one on the nested install in scripts/lib/tarball.mjs —
-          # but they do run this tree's own code, and a GITHUB_TOKEN left in .git/config would be
-          # a credential sitting in reach of it for no reason.
+          # Nothing here pushes to git, so there is nothing for a stored credential to be for, and
+          # this is the job that runs third-party code.
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # 24, not the engines floor of 22, because trusted publishing needs npm >= 11.5.1 and
           # Node 22 still ships npm 10. The floor is exercised by the ci workflow on every PR.
           node-version: '24'
-          # registry-url is deliberately absent. It makes setup-node write
-          # //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN} into an .npmrc, and with no token
-          # set that is an empty auth line — npm reads it as "auth is already configured", never
-          # starts the OIDC exchange, and fails with ENEEDAUTH. The registry is pinned by the
-          # .npmrc committed at the repository root, so nothing here needs to set it.
-          #
-          # Caching is deliberately off, and `package-manager-cache: false` keeps it off if a
-          # `packageManager` or `devEngines.packageManager` field is ever added — that field would
-          # otherwise turn caching back on automatically. The Actions cache is a cross-job channel
-          # into a job holding a publishing credential. `npm ci` does verify integrity hashes
-          # against the lockfile, so this is defence in depth rather than a live hole, but a release
-          # build is where a clean environment is worth more than the seconds a cache saves.
-          # setup-node's own advanced-usage docs recommend disabling it for privileged workflows.
+          # Caching is off, and `package-manager-cache: false` keeps it off if a `packageManager` or
+          # `devEngines.packageManager` field is ever added — that field would otherwise turn
+          # caching back on automatically. The Actions cache is a cross-job channel, and this job
+          # hands an artifact to a privileged one, so a poisoned cache would reach the published
+          # tarball. `npm ci` does verify integrity hashes against the lockfile, so this is defence
+          # in depth rather than a live hole, but a release build is where a clean environment is
+          # worth more than the seconds a cache saves. setup-node's own advanced-usage docs
+          # recommend disabling it for privileged workflows.
           package-manager-cache: false
 
       - name: Check that the tag matches the package version
@@ -53,31 +62,180 @@ jobs:
             exit 1
           fi
 
-      # --ignore-scripts, because this job holds `id-token: write` and GitHub exports
-      # ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN to *every* step of such a
-      # job, not only to the step that needs them. A dependency shipping a lifecycle script would
-      # therefore run with the ability to request an OIDC token for audience npm:registry.npmjs.org,
-      # exchange it for this package's trusted-publisher credential, and publish an arbitrary
-      # tarball with valid provenance attached — before the publish step below ever runs. Neither
-      # `persist-credentials: false` nor the SHA-pinned actions cover that: the token is minted on
-      # demand from the job environment, not read from the checkout.
+      # The whole workspace, not just this package: they build from one tsconfig chain and the
+      # tarball checks cover both, so a release that breaks the other one should not ship.
       #
-      # Nothing here needs install-time scripts. The build does not depend on them: both `npm test`
-      # and `npm run verify-package` call `npm run build` themselves — a deliberate choice, so that
-      # `ignore-scripts=true` in a developer's own config cannot silently test a stale dist/. The
-      # flag stays on this invocation rather than moving into a config file for the same reason
-      # inverted: set globally it would also suppress `prepublishOnly`. The tarball would still come
-      # out with a dist/ — the steps above leave one on disk — which is exactly the trap: it would
-      # be whatever they happened to build, not the rebuild `prepublishOnly` guarantees.
+      # --ignore-scripts stays. It is no longer the thing standing between a dependency and the
+      # publishing credential — this job has none — but a release build is not where an install
+      # script should be running, and both workflows carry the same flags on purpose. An asymmetry
+      # between them would read as a deliberate distinction and there is none.
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm test
       - run: npm run verify-package
 
-      # Published from the workspace root so the committed .npmrc applies, and named with `-w` so
-      # the root — which is private and publishes nothing — cannot be the thing that goes out.
+      # Packed here rather than in the publish job, which is the point of the split: `npm publish`
+      # from a directory runs `prepublishOnly`, and this package's is `npm run build` — `tsc` out of
+      # node_modules, in the job holding the credential. Handing over a tarball means the publish
+      # job has nothing to build and so never installs.
       #
-      # No NODE_AUTH_TOKEN: npm exchanges the job's OIDC identity for a short-lived credential,
-      # which npmjs.com grants only to the trusted publisher configured for this package —
-      # uny/indexwright, workflow release.yml. There is no long-lived secret to leak or rotate.
-      - run: npm publish -w indexwright --provenance --access public
+      # What that job's safety rests on is the absence of node_modules, not on which lifecycle
+      # scripts a tarball publish skips: npm's docs list the scripts `npm publish` runs without
+      # saying whether a pre-packed tarball skips them, and that was left unverified rather than
+      # assumed. It does not need settling. With nothing installed, a `prepublishOnly` that did fire
+      # would fail to find `tsc` and take the job down — loudly, and without running a line of
+      # anything this tree depends on.
+      #
+      # `verify-package` has just built and packed both packages and installed them into throwaway
+      # consumers, so what is packed here is a tree that was checked, not merely one that compiled.
+      #
+      # Packed into a directory of its own rather than the repository root, so that what is uploaded
+      # can only be what this step produced. `indexwright-record-0.4.0.tgz` matches an
+      # `indexwright-*.tgz` glob, and the one thing these two workflows must never do is publish
+      # each other's package — the tag filters are written so they cannot, and a glob at the root
+      # would put it back.
+      #
+      # `mkdir -p` first: `--pack-destination` does not create the directory, it fails ENOENT — and
+      # a release workflow is the worst place to find that out.
+      - run: mkdir -p release-tarball && npm pack -w indexwright --pack-destination release-tarball
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linter-tarball
+          path: release-tarball/*.tgz
+          if-no-files-found: error
+          # Long enough that "Re-run failed jobs" still works. If `publish` fails on a registry 5xx,
+          # that button is what an operator reaches for, and it re-runs only `publish` — which
+          # downloads this artifact. At one day, coming back the next morning meant the download
+          # failed instead, for a release that had already spent its tag.
+          #
+          # The cost of the longer window, since it is a real one: re-running `publish` alone
+          # publishes the bytes `verify` packed *then*, and none of `verify`'s checks re-run. If the
+          # tag has been moved to a different commit in the meantime, the guard below will not
+          # notice — name, version and publishConfig are the same on both commits — and the release
+          # ships the older tree. Move a tag and re-run the whole workflow, not one job.
+          retention-days: 7
+          # A full "Re-run all jobs" repeats the upload under a name the run already carries.
+          # Whether GitHub scopes artifacts per run *attempt* — and so whether that is a 409 — was
+          # not established here; `overwrite` makes the question moot in the only direction that
+          # matters, and it can only ever replace an artifact this same job produced.
+          overwrite: true
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Scoped to this job, which runs none of *this tree's* dependency code: it installs nothing,
+      # so there is no node_modules for anything to execute out of, and npm, node and tar are the
+      # runner's rather than this tree's. That is the boundary — not "no third-party code at all",
+      # which would be false: the three actions below are bundled programs from other repositories
+      # and setup-node fetches a toolchain, all running here with the OIDC request variables set.
+      # Which is why the SHA pins matter more in this job than in `verify`, and why adding a fourth
+      # `uses:` here is a decision to extend the publishing credential's blast radius.
+      id-token: write
+    steps:
+      # Checked out for two things now, and narrowing it to one file would break the second: the
+      # committed .npmrc, which pins the registry, and `packages/indexwright/package.json`, which
+      # the publish step reads as the statement of what this tag was supposed to publish. Nothing
+      # installs from the tree.
+      #
+      # Holding that statement in a file rather than in a literal here makes the step order load-
+      # bearing, because the artifact is unpacked after this checkout. `actions/download-artifact`
+      # at the pin below neutralises `..` segments in zip entry paths before writing them — the
+      # unzip it bundles does so under the comment "protect against malicious zip files which want
+      # to extract to parent dirs" — so an artifact from the unprivileged job cannot reach back
+      # over the checkout and rewrite what it is about to be compared against. Read at that pinned
+      # SHA rather than assumed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          # registry-url is deliberately absent. It makes setup-node write
+          # //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN} into an .npmrc, and with no token
+          # set that is an empty auth line — npm reads it as "auth is already configured", never
+          # starts the OIDC exchange, and fails with ENEEDAUTH. The registry is pinned by the
+          # .npmrc committed at the repository root, so nothing here needs to set it.
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linter-tarball
+          path: release-tarball
+
+      # No NODE_AUTH_TOKEN: npm exchanges this job's OIDC identity for a short-lived credential.
+      # The trusted-publisher trust is bound to the workflow *file*, so splitting one job into two
+      # inside the same file does not disturb it.
+      #
+      # The count is checked rather than trusted to a glob; then the tarball's own manifest is
+      # checked against the checkout's, and the checkout's against the tag. This step publishes
+      # whatever it is handed, under an identity that can publish this package, and a version
+      # cannot be replaced once it is out.
+      #
+      # Counting is not enough on its own, because the tag-versus-version check in `verify` runs
+      # *before* `npm ci` — deliberately, so that a tag typo costs nothing — and therefore before
+      # any dependency code has run. A compromised build-time dependency that rewrites this
+      # package's `version` between the install and the pack produces exactly one tarball, passes
+      # the count, and burns a version number that can never be reclaimed. `dist/version.js` reads
+      # the same package.json at runtime, so `verify-package`'s version assertion moves with the
+      # tamper and does not catch it either. Reading the manifest out of the tarball is the only
+      # check that sees what is actually about to be published; it is also what makes the tag
+      # filters' promise — that these two workflows cannot publish each other's package — hold
+      # here rather than only at npmjs.com's end of the trusted-publisher binding.
+      #
+      # `publishConfig` is asserted along with the name and the version, and it is the part that
+      # matters most. npm's own comment above the import in lib/commands/publish.js is that "for
+      # historical reasons, publishConfig in package.json can contain ANY config keys that npm
+      # supports in .npmrc files and elsewhere" — and `#getManifest` runs `flatten(publishConfig,
+      # opts)` for a *tarball* spec too, filtering out only keys given as CLI flags. `opts` is what
+      # `pickRegistry` and the OIDC exchange then read. So the tarball, which is the one thing that
+      # crosses from the unprivileged job into this one, can rewrite where this step authenticates:
+      # `registry` sends the publish and a repo-identifying OIDC token to someone else's server,
+      # and `https-proxy` with `strict-ssl: false` keeps the npm audience while routing the real
+      # exchange through a MITM that can take the credential. `--access` and `--provenance` are on
+      # the command line and so cannot be overridden; nothing else is, which is why the check is a
+      # whole-object comparison rather than a list of keys to reject.
+      #
+      # What it is compared against is the package.json of the checkout above, not a copy of the
+      # expected shape written into this file. The distinction is the whole check: a literal here
+      # would have to be kept in step with `packages/indexwright/package.json` by hand, and the
+      # release is the place that discovers it was not — after the tag exists and the version is
+      # spent. This job's checkout comes from GitHub at the tag, never through the job that runs
+      # third-party code, so it is a trustworthy statement of what the tag was supposed to publish;
+      # the tarball is the untrusted side, and the comparison is between the two. A `publishConfig`
+      # change is then just an edit to the package, with nothing here to keep in step.
+      #
+      # The tag is checked against the same pair, so the chain is closed inside this job rather
+      # than delegated to `verify`'s check, which ran before any dependency code did.
+      #
+      # `tar` and `node` are the runner's own, so this adds nothing to what the job executes.
+      #
+      # `--provenance` is kept although trusted publishing generates an attestation without it. The
+      # flag is what makes a failure to generate one loud: this is the first release to publish a
+      # tarball packed in another job, and the attestation's subject is the digest of the tarball
+      # being published, so it should hold — but a silent publish without provenance is the outcome
+      # worth refusing, and asking explicitly is what turns it into a failed job.
+      - name: Publish the tarball the verify job packed
+        run: |
+          shopt -s nullglob
+          tarballs=(./release-tarball/*.tgz)
+          if [ "${#tarballs[@]}" -ne 1 ]; then
+            echo "expected exactly one tarball, found ${#tarballs[@]}: ${tarballs[*]}" >&2
+            exit 1
+          fi
+          render='const m = JSON.parse(require("fs").readFileSync(0, "utf8")); const pc = m.publishConfig ?? {}; console.log(m.name + "@" + m.version + " publishConfig[" + Object.keys(pc).sort().map((k) => k + "=" + JSON.stringify(pc[k])).join(",") + "]");'
+          packed="$(tar -xzOf "${tarballs[0]}" package/package.json | node -e "$render")"
+          committed="$(node -e "$render" < ./packages/indexwright/package.json)"
+          if [ "$packed" != "$committed" ]; then
+            echo "tarball holds $packed; the tag's own package.json says $committed" >&2
+            exit 1
+          fi
+          case "$committed" in
+            "indexwright@${GITHUB_REF_NAME#v} "*) ;;
+            *)
+              echo "$committed is not indexwright at the version $GITHUB_REF_NAME names" >&2
+              exit 1
+              ;;
+          esac
+          npm publish "${tarballs[0]}" --provenance --access public
