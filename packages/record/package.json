@@ -1,6 +1,6 @@
 {
   "name": "@indexwright/record",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Capture the Firestore query shapes a test suite issues, as a corpus for indexwright",
   "keywords": [
     "firestore",
