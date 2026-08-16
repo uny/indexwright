@@ -5,7 +5,18 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## Unreleased
+## [0.4.0] — 2026-08-15
+
+Minor rather than patch, because both ends of the capture proxy are now constrained and the case that
+constrains is a legitimate one: an emulator reached by container name is not loopback, and a run that
+worked in 0.3.0 needs `--allow-remote-emulator` to keep working. Calling that a patch would be a lie
+about what an upgrade costs.
+
+`check` is still not in this release. What lands here is the part of it that needs no Firestore
+client — `reconcile`, the presence half of what [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md)
+§3 requires the verb to settle — plus two fixes to `indexwright-record` itself. Its comparison of a
+candidate index set against a live listing is now exercised against a listing a real database
+returned, rather than only against ones written by hand.
 
 ### Changed
 
@@ -205,5 +216,6 @@ First release. Query capture, specified in [SPEC.md](https://github.com/uny/inde
   stderr. Snapshot listeners carry their query over `Listen` and are counted, not recorded.
   Capturing `Listen` is the first extension worth making.
 
+[0.4.0]: https://github.com/uny/indexwright/releases/tag/record-v0.4.0
 [0.3.0]: https://github.com/uny/indexwright/releases/tag/record-v0.3.0
 [0.2.0]: https://github.com/uny/indexwright/releases/tag/record-v0.2.0
