@@ -393,8 +393,19 @@ test('a failed listen takes the upstream session down with it', async () => {
       () => startCapture({ upstream: upstreamAddress, port: busy, onWarning: () => {} }),
       (error) => error.code === 'EADDRINUSE',
     );
+    // Bounded, but only to keep a regression from hanging the suite: the assertion is that the
+    // session closes at all, not that it closes promptly. The suite's files run in parallel
+    // processes, so a deadline tight enough to time the cleanup times the machine's load instead.
     assert.equal(
-      await Promise.race([closed, new Promise((r) => setTimeout(() => r('still open'), 2000))]),
+      await Promise.race([
+        closed,
+        new Promise((_, reject) => {
+          setTimeout(
+            () => reject(new Error('the upstream session was still open 10s after the failed listen')),
+            10_000,
+          ).unref();
+        }),
+      ]),
       'session closed',
     );
   } finally {
