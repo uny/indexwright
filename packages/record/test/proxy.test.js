@@ -379,8 +379,12 @@ test('a failed listen takes the upstream session down with it', async () => {
   // close it on the way out. Asserted from the upstream's side, which is the only place the
   // difference is observable: the session arrives either way, and without the cleanup it stays.
   const upstream = createHttp2Server();
+  const sessions = [];
   const closed = new Promise((resolve) => {
-    upstream.on('session', (session) => session.on('close', () => resolve('session closed')));
+    upstream.on('session', (session) => {
+      sessions.push(session);
+      session.on('close', () => resolve('session closed'));
+    });
   });
   const upstreamAddress = await listen(upstream);
 
@@ -393,11 +397,31 @@ test('a failed listen takes the upstream session down with it', async () => {
       () => startCapture({ upstream: upstreamAddress, port: busy, onWarning: () => {} }),
       (error) => error.code === 'EADDRINUSE',
     );
+    // Bounded, but only to keep a regression from hanging the suite: the assertion is that the
+    // session closes at all, not that it closes promptly. The suite's files run in parallel
+    // processes, so a deadline tight enough to time the cleanup times the machine's load instead.
+    // Unref'd because a won race leaves the timer pending: ref'd, every passing run would hold
+    // the loop for the remainder of the ten seconds.
     assert.equal(
-      await Promise.race([closed, new Promise((r) => setTimeout(() => r('still open'), 2000))]),
+      await Promise.race([
+        closed,
+        new Promise((_, reject) => {
+          setTimeout(
+            () => reject(new Error('the upstream session was still open 10s after the failed listen')),
+            10_000,
+          ).unref();
+        }),
+      ]),
       'session closed',
     );
   } finally {
+    // Destroyed before the close, because the path that gets here with one still open is the
+    // regression path, and on 22 — the engines floor, and a CI leg — `close` withholds its
+    // callback until every session has ended. Without this the deadline above bounds the
+    // assertion and nothing else: the run reported `TAP version 13` and then hung, where 24
+    // failed at 10s with the message. `node --test` has no default per-test timeout and CI sets
+    // no `timeout-minutes`, so that is the job's whole six hours to say what one line says here.
+    for (const session of sessions) session.destroy();
     await new Promise((resolve) => squatter.close(resolve));
     await new Promise((resolve) => upstream.close(resolve));
   }
