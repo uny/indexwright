@@ -89,6 +89,14 @@ test('check is a verb only as the first word, so a suite of that name still runs
   assert.deepEqual(command.argv, ['check', '--project', 'p']);
 });
 
+test('the help does not promise a replay the verb cannot run yet', async () => {
+  // The two have to move together: the exit-2 stub below and this line are the same claim, and a
+  // usage that describes working behaviour is the one thing a reader cannot check against the code.
+  const streams = collect();
+  await run(['check', '--help'], streams);
+  assert.match(streams.stdout(), /Replay is not implemented yet/);
+});
+
 test('check prints the target before it could reach a network', async () => {
   // Printed on every run rather than only on a failure: a real database in place of a throwaway one
   // is the mistake that produces no error, so the target is the one thing a run has to say out loud.

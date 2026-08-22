@@ -286,6 +286,8 @@ export function usage(): string {
     'check replays a corpus against a database that already has the candidate index set applied,',
     'and reports the queries it cannot serve. It applies nothing and reads only.',
     '',
+    'Replay is not implemented yet: check parses and echoes its target, then exits 2.',
+    '',
     'Options:',
     '  --project <id>          project holding the database to replay against (required)',
     '  --database <name>       database within it (required; the default one is named "(default)")',
