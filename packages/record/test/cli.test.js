@@ -73,6 +73,40 @@ test('a target segment that would address something else is refused', () => {
   assert.throws(() => parseArgs(['check', '--project', 'a/b', '--database', 'd']), (error) => /cannot contain/.test(error.message));
   assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'a/b']), (error) => /cannot contain/.test(error.message));
   assert.throws(() => parseArgs(['check', '--project=', '--database', 'd']), (error) => /--project needs a value/.test(error.message));
+  // A segment need not carry a slash to stop meaning itself. `..` is collapsed by anything that
+  // normalises a URL path, and whitespace is a value a padded shell variable expands to.
+  assert.throws(() => parseArgs(['check', '--project', '..', '--database', 'd']), (error) => /cannot be "\.\."/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', ' ', '--database', 'd']), (error) => /--project needs a value/.test(error.message));
+});
+
+test('a target segment cannot forge a line of the announcement', () => {
+  // `cli.ts` prints the target as the one line a run has to say out loud, so a newline in a segment
+  // writes a second `indexwright-record:` line beside it naming a database nobody targeted, and a
+  // carriage return overwrites the real one in place. No Firestore id may hold either.
+  const forged = `scratch-db\nindexwright-record: check complete, 0 unserved queries`;
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', forged]), (error) => /control characters/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'safe\r\x1b[2K']), (error) => /control characters/.test(error.message));
+  // And the refusal must not reprint what it just refused: the message that names a control
+  // character cannot be the thing that emits one.
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', forged]), (error) => !error.message.includes('\n'));
+});
+
+test('an option absorbed as a target value is a usage error, not a target', () => {
+  // `--database --corpus` is a missing value, not a database named `--corpus`. Left unrefused it
+  // reaches the echo as a target the user never typed.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', '--corpus']),
+    (error) => /--database needs a value/.test(error.message),
+  );
+});
+
+test('a file path option that was written empty is a usage error', () => {
+  // `resolve('')` is the working directory, so an empty `--corpus` reads as a request to open a
+  // directory as a corpus rather than as the typo it is.
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus=']), (error) => /--corpus needs a value/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'd', '--indexes=']), (error) => /--indexes needs a value/.test(error.message));
+  // `parseCheck` carries its own `takeValue`, so the trailing-flag case is its own path.
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus']), (error) => /--corpus needs a value/.test(error.message));
 });
 
 test('check takes its options in either form, and refuses ones it does not have', () => {
@@ -93,16 +127,30 @@ test('the help does not promise a replay the verb cannot run yet', async () => {
   // The two have to move together: the exit-2 stub below and this line are the same claim, and a
   // usage that describes working behaviour is the one thing a reader cannot check against the code.
   const streams = collect();
-  await run(['check', '--help'], streams);
+  assert.equal(await run(['check', '--help'], streams), 0);
   assert.match(streams.stdout(), /Replay is not implemented yet/);
+  // `-h` is documented as check's alias and is answered before the option loop, which would
+  // otherwise reject it for not starting with `--`.
+  const short = collect();
+  assert.equal(await run(['check', '-h'], short), 0);
+  assert.match(short.stdout(), /Replay is not implemented yet/);
 });
 
-test('check prints the target before it could reach a network', async () => {
+test('check answers --version, so the flag does not stop working once a verb is named', async () => {
+  const streams = collect();
+  assert.equal(await run(['check', '--version'], streams), 0);
+  assert.match(streams.stdout(), /^\d+\.\d+\.\d+/);
+});
+
+test('check prints the target before it could reach a network, and exits non-zero', async () => {
   // Printed on every run rather than only on a failure: a real database in place of a throwaway one
   // is the mistake that produces no error, so the target is the one thing a run has to say out loud.
   const streams = collect();
-  await run(['check', '--project', 'acme-prod', '--database', '(default)'], streams);
+  // The exit code is the half a CI step branches on. Unasserted, a stub that regressed to `return 0`
+  // would report a replay that never ran as a clean one — the silent pass the verb exists to prevent.
+  assert.equal(await run(['check', '--project', 'acme-prod', '--database', '(default)'], streams), 2);
   assert.match(streams.stderr(), /target projects\/acme-prod\/databases\/\(default\)/);
+  assert.match(streams.stderr(), /check is not implemented yet/);
 });
 
 test('--help and --version report without running anything', async () => {

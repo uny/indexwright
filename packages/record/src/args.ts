@@ -158,6 +158,10 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
  */
 function parseCheck(options: readonly string[]): Command {
   if (options.includes('--help') || options.includes('-h')) return { kind: 'help' };
+  // Answered here as well as on the record path, because both are questions about the binary rather
+  // than about the verb, and a `--version` that works only when no verb is named is a flag that
+  // stops working the moment a wrapper script starts naming one.
+  if (options.includes('--version')) return { kind: 'version' };
 
   let project: string | undefined;
   let database: string | undefined;
@@ -187,10 +191,10 @@ function parseCheck(options: readonly string[]): Command {
         database = requireSegment(takeValue(), name);
         break;
       case '--corpus':
-        corpus = takeValue();
+        corpus = requirePath(takeValue(), name);
         break;
       case '--indexes':
-        indexes = takeValue();
+        indexes = requirePath(takeValue(), name);
         break;
       default:
         throw new UsageError(`unknown option "${name}"`);
@@ -214,13 +218,55 @@ function parseCheck(options: readonly string[]): Command {
  * and an empty one addresses the collection rather than a member of it. Both are cases where the
  * target echoed back would not be the target measured, which is the whole point of naming it.
  *
+ * The same test applied to the echo itself. `cli.ts` prints that path as the one line a run has to
+ * say out loud, so a value carrying a newline writes a second line beside it — a well-formed
+ * `indexwright-record:` line naming a database nobody targeted — and one carrying a carriage return
+ * or an escape sequence overwrites the real line in place. `..` is the third form of the same thing:
+ * it survives this function intact and is then collapsed by anything that normalises a URL path, so
+ * the request leaves for a resource the echo never named. A leading `--` is a value that was never
+ * typed as one — it is the next option, absorbed because the option before it was written without
+ * its argument, and it reaches the echo as a target rather than as the usage error it is.
+ *
  * Deliberately not a full format check. Google's rules for either are longer than this, they differ
  * between the two, and a validator that is merely close refuses valid targets — which for a required
- * argument with no fallback leaves no way to proceed.
+ * argument with no fallback leaves no way to proceed. Every clause below refuses a value that no
+ * project id and no database name may hold anyway, so none of them can be the clause that does that.
  */
 function requireSegment(value: string, option: string): string {
+  // Rendered rather than interpolated, so that a value refused for carrying a control character
+  // cannot smuggle it into the refusal that names it. For an ordinary value this is the same string
+  // the message carried before — `JSON.stringify` supplies the quotes the message used to write.
+  const shown = JSON.stringify(value);
+  if (value.trim() === '') throw new UsageError(`${option} needs a value`);
+  if (value.startsWith('--')) throw new UsageError(`${option} needs a value, got the option ${shown}`);
+  if (value.includes('/')) throw new UsageError(`${option} cannot contain "/", got ${shown}`);
+  if (value === '..') throw new UsageError(`${option} cannot be "..", got ${shown}`);
+  if ([...value].some((character) => isControl(character))) {
+    throw new UsageError(`${option} cannot contain control characters, got ${shown}`);
+  }
+  return value;
+}
+
+/**
+ * C0 and DEL, by code point rather than by a regex holding the characters themselves.
+ *
+ * Written this way so the source stays readable and cannot be mangled by an editor or a patch that
+ * normalises whitespace — a guard against control characters is a poor place to keep literal ones.
+ */
+function isControl(character: string): boolean {
+  const code = character.codePointAt(0) ?? 0;
+  return code < 0x20 || code === 0x7f;
+}
+
+/**
+ * A file path, checked only for having been written at all.
+ *
+ * Unlike a target segment, what is *in* it is the filesystem's business rather than this parser's —
+ * but an empty one is not a path, and `resolve('')` is the working directory, so a `--corpus=` typed
+ * with nothing after it would otherwise be read as a request to open a directory as a corpus.
+ */
+function requirePath(value: string, option: string): string {
   if (value === '') throw new UsageError(`${option} needs a value`);
-  if (value.includes('/')) throw new UsageError(`${option} cannot contain "/", got "${value}"`);
   return value;
 }
 
@@ -302,5 +348,6 @@ export function usage(): string {
     'Exit codes:',
     '  the exit code of <command>, so a failing suite still fails',
     '  2  usage error, or the corpus could not be written',
+    '     check also exits 2 until replay is implemented, on an otherwise valid command line',
   ].join('\n');
 }

@@ -5,6 +5,43 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## Unreleased
+
+### Added
+
+- **`indexwright-record check`**, the verb [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md)
+  §3 names — as its argument surface only. **Replay is not implemented**: the verb parses and
+  validates its target, echoes it, and exits `2`. What lands here is the flag surface (issue #8), so
+  that the adapter and the gating can be written against a target that is already settled.
+
+  **The target is two required flags with no fallback of any kind.** `--project` and `--database` are
+  never read from `GOOGLE_CLOUD_PROJECT`, from a `gcloud config` default, or from the project inside
+  application default credentials. Every one of those resolves to whatever the person running the
+  command last worked against, and a database carrying more indexes than the candidate set answers
+  queries the candidate set alone would not — so the wrong target does not fail loudly, it returns a
+  clean report. That is the whole of issue #8. Credentials still come from ADC, as §3 relies on; what
+  may not come from ambient state is *which database* is measured. Two flags rather than one resource
+  path so the refusal can name the half that is missing, and because the default database is literally
+  called `(default)`.
+
+  The target is echoed to stderr on every run, not only on a failure. It is the one thing about a
+  `check` run that cannot be recovered from the output afterwards, and the mistake it guards against —
+  a real database in place of a throwaway one — is silent by construction. Nothing inspects the name
+  for how production-like it looks: a rule that fires on `prod-sandbox` and stays quiet on `db-7`
+  teaches its own silence to be read as an all-clear.
+
+  Because that echo is what an operator is asked to trust, a segment that would not still mean itself
+  inside `projects/{project}/databases/{database}` is refused rather than escaped — one holding a
+  slash, a `..`, a control character, a leading `--` (an option absorbed as a value), or nothing but
+  whitespace. A newline would otherwise write a second well-formed `indexwright-record:` line naming a
+  database nobody targeted, and a carriage return would overwrite the real one in place. None of these
+  is a legal project id or database name, so refusing them costs no valid target; there is deliberately
+  no format check beyond that, since a validator that is merely close would refuse valid targets a
+  required argument with no fallback leaves no way around.
+
+- `--corpus` and `--indexes` on `check`, defaulting to `firestore.queries.json` (what `record` writes)
+  and `firestore.indexes.json`.
+
 ## [0.4.0] — 2026-08-15
 
 Minor rather than patch, because both ends of the capture proxy are now constrained and the case that

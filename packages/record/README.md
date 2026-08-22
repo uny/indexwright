@@ -49,6 +49,37 @@ Options:
       --version           show the version
 ```
 
+## `check` — not yet implemented
+
+`check` replays a corpus against a database that already has the candidate index set applied, and
+reports the queries it cannot serve. It applies nothing and reads only.
+
+**Replay is not implemented in this version.** The verb parses and echoes its target, then exits
+`2`. What it accepts is settled, so a wrapper script can be written against it now; what it does is
+not.
+
+```text
+indexwright-record check --project <id> --database <name> [options]
+
+Options:
+  --project <id>          project holding the database to replay against (required)
+  --database <name>       database within it (required; the default one is named "(default)")
+  --corpus <file>         the corpus to replay (default: firestore.queries.json)
+  --indexes <file>        the candidate index declarations (default: firestore.indexes.json)
+```
+
+**The target is never inferred.** `GOOGLE_CLOUD_PROJECT`, a `gcloud config` default, and the project
+inside application default credentials are all whatever the person running this last worked against
+— and a database carrying *more* indexes than the candidate set answers queries the candidate set
+alone would not. So the wrong target does not fail loudly; it returns a clean report. Both halves are
+required and neither has a fallback. Credentials still come from ADC: what may not come from ambient
+state is *which database* is measured.
+
+Both halves also have to still mean themselves inside `projects/{project}/databases/{database}`, so a
+segment carrying a slash, a `..`, a control character, or nothing at all is refused rather than
+escaped — the target echoed on stderr has to be the target measured, which is the whole point of
+naming it.
+
 ## Both ends stay on this machine
 
 The proxy listens on loopback, and forwards only to an address that reads as being on this machine —
