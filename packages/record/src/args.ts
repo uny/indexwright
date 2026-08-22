@@ -157,12 +157,6 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
  * shell needs quoted, which is easier to get right as a short argument of its own.
  */
 function parseCheck(options: readonly string[]): Command {
-  if (options.includes('--help') || options.includes('-h')) return { kind: 'help' };
-  // Answered here as well as on the record path, because both are questions about the binary rather
-  // than about the verb, and a `--version` that works only when no verb is named is a flag that
-  // stops working the moment a wrapper script starts naming one.
-  if (options.includes('--version')) return { kind: 'version' };
-
   let project: string | undefined;
   let database: string | undefined;
   let corpus = DEFAULT_CORPUS;
@@ -170,6 +164,15 @@ function parseCheck(options: readonly string[]): Command {
 
   for (let i = 0; i < options.length; i += 1) {
     const argument = options[i] as string;
+    // Answered inside the loop rather than by a scan over every token, so that a `--help` or a
+    // `--version` sitting where a value belongs is the missing value it actually is. Scanned ahead,
+    // `check --database --version` printed the version and exited 0 — a success for a command line
+    // that named no database. `-h` is taken here too, since it is the one argument this verb accepts
+    // that does not begin with `--`.
+    if (argument === '-h' || argument === '--help') return { kind: 'help' };
+    // Both are questions about the binary rather than about the verb, and a `--version` that works
+    // only while no verb is named stops working the moment a wrapper script starts naming one.
+    if (argument === '--version') return { kind: 'version' };
     if (!argument.startsWith('--')) throw new UsageError(`unexpected argument "${argument}"`);
 
     const equals = argument.indexOf('=');
@@ -218,44 +221,60 @@ function parseCheck(options: readonly string[]): Command {
  * and an empty one addresses the collection rather than a member of it. Both are cases where the
  * target echoed back would not be the target measured, which is the whole point of naming it.
  *
- * The same test applied to the echo itself. `cli.ts` prints that path as the one line a run has to
- * say out loud, so a value carrying a newline writes a second line beside it — a well-formed
- * `indexwright-record:` line naming a database nobody targeted — and one carrying a carriage return
- * or an escape sequence overwrites the real line in place. `..` is the third form of the same thing:
- * it survives this function intact and is then collapsed by anything that normalises a URL path, so
- * the request leaves for a resource the echo never named. A leading `--` is a value that was never
- * typed as one — it is the next option, absorbed because the option before it was written without
- * its argument, and it reaches the echo as a target rather than as the usage error it is.
+ * An allowlist, arrived at the hard way. The question a segment has to answer is not "is this a
+ * legal Firestore id" but "does this still name what it appears to name once a URL layer has seen
+ * it" — and refusing the ways it can fail one at a time does not converge. A slash retargets; so
+ * does a backslash, which the WHATWG URL parser folds into a slash before resolving dot segments,
+ * so `throwaway\..\prod` echoes as itself and requests `prod`. `.` and `..` collapse on their own.
+ * `?` and `#` end the path and begin a query or a fragment. `%2e%2e` arrives already decoded.
  *
- * Deliberately not a full format check. Google's rules for either are longer than this, they differ
- * between the two, and a validator that is merely close refuses valid targets — which for a required
- * argument with no fallback leaves no way to proceed. Every clause below refuses a value that no
- * project id and no database name may hold anyway, so none of them can be the clause that does that.
+ * And because `cli.ts` prints this path as the one line an operator is asked to trust, anything that
+ * can forge a line of it counts as the same failure: a newline writes a second well-formed
+ * `indexwright-record:` line beside the real one naming a database nobody targeted, a carriage
+ * return or an escape sequence overwrites the real one in place, U+0085 and U+2028 are line breaks
+ * to plenty of viewers — and `JSON.stringify` escapes neither — while the bidi overrides reorder a
+ * name without altering a character of it.
+ *
+ * So the test is inverted. What survives is strictly *wider* than Google's rules for either half —
+ * both are lowercase alphanumerics and hyphens, plus the literal `(default)` — which is the property
+ * the refusal-by-refusal version was trying to buy: a validator that is merely close refuses valid
+ * targets, and for a required argument with no fallback that leaves no way to proceed. Being
+ * deliberately looser than the real rules keeps that, and makes the answer to "what else gets
+ * through" be nothing rather than a list that was short by one every time it was read.
  */
+const SEGMENT = /^[A-Za-z0-9_.()-]+$/;
+
 function requireSegment(value: string, option: string): string {
-  // Rendered rather than interpolated, so that a value refused for carrying a control character
-  // cannot smuggle it into the refusal that names it. For an ordinary value this is the same string
-  // the message carried before — `JSON.stringify` supplies the quotes the message used to write.
-  const shown = JSON.stringify(value);
-  if (value.trim() === '') throw new UsageError(`${option} needs a value`);
-  if (value.startsWith('--')) throw new UsageError(`${option} needs a value, got the option ${shown}`);
-  if (value.includes('/')) throw new UsageError(`${option} cannot contain "/", got ${shown}`);
-  if (value === '..') throw new UsageError(`${option} cannot be "..", got ${shown}`);
-  if ([...value].some((character) => isControl(character))) {
-    throw new UsageError(`${option} cannot contain control characters, got ${shown}`);
+  const shown = render(value);
+  if (value === '') throw new UsageError(`${option} needs a value`);
+  // Not a malformed name but a missing one: the next option, absorbed because the one before it was
+  // written without its argument. No id may begin with `-`, so this cannot be a real target.
+  if (value.startsWith('-')) throw new UsageError(`${option} needs a value, got the option ${shown}`);
+  if (value === '.' || value === '..') throw new UsageError(`${option} cannot be ${shown}`);
+  if (!SEGMENT.test(value)) {
+    throw new UsageError(
+      `${option} may hold only letters, digits, "-", "_", ".", and parentheses, got ${shown}`,
+    );
   }
   return value;
 }
 
 /**
- * C0 and DEL, by code point rather than by a regex holding the characters themselves.
+ * A value written back into a message safely, which `JSON.stringify` alone does not do.
  *
- * Written this way so the source stays readable and cannot be mangled by an editor or a patch that
- * normalises whitespace — a guard against control characters is a poor place to keep literal ones.
+ * It leaves U+0085 and U+2028 raw, and these messages go to the same stream the target is announced
+ * on — so a refusal naming a value that forges a line would forge one itself. Everything outside
+ * printable ASCII is escaped rather than emitted.
  */
-function isControl(character: string): boolean {
-  const code = character.codePointAt(0) ?? 0;
-  return code < 0x20 || code === 0x7f;
+function render(value: string): string {
+  let out = '';
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (character === '"' || character === '\\') out += `\\${character}`;
+    else if (code >= 0x20 && code <= 0x7e) out += character;
+    else out += `\\u${code.toString(16).padStart(4, '0')}`;
+  }
+  return `"${out}"`;
 }
 
 /**
@@ -264,9 +283,17 @@ function isControl(character: string): boolean {
  * Unlike a target segment, what is *in* it is the filesystem's business rather than this parser's —
  * but an empty one is not a path, and `resolve('')` is the working directory, so a `--corpus=` typed
  * with nothing after it would otherwise be read as a request to open a directory as a corpus.
+ *
+ * A leading `-` is refused for the same reason it is on a target segment: `--corpus --indexes` is a
+ * missing value rather than a file named `--indexes`, and read as a filename it fails much later,
+ * somewhere that can no longer say which option was written without its argument. A path that really
+ * does begin with `-` is still reachable as `./-name`.
  */
 function requirePath(value: string, option: string): string {
   if (value === '') throw new UsageError(`${option} needs a value`);
+  if (value.startsWith('-')) {
+    throw new UsageError(`${option} needs a value, got the option ${render(value)}`);
+  }
   return value;
 }
 

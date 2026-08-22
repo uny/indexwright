@@ -30,14 +30,31 @@ again, by its own `corpusVersion`.
   for how production-like it looks: a rule that fires on `prod-sandbox` and stays quiet on `db-7`
   teaches its own silence to be read as an all-clear.
 
-  Because that echo is what an operator is asked to trust, a segment that would not still mean itself
-  inside `projects/{project}/databases/{database}` is refused rather than escaped — one holding a
-  slash, a `..`, a control character, a leading `--` (an option absorbed as a value), or nothing but
-  whitespace. A newline would otherwise write a second well-formed `indexwright-record:` line naming a
-  database nobody targeted, and a carriage return would overwrite the real one in place. None of these
-  is a legal project id or database name, so refusing them costs no valid target; there is deliberately
-  no format check beyond that, since a validator that is merely close would refuse valid targets a
-  required argument with no fallback leaves no way around.
+  Because that echo is what an operator is asked to trust, each half is checked against an allowlist
+  — letters, digits, `-`, `_`, `.`, and parentheses — rather than against a list of things to refuse.
+  The question a segment has to answer is not whether it is a legal Firestore id but whether it still
+  names what it appears to name once a URL layer has seen it, and refusing the ways it can fail one at
+  a time did not converge: a slash retargets, and so does a backslash, which the WHATWG URL parser
+  folds into a slash before resolving dot segments, so `throwaway\..\prod` echoes as itself and would
+  request `prod`. `.` and `..` collapse unaided, `?` and `#` end the path and begin a query or a
+  fragment, and `%2e%2e` arrives already decoded. On the echo itself, a newline writes a second
+  well-formed `indexwright-record:` line naming a database nobody targeted, a carriage return
+  overwrites the real one in place, U+0085 and U+2028 are line breaks to plenty of viewers, and the
+  bidi overrides reorder a name without altering a character of it.
+
+  The allowlist is deliberately **wider** than Google's rules for either half — both are lowercase
+  alphanumerics and hyphens, plus the literal `(default)` — which is the property a blacklist was
+  trying to buy: a validator that is merely close refuses valid targets, and for a required argument
+  with no fallback that leaves no way to proceed. Being looser than the real rules keeps that while
+  making the answer to "what else gets through" be nothing.
+
+  A value beginning with `-` is refused separately and named as a missing value rather than a
+  malformed one, on both the target halves and the file paths: `--database --corpus` is an option
+  absorbed because the one before it was written without its argument, not a database called
+  `--corpus`. `--help` and `--version` are answered while walking the arguments rather than by
+  scanning them ahead, so that one sitting where a value belongs is that same missing value — scanned
+  ahead, `check --database --version` printed the version and exited 0, a success for a command line
+  that named no database.
 
 - `--corpus` and `--indexes` on `check`, defaulting to `firestore.queries.json` (what `record` writes)
   and `firestore.indexes.json`.

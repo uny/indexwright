@@ -67,37 +67,73 @@ test('check does not read the target out of the environment', () => {
   assert.equal(command.project, 'named');
 });
 
+test('every target a real Firestore id can be is accepted', () => {
+  // The allowlist has to be wider than Google's own rules, or a required argument with no fallback
+  // has a spelling it refuses and no way around. `(default)` is the case that needs the parentheses.
+  for (const [project, database] of [
+    ['acme-prod', '(default)'],
+    ['p-1', 'db-7'],
+    ['my_project.v2', 'a.b-c'],
+    ['abc123', 'x'.repeat(63)],
+  ]) {
+    const command = parseArgs(['check', '--project', project, '--database', database]);
+    assert.equal(canonicalTarget(command), `projects/${project}/databases/${database}`);
+  }
+});
+
 test('a target segment that would address something else is refused', () => {
-  // Both halves go into `projects/{p}/databases/{d}` verbatim, so a slash silently retargets the
-  // run and an empty segment names the collection rather than a member of it.
-  assert.throws(() => parseArgs(['check', '--project', 'a/b', '--database', 'd']), (error) => /cannot contain/.test(error.message));
-  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'a/b']), (error) => /cannot contain/.test(error.message));
-  assert.throws(() => parseArgs(['check', '--project=', '--database', 'd']), (error) => /--project needs a value/.test(error.message));
-  // A segment need not carry a slash to stop meaning itself. `..` is collapsed by anything that
-  // normalises a URL path, and whitespace is a value a padded shell variable expands to.
+  // Both halves go into `projects/{p}/databases/{d}` and then into a URL, so the test is whether the
+  // value still names what it appears to name after a URL layer has seen it — not whether it holds
+  // some particular forbidden character. A backslash is folded to a slash by the WHATWG parser and
+  // then resolved, so `throwaway\..\prod` echoes as itself and requests `prod`.
+  for (const bad of ['a/b', 'throwaway\\..\\prod', 'safe?x=1', 'a#b', '%2e%2e', 'a b']) {
+    assert.throws(() => parseArgs(['check', '--project', 'p', '--database', bad]), (error) => /may hold only/.test(error.message));
+    assert.throws(() => parseArgs(['check', '--project', bad, '--database', 'd']), (error) => /may hold only/.test(error.message));
+  }
+  // Dot segments collapse on their own, without needing a separator of their own.
   assert.throws(() => parseArgs(['check', '--project', '..', '--database', 'd']), (error) => /cannot be "\.\."/.test(error.message));
-  assert.throws(() => parseArgs(['check', '--project', ' ', '--database', 'd']), (error) => /--project needs a value/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', '.', '--database', 'd']), (error) => /cannot be "\."/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project=', '--database', 'd']), (error) => /--project needs a value/.test(error.message));
 });
 
 test('a target segment cannot forge a line of the announcement', () => {
   // `cli.ts` prints the target as the one line a run has to say out loud, so a newline in a segment
   // writes a second `indexwright-record:` line beside it naming a database nobody targeted, and a
-  // carriage return overwrites the real one in place. No Firestore id may hold either.
+  // carriage return overwrites the real one in place. U+0085 and U+2028 are line breaks to plenty of
+  // viewers, and the bidi overrides reorder a name without altering a character of it.
   const forged = `scratch-db\nindexwright-record: check complete, 0 unserved queries`;
-  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', forged]), (error) => /control characters/.test(error.message));
-  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'safe\r\x1b[2K']), (error) => /control characters/.test(error.message));
-  // And the refusal must not reprint what it just refused: the message that names a control
-  // character cannot be the thing that emits one.
-  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', forged]), (error) => !error.message.includes('\n'));
+  for (const bad of [forged, 'safe\r\x1b[2K', 'safe\u0085x', 'a\u2028b', 'safe\u202edorp']) {
+    assert.throws(() => parseArgs(['check', '--project', 'p', '--database', bad]), (error) => /may hold only/.test(error.message));
+    // And the refusal must not reprint what it just refused: the message that names a value which
+    // could forge a line cannot be the thing that forges one. `JSON.stringify` alone does not do
+    // this — it leaves U+0085 and U+2028 raw.
+    assert.throws(
+      () => parseArgs(['check', '--project', 'p', '--database', bad]),
+      (error) => ![...error.message].some((c) => (c.codePointAt(0) ?? 0) < 0x20 || (c.codePointAt(0) ?? 0) > 0x7e),
+    );
+  }
 });
 
-test('an option absorbed as a target value is a usage error, not a target', () => {
+test('an option absorbed as a value is a usage error, not a value', () => {
   // `--database --corpus` is a missing value, not a database named `--corpus`. Left unrefused it
-  // reaches the echo as a target the user never typed.
-  assert.throws(
-    () => parseArgs(['check', '--project', 'p', '--database', '--corpus']),
-    (error) => /--database needs a value/.test(error.message),
-  );
+  // reaches the echo as a target the user never typed — and on a file path it fails much later,
+  // somewhere that can no longer say which option was written without its argument.
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', '--corpus']), (error) => /--database needs a value/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', '--database', '--corpus', 'c.json']), (error) => /--project needs a value/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus', '--indexes']), (error) => /--corpus needs a value/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'd', '--indexes', '--corpus']), (error) => /--indexes needs a value/.test(error.message));
+});
+
+test('--help and --version sitting where a value belongs are the missing value, not a request', () => {
+  // Scanned ahead of the option loop, `check --database --version` printed the version and exited 0
+  // — a success for a command line that named no database. They are answered inside the loop, so a
+  // token in value position is never read as a request about the binary.
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', '--version']), (error) => /--database needs a value/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', '--help']), (error) => /--database needs a value/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus', '--help']), (error) => /--corpus needs a value/.test(error.message));
+  // Still answered wherever they are genuinely an argument of their own.
+  assert.equal(parseArgs(['check', '--project', 'p', '--help']).kind, 'help');
+  assert.equal(parseArgs(['check', '--version']).kind, 'version');
 });
 
 test('a file path option that was written empty is a usage error', () => {

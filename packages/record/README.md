@@ -75,10 +75,18 @@ alone would not. So the wrong target does not fail loudly; it returns a clean re
 required and neither has a fallback. Credentials still come from ADC: what may not come from ambient
 state is *which database* is measured.
 
-Both halves also have to still mean themselves inside `projects/{project}/databases/{database}`, so a
-segment carrying a slash, a `..`, a control character, or nothing at all is refused rather than
-escaped — the target echoed on stderr has to be the target measured, which is the whole point of
-naming it.
+Both halves also have to still mean themselves inside `projects/{project}/databases/{database}` once
+a URL layer has seen it, so each is checked against an allowlist — letters, digits, `-`, `_`, `.`,
+and parentheses — rather than against a list of things to refuse. That list never converged: a
+slash retargets, and so does a backslash, which is folded into a slash and then resolved, so
+`--database 'throwaway\..\prod'` echoes as itself and would request `prod`. `.` and `..` collapse on
+their own, `?` and `#` end the path, and a newline or a bidi override forges or reorders the very
+line on stderr that is supposed to be the record of what was touched.
+
+The allowlist is deliberately **wider** than Google's own rules for either half — both are really
+just lowercase alphanumerics and hyphens, plus the literal `(default)` — so it cannot be the thing
+that refuses a target you legitimately need. The target echoed on stderr has to be the target
+measured, which is the whole point of naming it.
 
 ## Both ends stay on this machine
 
