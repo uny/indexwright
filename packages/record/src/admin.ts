@@ -136,7 +136,13 @@ export async function listLiveIndexes(
   const parent = indexesParent(target);
   const indexes: LiveCompositeIndex[] = [];
   try {
-    for await (const index of lister.listIndexesAsync({ parent })) {
+    // `autoPaginate: false` changes nothing about the paging and everything about the noise.
+    // `asyncIterate` overwrites the setting with `false` unconditionally and then walks the page
+    // tokens itself, one page at a time as the iterator is consumed — but the client's default call
+    // settings carry `autoPaginate: true`, so leaving it unset makes gax print an
+    // `AutopaginateTrueWarning` to stderr on every run. That line would land beside the one naming
+    // the target, which is the one line `check` asks an operator to read.
+    for await (const index of lister.listIndexesAsync({ parent }, { autoPaginate: false })) {
       // Conveyed rather than converted, and the cast says so. The generated protos type every field
       // of an `Index` as optional, nullable, and — for the enums — possibly numeric, while
       // `LiveCompositeIndex` models the same message as the listings `reconcile` was written

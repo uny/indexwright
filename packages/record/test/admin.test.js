@@ -19,8 +19,8 @@ function lists(...indexes) {
   const seen = [];
   return {
     seen,
-    listIndexesAsync(request) {
-      seen.push(request);
+    listIndexesAsync(request, options) {
+      seen.push({ request, options });
       return (async function* () {
         for (const index of indexes) yield index;
       })();
@@ -39,7 +39,13 @@ test('the listing is asked for across every collection group, under the announce
   // The target is threaded through as the string the run announced, rather than reassembled from a
   // project and a database here: the line an operator is asked to trust and the resource actually
   // listed are then the same string by construction.
-  assert.deepEqual(lister.seen, [{ parent: `${TARGET}/collectionGroups/-` }]);
+  //
+  // `autoPaginate: false` is asserted because it is the value `asyncIterate` forces anyway — it does
+  // not turn paging off, it stops gax printing an `AutopaginateTrueWarning` beside the target line
+  // on every run. Dropped, the paging would be identical and the noise would come back unnoticed.
+  assert.deepEqual(lister.seen, [
+    { request: { parent: `${TARGET}/collectionGroups/-` }, options: { autoPaginate: false } },
+  ]);
 });
 
 test('entries are conveyed rather than classified, including ones this version cannot read', async () => {
