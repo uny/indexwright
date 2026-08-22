@@ -69,16 +69,45 @@ test('check does not read the target out of the environment', () => {
 
 test('every target a real Firestore id can be is accepted', () => {
   // The allowlist has to be wider than Google's own rules, or a required argument with no fallback
-  // has a spelling it refuses and no way around. `(default)` is the case that needs the parentheses.
+  // has a spelling it refuses and no way around. `(default)` is the case that needs the parentheses,
+  // and `google.com:my-app` — the legacy domain-scoped form — is why the project half takes a colon.
   for (const [project, database] of [
     ['acme-prod', '(default)'],
     ['p-1', 'db-7'],
     ['my_project.v2', 'a.b-c'],
     ['abc123', 'x'.repeat(63)],
+    ['google.com:my-app', '(default)'],
   ]) {
     const command = parseArgs(['check', '--project', project, '--database', database]);
     assert.equal(canonicalTarget(command), `projects/${project}/databases/${database}`);
   }
+});
+
+test('the database half does not take the colon the project half does', () => {
+  // `…/databases/{database}` is the last segment before a `:customMethod` suffix, so a colon there
+  // could name an operation rather than a database. Mid-path, in the project, it cannot.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd:exportDocuments']),
+    (error) => /may hold only/.test(error.message),
+  );
+});
+
+test('a refused value is rendered, not reprinted, even where the allowlist is not the filter', () => {
+  // The forgery sweep alone would still pass if `render` were removed, because every value it uses
+  // also fails the allowlist and that message could simply omit the value. The leading-`-` branch is
+  // the one that carries a value into a message without the allowlist having vetted it.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', '-a\u2028b']),
+    (error) =>
+      /--database needs a value/.test(error.message) &&
+      error.message.includes('\\u2028') &&
+      ![...error.message].some((c) => (c.codePointAt(0) ?? 0) < 0x20 || (c.codePointAt(0) ?? 0) > 0x7e),
+  );
+  // Past the BMP the escape is braced, so it stays a single unambiguous escape.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', '-a\u{1f600}b']),
+    (error) => error.message.includes('\\u{1f600}'),
+  );
 });
 
 test('a target segment that would address something else is refused', () => {

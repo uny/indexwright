@@ -31,10 +31,11 @@ again, by its own `corpusVersion`.
   teaches its own silence to be read as an all-clear.
 
   Because that echo is what an operator is asked to trust, each half is checked against an allowlist
-  — letters, digits, `-`, `_`, `.`, and parentheses — rather than against a list of things to refuse.
-  The question a segment has to answer is not whether it is a legal Firestore id but whether it still
-  names what it appears to name once a URL layer has seen it, and refusing the ways it can fail one at
-  a time did not converge: a slash retargets, and so does a backslash, which the WHATWG URL parser
+  — letters, digits, `-`, `_`, `.`, parentheses, and on the project half `:` — rather than against
+  a list of things to refuse. The question a segment has to answer is not whether it is a legal
+  Firestore id but whether it still names what it appears to name once a URL layer has seen it, and
+  refusing the ways it can fail one at a time did not converge: a slash retargets, and so does a
+  backslash, which the WHATWG URL parser
   folds into a slash before resolving dot segments, so `throwaway\..\prod` echoes as itself and would
   request `prod`. `.` and `..` collapse unaided, `?` and `#` end the path and begin a query or a
   fragment, and `%2e%2e` arrives already decoded. On the echo itself, a newline writes a second
@@ -46,7 +47,9 @@ again, by its own `corpusVersion`.
   alphanumerics and hyphens, plus the literal `(default)` — which is the property a blacklist was
   trying to buy: a validator that is merely close refuses valid targets, and for a required argument
   with no fallback that leaves no way to proceed. Being looser than the real rules keeps that while
-  making the answer to "what else gets through" be nothing.
+  making the answer to "what else gets through" be nothing. The colon is why the two halves are not
+  the same set: a legacy domain-scoped project id is spelled `google.com:my-app`, while the database
+  is the last segment before a `:customMethod` suffix, where a colon could name an operation instead.
 
   A value beginning with `-` is refused separately and named as a missing value rather than a
   malformed one, on both the target halves and the file paths: `--database --corpus` is an option

@@ -77,7 +77,8 @@ state is *which database* is measured.
 
 Both halves also have to still mean themselves inside `projects/{project}/databases/{database}` once
 a URL layer has seen it, so each is checked against an allowlist — letters, digits, `-`, `_`, `.`,
-and parentheses — rather than against a list of things to refuse. That list never converged: a
+parentheses, and on the project half `:` — rather than against a list of things to refuse. That
+list never converged: a
 slash retargets, and so does a backslash, which is folded into a slash and then resolved, so
 `--database 'throwaway\..\prod'` echoes as itself and would request `prod`. `.` and `..` collapse on
 their own, `?` and `#` end the path, and a newline or a bidi override forges or reorders the very
@@ -85,8 +86,11 @@ line on stderr that is supposed to be the record of what was touched.
 
 The allowlist is deliberately **wider** than Google's own rules for either half — both are really
 just lowercase alphanumerics and hyphens, plus the literal `(default)` — so it cannot be the thing
-that refuses a target you legitimately need. The target echoed on stderr has to be the target
-measured, which is the whole point of naming it.
+that refuses a target you legitimately need. The colon is why the two halves differ: a legacy
+domain-scoped project id is spelled `google.com:my-app`, while `…/databases/{database}` is the last
+segment before a `:customMethod` suffix, so a colon there could name an operation instead of a
+database. The target echoed on stderr has to be the target measured, which is the whole point of
+naming it.
 
 ## Both ends stay on this machine
 

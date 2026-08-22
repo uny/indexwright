@@ -188,10 +188,10 @@ function parseCheck(options: readonly string[]): Command {
 
     switch (name) {
       case '--project':
-        project = requireSegment(takeValue(), name);
+        project = requireSegment(takeValue(), name, PROJECT_SEGMENT);
         break;
       case '--database':
-        database = requireSegment(takeValue(), name);
+        database = requireSegment(takeValue(), name, DATABASE_SEGMENT);
         break;
       case '--corpus':
         corpus = requirePath(takeValue(), name);
@@ -242,18 +242,31 @@ function parseCheck(options: readonly string[]): Command {
  * deliberately looser than the real rules keeps that, and makes the answer to "what else gets
  * through" be nothing rather than a list that was short by one every time it was read.
  */
-const SEGMENT = /^[A-Za-z0-9_.()-]+$/;
+const DATABASE_SEGMENT = /^[A-Za-z0-9_.()-]+$/;
 
-function requireSegment(value: string, option: string): string {
+/**
+ * The project half additionally allows `:`, which the database half must not.
+ *
+ * A domain-scoped project id — `google.com:my-app`, the legacy App Engine form — is a real value the
+ * Admin API accepts inside `projects/{project}`, and refusing it would be precisely the "merely
+ * close" validator this allowlist exists not to be: `--project` has no fallback, so a spelling it
+ * rejects has no way around. The database half is the last segment before a `:customMethod` suffix,
+ * though — `…/databases/{database}:exportDocuments` — so a `:` there could name an operation rather
+ * than a database, which is the retargeting this guard is for. Mid-path, in the project, it cannot.
+ */
+const PROJECT_SEGMENT = /^[A-Za-z0-9_.:()-]+$/;
+
+function requireSegment(value: string, option: string, allowed: RegExp): string {
   const shown = render(value);
   if (value === '') throw new UsageError(`${option} needs a value`);
   // Not a malformed name but a missing one: the next option, absorbed because the one before it was
   // written without its argument. No id may begin with `-`, so this cannot be a real target.
   if (value.startsWith('-')) throw new UsageError(`${option} needs a value, got the option ${shown}`);
   if (value === '.' || value === '..') throw new UsageError(`${option} cannot be ${shown}`);
-  if (!SEGMENT.test(value)) {
+  if (!allowed.test(value)) {
+    const extra = allowed === PROJECT_SEGMENT ? ', ":"' : '';
     throw new UsageError(
-      `${option} may hold only letters, digits, "-", "_", ".", and parentheses, got ${shown}`,
+      `${option} may hold only letters, digits, "-", "_", "."${extra}, and parentheses, got ${shown}`,
     );
   }
   return value;
@@ -272,6 +285,10 @@ function render(value: string): string {
     const code = character.codePointAt(0) ?? 0;
     if (character === '"' || character === '\\') out += `\\${character}`;
     else if (code >= 0x20 && code <= 0x7e) out += character;
+    // Braced past the BMP: `padStart(4, '0')` would give a five-digit `\uXXXXX`, which is not an
+    // escape at all and reads identically to a BMP escape followed by a digit, so two different
+    // refused values would print the same text.
+    else if (code > 0xffff) out += `\\u{${code.toString(16)}}`;
     else out += `\\u${code.toString(16).padStart(4, '0')}`;
   }
   return `"${out}"`;
