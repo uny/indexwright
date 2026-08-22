@@ -5,6 +5,71 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## Unreleased
+
+### Added
+
+- **`indexwright-record check`**, the verb [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md)
+  §3 names — as its argument surface only. **Replay is not implemented**: the verb parses and
+  validates its target, echoes it, and exits `2`. What lands here is the flag surface (issue #8), so
+  that the adapter and the gating can be written against a target that is already settled.
+
+  **The target is two required flags with no fallback of any kind.** `--project` and `--database` are
+  never read from `GOOGLE_CLOUD_PROJECT`, from a `gcloud config` default, or from the project inside
+  application default credentials. Every one of those resolves to whatever the person running the
+  command last worked against, and a database carrying more indexes than the candidate set answers
+  queries the candidate set alone would not — so the wrong target does not fail loudly, it returns a
+  clean report. That is the whole of issue #8. Credentials still come from ADC, as §3 relies on; what
+  may not come from ambient state is *which database* is measured. Two flags rather than one resource
+  path so the refusal can name the half that is missing, and because the default database is literally
+  called `(default)`.
+
+  The target is echoed to stderr on every run, not only on a failure. It is the one thing about a
+  `check` run that cannot be recovered from the output afterwards, and the mistake it guards against —
+  a real database in place of a throwaway one — is silent by construction. Nothing inspects the name
+  for how production-like it looks: a rule that fires on `prod-sandbox` and stays quiet on `db-7`
+  teaches its own silence to be read as an all-clear.
+
+  Because that echo is what an operator is asked to trust, each half is checked against an allowlist
+  — letters, digits, `-`, `_`, `.`, parentheses, and on the project half `:` — rather than against a
+  list of things to refuse.
+
+  One of the two harms behind that is present now; the other is anticipated, and the difference is
+  worth stating rather than blurring. **Present:** the echo is a line of text, so a segment carrying
+  a newline writes a second well-formed `indexwright-record:` line beside it naming a database nobody
+  targeted, a carriage return or an escape sequence overwrites the real one in place, U+0085 and
+  U+2028 are line breaks to plenty of viewers, and the bidi overrides reorder a name without altering
+  a character of it. None of that depends on anything being requested.
+
+  **Anticipated:** a segment that stops naming what it appears to name once something builds a
+  request out of it. `projects/{project}/databases/{database}` assembled into a URL path is the case
+  this guards against — a backslash is folded to a slash by the WHATWG parser and then resolved, so
+  `throwaway\..\prod` would echo as itself and request `prod`; `.` and `..` collapse unaided; `?` and
+  `#` end the path; `%2e%2e` arrives already decoded. **Whether that path is ever taken is not yet
+  settled**: no Firestore client is a dependency of this package at this version, and over gRPC the
+  resource name is a protobuf string field with no URL parser anywhere near it, so the server would
+  reject these rather than resolve them. The allowlist refuses them either way, on the grounds that
+  the transport is a choice still to be made and this costs nothing to hold.
+
+  The allowlist is deliberately **wider** than Google's rules for either half — both are lowercase
+  alphanumerics and hyphens, plus the literal `(default)` — which is the property a blacklist was
+  trying to buy: a validator that is merely close refuses valid targets, and for a required argument
+  with no fallback that leaves no way to proceed. Being looser than the real rules keeps that while
+  making the answer to "what else gets through" be nothing. The colon is why the two halves are not
+  the same set: a legacy domain-scoped project id is spelled `google.com:my-app`, while the database
+  is the last segment before a `:customMethod` suffix, where a colon could name an operation instead.
+
+  A value beginning with `-` is refused separately and named as a missing value rather than a
+  malformed one, on both the target halves and the file paths: `--database --corpus` is an option
+  absorbed because the one before it was written without its argument, not a database called
+  `--corpus`. `--help` and `--version` are answered while walking the arguments rather than by
+  scanning them ahead, so that one sitting where a value belongs is that same missing value — scanned
+  ahead, `check --database --version` printed the version and exited 0, a success for a command line
+  that named no database.
+
+- `--corpus` and `--indexes` on `check`, defaulting to `firestore.queries.json` (what `record` writes)
+  and `firestore.indexes.json`.
+
 ## [0.4.0] — 2026-08-15
 
 Minor rather than patch, because both ends of the capture proxy are now constrained and the case that

@@ -49,6 +49,56 @@ Options:
       --version           show the version
 ```
 
+## `check` — not yet implemented
+
+`check` replays a corpus against a database that already has the candidate index set applied, and
+reports the queries it cannot serve. It applies nothing and reads only.
+
+**Replay is not implemented in this version.** The verb parses and echoes its target, then exits
+`2`. What it accepts is settled, so a wrapper script can be written against it now; what it does is
+not.
+
+```text
+indexwright-record check --project <id> --database <name> [options]
+
+Options:
+  --project <id>          project holding the database to replay against (required)
+  --database <name>       database within it (required; the default one is named "(default)")
+  --corpus <file>         the corpus to replay (default: firestore.queries.json)
+  --indexes <file>        the candidate index declarations (default: firestore.indexes.json)
+```
+
+**The target is never inferred.** `GOOGLE_CLOUD_PROJECT`, a `gcloud config` default, and the project
+inside application default credentials are all whatever the person running this last worked against
+— and a database carrying *more* indexes than the candidate set answers queries the candidate set
+alone would not. So the wrong target does not fail loudly; it returns a clean report. Both halves are
+required and neither has a fallback. Credentials still come from ADC: what may not come from ambient
+state is *which database* is measured.
+
+Both halves are checked against an allowlist — letters, digits, `-`, `_`, `.`, parentheses, and on
+the project half `:` — rather than against a list of things to refuse.
+
+The harm that exists today is the echo itself: it is a line of text, so a segment carrying a newline
+writes a second well-formed `indexwright-record:` line beside it naming a database nobody targeted,
+and a carriage return overwrites the real one in place. U+0085 and U+2028 are line breaks to plenty
+of viewers, and a bidi override reorders a name without altering a character of it.
+
+The other half is anticipated rather than present. A segment can also stop naming what it appears to
+name once something builds a request out of it — assembled into a URL path, `--database
+'throwaway\..\prod'` would echo as itself and request `prod`, because a backslash is folded into a
+slash and then resolved. **Whether that path is ever taken is not settled**: no Firestore client is a
+dependency of this package yet, and over gRPC a resource name is a protobuf string field that no URL
+parser touches. The allowlist refuses those spellings anyway, since the transport is still a choice
+to be made and holding the line costs nothing.
+
+The allowlist is deliberately **wider** than Google's own rules for either half — both are really
+just lowercase alphanumerics and hyphens, plus the literal `(default)` — so it cannot be the thing
+that refuses a target you legitimately need. The colon is why the two halves differ: a legacy
+domain-scoped project id is spelled `google.com:my-app`, while `…/databases/{database}` is the last
+segment before a `:customMethod` suffix, so a colon there could name an operation instead of a
+database. The target echoed on stderr has to be the target measured, which is the whole point of
+naming it.
+
 ## Both ends stay on this machine
 
 The proxy listens on loopback, and forwards only to an address that reads as being on this machine —
