@@ -21,7 +21,7 @@ import {
 } from './lib/tarball.mjs';
 
 const packageRoot = fileURLToPath(new URL('../packages/record', import.meta.url));
-/** Its one runtime dependency (SPEC §3), installed from this tree so the pair is checked together. */
+/** Its in-repo runtime dependency, installed from this tree so the pair is checked together. */
 const linterRoot = fileURLToPath(new URL('../packages/indexwright', import.meta.url));
 const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
 const checker = createChecker();
@@ -78,7 +78,7 @@ withInstalledTarball(packageRoot, ({ files, consumer }) => {
     'dist/index.js',
     'dist/index.d.ts',
   ]);
-  checkDeclaredDependencies(checker, manifest, ['indexwright']);
+  checkDeclaredDependencies(checker, manifest, ['@google-cloud/firestore', 'indexwright']);
 
   check('the fixture-generating script is not shipped', () => {
     for (const path of files) {

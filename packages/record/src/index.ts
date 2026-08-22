@@ -5,6 +5,13 @@
  * here — `corpusVersion` names it — and these functions are one way to produce and read it.
  */
 
+export {
+  adminLister,
+  AdminError,
+  indexesParent,
+  listLiveIndexes,
+  type IndexLister,
+} from './admin.js';
 export { buildCorpus, CorpusError, parseCorpus, serialiseCorpus, writeCorpus } from './corpus.js';
 export { decodeRunQuery, type DecodeResult } from './decode.js';
 export {

@@ -39,6 +39,17 @@ export const DEFAULT_CORPUS = DEFAULT_OUT;
 export const DEFAULT_INDEXES = 'firestore.indexes.json';
 
 /**
+ * The variable that redirects a Firestore client, whatever it was constructed with.
+ *
+ * Named as a constant because two modules refuse on it and they must refuse on the same thing. It is
+ * also the only one: `@google-cloud/firestore` 9.0.0 reads three variables in all —
+ * `FIRESTORE_PREFER_REST` and `FIRESTORE_ENABLE_TRACING` choose a transport and a diagnostic, and
+ * neither changes which database is addressed — and `google-gax` reads none. So the refusal in
+ * `parseCheck` is the whole of the hole rather than the first of several.
+ */
+export const EMULATOR_REDIRECT = 'FIRESTORE_EMULATOR_HOST';
+
+/**
  * The verb, when one is named.
  *
  * `record` is unnamed for compatibility: `indexwright-record -- npm test` is the shape 0.2.0 through
@@ -48,7 +59,7 @@ export const DEFAULT_INDEXES = 'firestore.indexes.json';
  */
 export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}): Command {
   if (argv.length === 0) throw new UsageError('no command given');
-  if (argv[0] === 'check') return parseCheck(argv.slice(1));
+  if (argv[0] === 'check') return parseCheck(argv.slice(1), env);
 
   // Only before `--`: everything after it belongs to the command being run, and a suite invoked as
   // `-- npm test --help` must not be intercepted here.
@@ -156,7 +167,7 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
  * is missing, and because Firestore's default database is literally called `(default)` — a value a
  * shell needs quoted, which is easier to get right as a short argument of its own.
  */
-function parseCheck(options: readonly string[]): Command {
+function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command {
   let project: string | undefined;
   let database: string | undefined;
   let corpus = DEFAULT_CORPUS;
@@ -209,6 +220,28 @@ function parseCheck(options: readonly string[]): Command {
   // that saying which one is absent is the difference between a fix and a re-read of the usage.
   if (project === undefined) throw new UsageError('--project is required; check does not infer the target');
   if (database === undefined) throw new UsageError('--database is required; the default database is named "(default)"');
+
+  // Refused after the target is known, so the message can name the database that would have been
+  // announced but not measured — which is the whole of what is wrong, and is not obvious from the
+  // variable alone. Refused rather than warned about, and with no override: replaying against an
+  // emulator cannot answer the question `check` asks, because the emulator enforces no composite
+  // index at all, so every query it is handed replays clean.
+  //
+  // Nothing else in this parser consults the environment, deliberately (issue #8). This is not an
+  // exception to that: it is not read as a source of a value, it is refused as a source of one. The
+  // client honours it unconditionally and silently — the target `cli.ts` echoes stays the target
+  // this parser produced, and the request goes elsewhere — so a `check` that ignored it would
+  // announce a real database, measure an emulator, and report full coverage. Same failure class as
+  // #8, arriving after the target is named correctly rather than before (issue #37).
+  const redirect = env[EMULATOR_REDIRECT];
+  if (redirect !== undefined && redirect !== '') {
+    throw new UsageError(
+      `${EMULATOR_REDIRECT} is set to ${render(redirect)}, which redirects the client whatever ` +
+        `target it is given; ${canonicalTarget({ project, database })} would be announced and the ` +
+        'emulator measured, and an emulator enforces no composite indexes, so every query would ' +
+        'replay clean. Unset it to check the named database',
+    );
+  }
 
   return { kind: 'check', project, database, corpus, indexes };
 }
@@ -284,7 +317,7 @@ function requireSegment(value: string, option: string, allowed: RegExp): string 
  * on — so a refusal naming a value that forges a line would forge one itself. Everything outside
  * printable ASCII is escaped rather than emitted.
  */
-function render(value: string): string {
+export function render(value: string): string {
   let out = '';
   for (const character of value) {
     const code = character.codePointAt(0) ?? 0;
@@ -393,6 +426,10 @@ export function usage(): string {
     'application default credentials are not consulted for it: a database carrying more indexes',
     'than the candidate set answers queries the candidate set alone would not, so the wrong target',
     'returns a clean report rather than an error. Credentials still come from ADC.',
+    '',
+    `check refuses to run at all while ${EMULATOR_REDIRECT} is set, with no override. The client`,
+    'honours it whatever target it is given, and an emulator enforces no composite indexes, so the',
+    'named database would be announced and every query would replay clean against the emulator.',
     '',
     'Exit codes:',
     '  the exit code of <command>, so a failing suite still fails',

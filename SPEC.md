@@ -106,6 +106,15 @@ Firestore connection.
   behaviour this whole subsection exists to rule out at the moment it is most likely to occur, which
   is right after a deploy.
 
+  **`check` must refuse to run against an emulator, and must refuse rather than warn.** The emulator
+  enforces no composite index at all, so it answers every replayed query successfully and a run
+  against one reports full coverage having measured nothing. The Firestore client libraries redirect
+  to it whenever `FIRESTORE_EMULATOR_HOST` is set, whatever project and database the client was
+  given, so the redirect is silent by construction: the target named on the command line is still the
+  target reported. That is the same class of fault as a target inferred from ambient state — the
+  wrong answer arrives as a clean report rather than as an error — and it is why the two are settled
+  together. There is no override, because there is nothing an emulator run could answer.
+
 The v0.2/v0.3 split is deliberate: capture is cheap and offline, while the coverage decision is
 delegated to the platform. Reimplementing index matching would risk emitting false
 `FAILED_PRECONDITION` verdicts and blocking development on a rule that is not published.

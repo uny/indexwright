@@ -75,6 +75,13 @@ alone would not. So the wrong target does not fail loudly; it returns a clean re
 required and neither has a fallback. Credentials still come from ADC: what may not come from ambient
 state is *which database* is measured.
 
+**`check` refuses to run while `FIRESTORE_EMULATOR_HOST` is set**, with no override. The client
+honours that variable whatever target it was given, and an emulator enforces no composite index at
+all — so the run would announce the named database, send every query to the emulator, and report
+that the candidate set covers everything. That is the same failure as the wrong target above: the
+wrong answer arrives as a clean report rather than as an error. Unset it to check the named
+database; replaying against an emulator cannot answer the question `check` asks.
+
 Both halves are checked against an allowlist — letters, digits, `-`, `_`, `.`, parentheses, and on
 the project half `:` — rather than against a list of things to refuse.
 
@@ -86,10 +93,9 @@ of viewers, and a bidi override reorders a name without altering a character of 
 The other half is anticipated rather than present. A segment can also stop naming what it appears to
 name once something builds a request out of it — assembled into a URL path, `--database
 'throwaway\..\prod'` would echo as itself and request `prod`, because a backslash is folded into a
-slash and then resolved. **Whether that path is ever taken is not settled**: no Firestore client is a
-dependency of this package yet, and over gRPC a resource name is a protobuf string field that no URL
-parser touches. The allowlist refuses those spellings anyway, since the transport is still a choice
-to be made and holding the line costs nothing.
+slash and then resolved. That is not the path this version takes: the client sends the resource name
+as a protobuf string field over gRPC, where no URL parser touches it. The allowlist refuses those
+spellings anyway, so the guard does not depend on a transport that could change under it.
 
 The allowlist is deliberately **wider** than Google's own rules for either half — both are really
 just lowercase alphanumerics and hyphens, plus the literal `(default)` — so it cannot be the thing

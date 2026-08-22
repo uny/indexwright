@@ -90,7 +90,7 @@ export const UNREADABLE_REASONS = [
   'name-unparseable',
   'query-scope-missing',
   'fields-missing',
-  /** A field carried none of `order`, `arrayConfig`, or `vectorConfig`. */
+  /** A field carried no field path, or none of `order`, `arrayConfig`, and `vectorConfig`. */
   'field-unreadable',
   /** An `apiScope` this version does not compare under. */
   'api-scope-unrecognised',
@@ -336,7 +336,20 @@ function readLive(live: LiveCompositeIndex): ReadableLive | UnreadableIndex {
     // Nullish first, because `fieldDirection` reads `.order` off its argument and would throw
     // rather than reach a fallback — and throwing is the one thing this module must not do, since
     // §3 asks `check` to decline on an entry it cannot read, not to die on it.
-    if (field === null || field === undefined || LOSSY_DIRECTIONS.has(fieldDirection(field))) {
+    //
+    // The field path is checked for the same reason `name` is coerced: `IndexField` declares it
+    // `string` because that is what a declaration carries, while a live entry arrives from a service
+    // whose generated protos type it nullable — and `admin.ts` conveys an entry rather than
+    // coercing one, precisely so the decision lands here. It is load-bearing rather than defensive:
+    // a pathless field is keyed by `canonicalFields` as the string `undefined`, so two of them key
+    // alike and a declaration for a field genuinely named `undefined` would be vouched for by one.
+    if (
+      field === null ||
+      field === undefined ||
+      typeof field.fieldPath !== 'string' ||
+      field.fieldPath === '' ||
+      LOSSY_DIRECTIONS.has(fieldDirection(field))
+    ) {
       // The element itself when it has no `fieldPath` to name, so the detail reports what was
       // observed rather than the `undefined` a missing property would render as.
       return { name, reason: 'field-unreadable', detail: String(field?.fieldPath ?? field) };
