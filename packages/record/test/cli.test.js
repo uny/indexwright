@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseCorpus } from '../dist/index.js';
-import { parseArgs, UsageError } from '../dist/args.js';
+import { canonicalTarget, parseArgs, UsageError } from '../dist/args.js';
 import { run, shouldForward } from '../dist/cli.js';
 
 function collect() {
@@ -40,6 +40,61 @@ test('a run with no command to run is a usage error', () => {
   assert.throws(() => parseArgs(['--out', 'x.json']), UsageError);
   assert.throws(() => parseArgs(['npm', 'test']), (error) => /after "--"/.test(error.message));
   assert.throws(() => parseArgs(['--nope', '--', 'true']), (error) => /unknown option/.test(error.message));
+});
+
+test('check names its target in full, and defaults only the file paths', () => {
+  const command = parseArgs(['check', '--project', 'p-1', '--database', '(default)']);
+  assert.equal(command.kind, 'check');
+  assert.equal(command.project, 'p-1');
+  assert.equal(command.database, '(default)');
+  assert.equal(command.corpus, 'firestore.queries.json');
+  assert.equal(command.indexes, 'firestore.indexes.json');
+  assert.equal(canonicalTarget(command), 'projects/p-1/databases/(default)');
+});
+
+test('check refuses a half-named target, and says which half', () => {
+  assert.throws(() => parseArgs(['check', '--database', 'd']), (error) => /--project is required/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', 'p']), (error) => /--database is required/.test(error.message));
+  assert.throws(() => parseArgs(['check']), UsageError);
+});
+
+test('check does not read the target out of the environment', () => {
+  // The whole of issue #8: a project inherited from a shell is whatever was last worked against,
+  // and a database carrying more indexes than the candidate set reports clean rather than failing.
+  const env = { GOOGLE_CLOUD_PROJECT: 'inherited', FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' };
+  assert.throws(() => parseArgs(['check', '--database', 'd'], env), (error) => /--project is required/.test(error.message));
+  const command = parseArgs(['check', '--project', 'named', '--database', 'd'], env);
+  assert.equal(command.project, 'named');
+});
+
+test('a target segment that would address something else is refused', () => {
+  // Both halves go into `projects/{p}/databases/{d}` verbatim, so a slash silently retargets the
+  // run and an empty segment names the collection rather than a member of it.
+  assert.throws(() => parseArgs(['check', '--project', 'a/b', '--database', 'd']), (error) => /cannot contain/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'a/b']), (error) => /cannot contain/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project=', '--database', 'd']), (error) => /--project needs a value/.test(error.message));
+});
+
+test('check takes its options in either form, and refuses ones it does not have', () => {
+  const command = parseArgs(['check', '--project=p', '--database=d', '--corpus=c.json', '--indexes=i.json']);
+  assert.equal(command.corpus, 'c.json');
+  assert.equal(command.indexes, 'i.json');
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'd', '--nope']), (error) => /unknown option/.test(error.message));
+  assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'd', 'extra']), (error) => /unexpected argument/.test(error.message));
+});
+
+test('check is a verb only as the first word, so a suite of that name still runs', () => {
+  const command = parseArgs(['--', 'check', '--project', 'p']);
+  assert.equal(command.kind, 'record');
+  assert.deepEqual(command.argv, ['check', '--project', 'p']);
+});
+
+test('check prints the target before it could reach a network', async () => {
+  // Printed on every run rather than only on a failure: a real database in place of a throwaway one
+  // is the mistake that produces no error, so the target is the one thing a run has to say out loud.
+  const streams = collect();
+  await run(['check', '--project', 'acme-prod', '--database', '(default)'], streams);
+  assert.match(streams.stderr(), /target projects\/acme-prod\/databases\/\(default\)/);
 });
 
 test('--help and --version report without running anything', async () => {

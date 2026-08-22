@@ -18,14 +18,37 @@ export interface RecordCommand {
   readonly argv: readonly string[];
 }
 
-export type Command = RecordCommand | { kind: 'help' } | { kind: 'version' };
+export interface CheckCommand {
+  readonly kind: 'check';
+  /** The project the replay target lives in. Never resolved from the environment — see `parseCheck`. */
+  readonly project: string;
+  /** The database within it. `(default)` is a name like any other, and has to be written out. */
+  readonly database: string;
+  /** The corpus to replay, as written by `record`. */
+  readonly corpus: string;
+  /** The candidate index declarations the target is supposed to be carrying. */
+  readonly indexes: string;
+}
+
+export type Command = RecordCommand | CheckCommand | { kind: 'help' } | { kind: 'version' };
 
 export const DEFAULT_OUT = 'firestore.queries.json';
 export const DEFAULT_EMULATOR = '127.0.0.1:8080';
 export const ALLOW_REMOTE_EMULATOR = '--allow-remote-emulator';
+export const DEFAULT_CORPUS = DEFAULT_OUT;
+export const DEFAULT_INDEXES = 'firestore.indexes.json';
 
+/**
+ * The verb, when one is named.
+ *
+ * `record` is unnamed for compatibility: `indexwright-record -- npm test` is the shape 0.2.0 through
+ * 0.4.0 shipped, and the family's other CLI names its verb (`indexwright lint`), so a second verb
+ * here arrives as a leading word rather than as a flag. Only the first argument is examined, and
+ * only before `--`, so a suite invoked as `-- ./check` is not mistaken for one.
+ */
 export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}): Command {
   if (argv.length === 0) throw new UsageError('no command given');
+  if (argv[0] === 'check') return parseCheck(argv.slice(1));
 
   // Only before `--`: everything after it belongs to the command being run, and a suite invoked as
   // `-- npm test --help` must not be intercepted here.
@@ -117,6 +140,96 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
 }
 
 /**
+ * `check`'s arguments, with the replay target named outright.
+ *
+ * The target is two required flags and has no default, no environment fallback, and no inference
+ * from the credentials in use (issue #8). `GOOGLE_CLOUD_PROJECT`, a `gcloud config` default, and the
+ * project inside application default credentials all resolve to whatever the person running this
+ * last worked against, which for anyone who has recently touched a real environment is a database
+ * carrying a full index set. Replaying against one of those does not fail loudly; it returns a clean
+ * report, because a database holding more indexes than the candidate set serves queries the
+ * candidate set alone would not. Credentials still come from ADC — that is how a runner is
+ * credentialed, and SPEC §3 relies on it. What may not come from ambient state is *which database*
+ * is measured.
+ *
+ * Two flags rather than one `projects/…/databases/…` because the refusal can then name the half that
+ * is missing, and because Firestore's default database is literally called `(default)` — a value a
+ * shell needs quoted, which is easier to get right as a short argument of its own.
+ */
+function parseCheck(options: readonly string[]): Command {
+  if (options.includes('--help') || options.includes('-h')) return { kind: 'help' };
+
+  let project: string | undefined;
+  let database: string | undefined;
+  let corpus = DEFAULT_CORPUS;
+  let indexes = DEFAULT_INDEXES;
+
+  for (let i = 0; i < options.length; i += 1) {
+    const argument = options[i] as string;
+    if (!argument.startsWith('--')) throw new UsageError(`unexpected argument "${argument}"`);
+
+    const equals = argument.indexOf('=');
+    const name = equals === -1 ? argument : argument.slice(0, equals);
+    const inline = equals === -1 ? null : argument.slice(equals + 1);
+    const takeValue = (): string => {
+      if (inline !== null) return inline;
+      const next = options[i + 1];
+      if (next === undefined) throw new UsageError(`${name} needs a value`);
+      i += 1;
+      return next;
+    };
+
+    switch (name) {
+      case '--project':
+        project = requireSegment(takeValue(), name);
+        break;
+      case '--database':
+        database = requireSegment(takeValue(), name);
+        break;
+      case '--corpus':
+        corpus = takeValue();
+        break;
+      case '--indexes':
+        indexes = takeValue();
+        break;
+      default:
+        throw new UsageError(`unknown option "${name}"`);
+    }
+  }
+
+  // Named separately rather than as "the target is incomplete", because the two are supplied from
+  // different places often enough — a project from a deploy script, a database written by hand —
+  // that saying which one is absent is the difference between a fix and a re-read of the usage.
+  if (project === undefined) throw new UsageError('--project is required; check does not infer the target');
+  if (database === undefined) throw new UsageError('--database is required; the default database is named "(default)"');
+
+  return { kind: 'check', project, database, corpus, indexes };
+}
+
+/**
+ * A project id or database name that will still mean itself inside a resource path.
+ *
+ * Refused rather than escaped: `projects/{project}/databases/{database}` is built from these, so a
+ * value carrying a slash addresses a different resource than the one written on the command line,
+ * and an empty one addresses the collection rather than a member of it. Both are cases where the
+ * target echoed back would not be the target measured, which is the whole point of naming it.
+ *
+ * Deliberately not a full format check. Google's rules for either are longer than this, they differ
+ * between the two, and a validator that is merely close refuses valid targets — which for a required
+ * argument with no fallback leaves no way to proceed.
+ */
+function requireSegment(value: string, option: string): string {
+  if (value === '') throw new UsageError(`${option} needs a value`);
+  if (value.includes('/')) throw new UsageError(`${option} cannot contain "/", got "${value}"`);
+  return value;
+}
+
+/** `projects/{project}/databases/{database}`, the form the Admin API and a report both name it in. */
+export function canonicalTarget(command: Pick<CheckCommand, 'project' | 'database'>): string {
+  return `projects/${command.project}/databases/${command.database}`;
+}
+
+/**
  * The host half of an emulator address, or a usage error naming what was wrong with it.
  *
  * The proxy parses the same string with the same function, so a value this accepts is one it will
@@ -149,6 +262,7 @@ function parsePort(value: string, option: string): number {
 export function usage(): string {
   return [
     'indexwright-record [options] -- <command> [args...]',
+    'indexwright-record check --project <id> --database <name> [options]',
     '',
     'Runs <command> with FIRESTORE_EMULATOR_HOST pointed at a capture proxy in front of the',
     'Firestore emulator, and writes the query shapes it observed as a corpus.',
@@ -168,6 +282,20 @@ export function usage(): string {
     '      --version           show the version',
     '',
     'The proxy always listens on loopback. There is no option to change that.',
+    '',
+    'check replays a corpus against a database that already has the candidate index set applied,',
+    'and reports the queries it cannot serve. It applies nothing and reads only.',
+    '',
+    'Options:',
+    '  --project <id>          project holding the database to replay against (required)',
+    '  --database <name>       database within it (required; the default one is named "(default)")',
+    `  --corpus <file>         the corpus to replay (default: ${DEFAULT_CORPUS})`,
+    `  --indexes <file>        the candidate index declarations (default: ${DEFAULT_INDEXES})`,
+    '',
+    'The target is never inferred. GOOGLE_CLOUD_PROJECT, gcloud config, and the project inside',
+    'application default credentials are not consulted for it: a database carrying more indexes',
+    'than the candidate set answers queries the candidate set alone would not, so the wrong target',
+    'returns a clean report rather than an error. Credentials still come from ADC.',
     '',
     'Exit codes:',
     '  the exit code of <command>, so a failing suite still fails',

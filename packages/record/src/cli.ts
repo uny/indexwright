@@ -4,7 +4,7 @@ import { closeSync, openSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { parseArgs, usage, UsageError } from './args.js';
+import { canonicalTarget, parseArgs, usage, UsageError } from './args.js';
 import { buildCorpus, writeCorpus } from './corpus.js';
 import { startCapture } from './proxy.js';
 import type { Recorder } from './recorder.js';
@@ -37,6 +37,18 @@ export async function run(
   if (command.kind === 'version') {
     streams.out(`${VERSION}\n`);
     return 0;
+  }
+
+  if (command.kind === 'check') {
+    // Said before anything else happens, and on every run rather than only on a failure. It is the
+    // one thing about a `check` run that cannot be recovered from the output afterwards, and the
+    // mistake it guards against — a target that is real rather than throwaway — is silent by
+    // construction (issue #8). A statement of fact, not a judgement: nothing here inspects the name
+    // for how production-like it looks, because a rule that fires on `prod-sandbox` and stays quiet
+    // on `db-7` teaches its own silence to be read as an all-clear.
+    streams.err(`indexwright-record: target ${canonicalTarget(command)}\n`);
+    streams.err('indexwright-record: check is not implemented yet\n');
+    return 2;
   }
 
   let capture;
