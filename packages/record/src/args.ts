@@ -221,19 +221,24 @@ function parseCheck(options: readonly string[]): Command {
  * and an empty one addresses the collection rather than a member of it. Both are cases where the
  * target echoed back would not be the target measured, which is the whole point of naming it.
  *
- * An allowlist, arrived at the hard way. The question a segment has to answer is not "is this a
- * legal Firestore id" but "does this still name what it appears to name once a URL layer has seen
- * it" — and refusing the ways it can fail one at a time does not converge. A slash retargets; so
- * does a backslash, which the WHATWG URL parser folds into a slash before resolving dot segments,
- * so `throwaway\..\prod` echoes as itself and requests `prod`. `.` and `..` collapse on their own.
- * `?` and `#` end the path and begin a query or a fragment. `%2e%2e` arrives already decoded.
+ * An allowlist, arrived at the hard way. Two harms sit behind it, and only one of them is live at
+ * this version — worth keeping straight, because the dead one is the reason to revisit this.
  *
- * And because `cli.ts` prints this path as the one line an operator is asked to trust, anything that
- * can forge a line of it counts as the same failure: a newline writes a second well-formed
- * `indexwright-record:` line beside the real one naming a database nobody targeted, a carriage
- * return or an escape sequence overwrites the real one in place, U+0085 and U+2028 are line breaks
- * to plenty of viewers — and `JSON.stringify` escapes neither — while the bidi overrides reorder a
- * name without altering a character of it.
+ * Live: `cli.ts` prints this path as the one line an operator is asked to trust, and it is a line of
+ * text. A newline writes a second well-formed `indexwright-record:` line beside the real one naming
+ * a database nobody targeted, a carriage return or an escape sequence overwrites the real one in
+ * place, U+0085 and U+2028 are line breaks to plenty of viewers — and `JSON.stringify` escapes
+ * neither — while the bidi overrides reorder a name without altering a character of it. Nothing has
+ * to be requested for any of that.
+ *
+ * Anticipated: a segment that stops naming what it appears to name once a request is built from it.
+ * Assembled into a URL path, a backslash is folded to a slash by the WHATWG parser and then
+ * resolved, so `throwaway\..\prod` would echo as itself and request `prod`; `.` and `..` collapse
+ * unaided; `?` and `#` end the path; `%2e%2e` arrives decoded. This has not been demonstrated
+ * against a real code path and cannot be: nothing here builds a URL, no Firestore client is a
+ * dependency yet, and over gRPC a resource name is a protobuf string field no URL parser sees. It is
+ * refused on the grounds that the transport is still an open choice and holding it costs nothing —
+ * not on the grounds that it has been observed.
  *
  * So the test is inverted. What survives is strictly *wider* than Google's rules for either half —
  * both are lowercase alphanumerics and hyphens, plus the literal `(default)` — which is the property

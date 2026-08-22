@@ -31,17 +31,25 @@ again, by its own `corpusVersion`.
   teaches its own silence to be read as an all-clear.
 
   Because that echo is what an operator is asked to trust, each half is checked against an allowlist
-  — letters, digits, `-`, `_`, `.`, parentheses, and on the project half `:` — rather than against
-  a list of things to refuse. The question a segment has to answer is not whether it is a legal
-  Firestore id but whether it still names what it appears to name once a URL layer has seen it, and
-  refusing the ways it can fail one at a time did not converge: a slash retargets, and so does a
-  backslash, which the WHATWG URL parser
-  folds into a slash before resolving dot segments, so `throwaway\..\prod` echoes as itself and would
-  request `prod`. `.` and `..` collapse unaided, `?` and `#` end the path and begin a query or a
-  fragment, and `%2e%2e` arrives already decoded. On the echo itself, a newline writes a second
-  well-formed `indexwright-record:` line naming a database nobody targeted, a carriage return
-  overwrites the real one in place, U+0085 and U+2028 are line breaks to plenty of viewers, and the
-  bidi overrides reorder a name without altering a character of it.
+  — letters, digits, `-`, `_`, `.`, parentheses, and on the project half `:` — rather than against a
+  list of things to refuse.
+
+  One of the two harms behind that is present now; the other is anticipated, and the difference is
+  worth stating rather than blurring. **Present:** the echo is a line of text, so a segment carrying
+  a newline writes a second well-formed `indexwright-record:` line beside it naming a database nobody
+  targeted, a carriage return or an escape sequence overwrites the real one in place, U+0085 and
+  U+2028 are line breaks to plenty of viewers, and the bidi overrides reorder a name without altering
+  a character of it. None of that depends on anything being requested.
+
+  **Anticipated:** a segment that stops naming what it appears to name once something builds a
+  request out of it. `projects/{project}/databases/{database}` assembled into a URL path is the case
+  this guards against — a backslash is folded to a slash by the WHATWG parser and then resolved, so
+  `throwaway\..\prod` would echo as itself and request `prod`; `.` and `..` collapse unaided; `?` and
+  `#` end the path; `%2e%2e` arrives already decoded. **Whether that path is ever taken is not yet
+  settled**: no Firestore client is a dependency of this package at this version, and over gRPC the
+  resource name is a protobuf string field with no URL parser anywhere near it, so the server would
+  reject these rather than resolve them. The allowlist refuses them either way, on the grounds that
+  the transport is a choice still to be made and this costs nothing to hold.
 
   The allowlist is deliberately **wider** than Google's rules for either half — both are lowercase
   alphanumerics and hyphens, plus the literal `(default)` — which is the property a blacklist was

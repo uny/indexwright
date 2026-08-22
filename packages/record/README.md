@@ -75,14 +75,21 @@ alone would not. So the wrong target does not fail loudly; it returns a clean re
 required and neither has a fallback. Credentials still come from ADC: what may not come from ambient
 state is *which database* is measured.
 
-Both halves also have to still mean themselves inside `projects/{project}/databases/{database}` once
-a URL layer has seen it, so each is checked against an allowlist — letters, digits, `-`, `_`, `.`,
-parentheses, and on the project half `:` — rather than against a list of things to refuse. That
-list never converged: a
-slash retargets, and so does a backslash, which is folded into a slash and then resolved, so
-`--database 'throwaway\..\prod'` echoes as itself and would request `prod`. `.` and `..` collapse on
-their own, `?` and `#` end the path, and a newline or a bidi override forges or reorders the very
-line on stderr that is supposed to be the record of what was touched.
+Both halves are checked against an allowlist — letters, digits, `-`, `_`, `.`, parentheses, and on
+the project half `:` — rather than against a list of things to refuse.
+
+The harm that exists today is the echo itself: it is a line of text, so a segment carrying a newline
+writes a second well-formed `indexwright-record:` line beside it naming a database nobody targeted,
+and a carriage return overwrites the real one in place. U+0085 and U+2028 are line breaks to plenty
+of viewers, and a bidi override reorders a name without altering a character of it.
+
+The other half is anticipated rather than present. A segment can also stop naming what it appears to
+name once something builds a request out of it — assembled into a URL path, `--database
+'throwaway\..\prod'` would echo as itself and request `prod`, because a backslash is folded into a
+slash and then resolved. **Whether that path is ever taken is not settled**: no Firestore client is a
+dependency of this package yet, and over gRPC a resource name is a protobuf string field that no URL
+parser touches. The allowlist refuses those spellings anyway, since the transport is still a choice
+to be made and holding the line costs nothing.
 
 The allowlist is deliberately **wider** than Google's own rules for either half — both are really
 just lowercase alphanumerics and hyphens, plus the literal `(default)` — so it cannot be the thing
