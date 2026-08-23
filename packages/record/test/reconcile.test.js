@@ -311,6 +311,52 @@ test('a nullish entry in the fields array is reported unreadable rather than thr
   ]);
 });
 
+test('a live field carrying no usable path is refused, because every one of them keys alike', () => {
+  // The guard this pins is load-bearing rather than defensive, and the collision is the whole of
+  // why. `IndexField` declares `fieldPath` a `string` because that is what a *declaration* carries,
+  // while a live entry arrives from a service whose generated protos type it nullable — and
+  // `admin.ts` conveys an entry rather than coercing one, precisely so the decision lands here.
+  // Keyed instead of refused, `canonicalFields` renders a missing path as the string `undefined`, so
+  // any two pathless live fields key identically and a declaration for a field genuinely named
+  // `undefined` is vouched for by an index that is not it — a false `identical`, which is the one
+  // verdict SPEC §3 must never reach by accident.
+  const pathless = [
+    { shape: { order: 'ASCENDING' }, detail: '{"order":"ASCENDING"}' },
+    { shape: { fieldPath: null, order: 'ASCENDING' }, detail: '{"fieldPath":null,"order":"ASCENDING"}' },
+    { shape: { fieldPath: '', order: 'ASCENDING' }, detail: '{"fieldPath":"","order":"ASCENDING"}' },
+  ];
+
+  for (const { shape, detail } of pathless) {
+    const result = reconcile(declare(), [live('posts', [shape, asc('__name__')])]);
+    assert.equal(result.verdict, 'indeterminate');
+    // The element serialised, not `[object Object]` and not the empty string: both are what the
+    // earlier `String(field?.fieldPath ?? field)` produced here, and both told an operator only that
+    // some field of some index could not be read.
+    assert.deepEqual(result.unreadable, [
+      { name: named('posts'), reason: 'field-unreadable', detail },
+    ]);
+  }
+
+  // And the collision itself, stated as the property rather than as the mechanism: two live indexes
+  // whose pathless fields differ must not both be answered by one declaration. Refused, neither is
+  // keyed at all, so there is nothing for a declaration to match.
+  const collided = reconcile(
+    declare({
+      collectionGroup: 'posts',
+      queryScope: 'COLLECTION',
+      fields: [{ fieldPath: 'undefined', order: 'ASCENDING' }],
+    }),
+    [
+      live('posts', [{ order: 'ASCENDING' }, asc('__name__')], { id: 'one' }),
+      live('posts', [{ order: 'DESCENDING' }, asc('__name__')], { id: 'two' }),
+    ],
+  );
+  assert.equal(collided.verdict, 'indeterminate');
+  assert.ok(!isVouched(collided));
+  assert.equal(collided.unreadable.length, 2);
+  assert.deepEqual(collided.matched, []);
+});
+
 test('a vector field whose dimension is not a number is refused, like an UNKNOWN direction', () => {
   // `VECTOR(?)` is `fieldDirection`'s other lossy fallback and has the same collision property:
   // every unreadable dimension keys alike. `parse.ts` validates only that `vectorConfig` is an

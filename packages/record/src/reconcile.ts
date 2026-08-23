@@ -350,9 +350,20 @@ function readLive(live: LiveCompositeIndex): ReadableLive | UnreadableIndex {
       field.fieldPath === '' ||
       LOSSY_DIRECTIONS.has(fieldDirection(field))
     ) {
-      // The element itself when it has no `fieldPath` to name, so the detail reports what was
-      // observed rather than the `undefined` a missing property would render as.
-      return { name, reason: 'field-unreadable', detail: String(field?.fieldPath ?? field) };
+      // The element itself when it has no usable `fieldPath` to name it by, so the detail reports
+      // what was observed rather than the `undefined` a missing property would render as.
+      //
+      // `??` is not the test, because the two shapes it would hand back are the two worthless ones:
+      // `''` is nullish to nobody, so an empty path reported itself as nothing at all, and a
+      // pathless object went to `String(field)` and reported itself as `[object Object]`. Both are
+      // the case this branch newly catches, and both told an operator only that some field of some
+      // index could not be read. Serialised, the element names itself.
+      const usable = typeof field?.fieldPath === 'string' && field.fieldPath !== '';
+      return {
+        name,
+        reason: 'field-unreadable',
+        detail: usable ? (field as IndexField).fieldPath : describeField(field),
+      };
     }
   }
 
@@ -391,6 +402,19 @@ function incomparableReason(
     return { reason: 'field-unreadable', detail: `${lossy.fieldPath}:${lossy.direction}` };
   }
   return null;
+}
+
+/**
+ * A field element written back into a decline, when it carried no path to be named by.
+ *
+ * `JSON.stringify` rather than `String`, so an object reports its keys instead of `[object Object]`.
+ * It returns `undefined` for a value it cannot serialise — `undefined` itself, and any of the
+ * non-JSON primitives the generated protos would never send but a hand-built listing might — so the
+ * `String` fallback stays, now reached only by the values it renders usefully.
+ */
+function describeField(field: unknown): string {
+  const serialised = JSON.stringify(field ?? null);
+  return serialised ?? String(field);
 }
 
 function isUnreadable(read: ReadableLive | UnreadableIndex): read is UnreadableIndex {
