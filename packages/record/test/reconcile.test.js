@@ -337,6 +337,21 @@ test('a live field carrying no usable path is refused, because every one of them
     ]);
   }
 
+  // A field this module cannot even *describe* still declines rather than throwing. `readLive`
+  // documents throwing as the one thing it must not do, and describing the decline is a step that
+  // runs only once the decline is decided — so a `JSON.stringify` that threw here would lose the
+  // report at the moment the guard had just worked. A cycle and a BigInt are the two values that
+  // reach that, and `reconcile` is public, so the listing is whatever a caller passes.
+  const cyclic = { order: 'ASCENDING' };
+  cyclic.self = cyclic;
+  for (const undescribable of [cyclic, { fieldPath: 1n, order: 'ASCENDING' }]) {
+    const result = reconcile(declare(), [live('posts', [undescribable, asc('__name__')])]);
+    assert.equal(result.verdict, 'indeterminate');
+    assert.equal(result.unreadable.length, 1);
+    assert.equal(result.unreadable[0].reason, 'field-unreadable');
+    assert.equal(result.unreadable[0].detail, '[object Object]');
+  }
+
   // And the collision itself, stated as the property rather than as the mechanism: two live indexes
   // whose pathless fields differ must not both be answered by one declaration. Refused, neither is
   // keyed at all, so there is nothing for a declaration to match.

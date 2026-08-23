@@ -413,8 +413,21 @@ function incomparableReason(
  * `String` fallback stays, now reached only by the values it renders usefully.
  */
 function describeField(field: unknown): string {
-  const serialised = JSON.stringify(field ?? null);
-  return serialised ?? String(field);
+  try {
+    const serialised = JSON.stringify(field ?? null);
+    return serialised ?? String(field);
+  } catch {
+    // `JSON.stringify` throws on a cycle and on a `BigInt`, and this function is reached from the
+    // one loop in this module that documents throwing as the thing it must not do: §3 asks `check`
+    // to decline on an entry it cannot read, not to die on it, and dying while *describing* why it
+    // declined would be the worst version of that — the guard working and the report lost anyway.
+    //
+    // Not hypothetical for the sake of it. The listing `admin.ts` conveys comes off the wire and is
+    // not cyclic, but `reconcile` is a public export that takes the listing from its caller, so the
+    // input is whatever a caller passes. `Object.prototype.toString` is used rather than `String`
+    // because it reads no user-defined `toString` and so cannot throw a second time.
+    return Object.prototype.toString.call(field);
+  }
 }
 
 function isUnreadable(read: ReadableLive | UnreadableIndex): read is UnreadableIndex {
