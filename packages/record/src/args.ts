@@ -67,19 +67,26 @@ export const DEFAULT_INDEXES = 'firestore.indexes.json';
  * **a variable belongs here when it can silently change which backend answers.** Measured against
  * the installed tree, the rest fall into three groups that the rule excludes.
  *
- * - *Chooses credentials, by design.* `GOOGLE_APPLICATION_CREDENTIALS`, `GCE_METADATA_HOST`,
- *   `GCE_METADATA_IP`, `METADATA_SERVER_DETECTION`, `GOOGLE_CLOUD_QUOTA_PROJECT` (all
- *   `google-auth-library` / `gcp-metadata`). SPEC §3 says credentials come from ADC — that is how a
- *   runner is credentialed and refusing it would leave the verb unrunnable. A principal that cannot
- *   read the target declines loudly, which is the outcome §3 asks for.
- * - *Chooses a project that this code then overrides.* `GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`.
- *   `adminLister` passes `projectId` explicitly and the parent resource name carries the project, so
- *   neither reaches the request. That is issue #8's guarantee, and it is held by construction here
- *   rather than by a refusal.
- * - *Fails loudly, or changes nothing about the answer.* `GOOGLE_API_USE_CLIENT_CERTIFICATE` and
- *   `GOOGLE_API_USE_MTLS_ENDPOINT` (`google-gax`, mTLS: a connection outcome, not a listing),
- *   `FIRESTORE_PREFER_REST` (transport), `FIRESTORE_ENABLE_TRACING`, `GOOGLE_SDK_NODE_LOGGING`,
- *   `DETECT_GCP_RETRIES`, `DEBUG_AUTH` (diagnostics).
+ * - *Chooses which credential authenticates, by design.* `GOOGLE_APPLICATION_CREDENTIALS`,
+ *   `GCE_METADATA_HOST`, `GCE_METADATA_IP`, `METADATA_SERVER_DETECTION` (`google-auth-library` /
+ *   `gcp-metadata`). SPEC §3 says credentials come from ADC — that is how a runner is credentialed
+ *   and refusing it would leave the verb unrunnable. A principal that cannot read the target
+ *   declines loudly, which is the outcome §3 asks for.
+ * - *Names a project that never reaches the resource.* `GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`,
+ *   `GOOGLE_CLOUD_QUOTA_PROJECT`. The first two are what an absent `projectId` would be discovered
+ *   from, and the third only sets `credential.quotaProjectId`, a quota and billing header. None of
+ *   them selects what is listed: `listIndexesAsync` sends the `parent` it is given verbatim and
+ *   routes on it, and that parent is built from the target the operator named. Issue #8's guarantee
+ *   is held there, by the resource name, rather than by any of these.
+ * - *Reaches the same service by another road, or changes nothing about the answer.*
+ *   `GOOGLE_API_USE_CLIENT_CERTIFICATE` and `GOOGLE_API_USE_MTLS_ENDPOINT` (`google-gax`) rewrite
+ *   the host to `firestore.mtls.googleapis.com` — which is Google's Firestore, answering for the
+ *   same resource, so a run that connects there is measuring the target it announced. (Not, as an
+ *   earlier draft of this list had it, a variable that "fails to connect": with a client certificate
+ *   present it connects perfectly well. That it is harmless is the point; *why* it is harmless is
+ *   that the endpoint still serves the named database.) `FIRESTORE_PREFER_REST` (transport),
+ *   `FIRESTORE_ENABLE_TRACING`, `GOOGLE_SDK_NODE_LOGGING`, `DETECT_GCP_RETRIES`, `DEBUG_AUTH`
+ *   (diagnostics).
  *
  * Re-derive this from the packages actually constructed whenever a client is added, rather than
  * extending it from memory. Both previous misses came from reasoning about a client that was not

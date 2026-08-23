@@ -232,12 +232,20 @@ test('the constructed client is bound to the named project, and is a real admin 
     const lister = await adminLister('acme-prod');
     assert.equal(typeof lister.listIndexesAsync, 'function');
 
-    // The whole of why `project` is a parameter, and previously nothing observed it: drop the
-    // `{ projectId }` argument and every assertion above still held, while the client fell back to
-    // resolving a project from `GOOGLE_CLOUD_PROJECT`, a `gcloud` default, or the credentials in
-    // use — the ambient target inference issue #8 closed on the command line. `_opts` is internal,
-    // and is read anyway: it is where the constructor puts this, and an assertion that cannot see
-    // the value cannot pin it.
+    // `project` is a parameter and previously nothing observed it: drop the `{ projectId }`
+    // argument and every assertion above still held, while the client fell back to discovering a
+    // project from `GOOGLE_CLOUD_PROJECT`, a `gcloud` default, or the credentials in use.
+    //
+    // What that would *not* do is change which database is listed, and this assertion should not be
+    // read as claiming otherwise. `listIndexesAsync` sends the `parent` it is given verbatim and
+    // derives its routing header from that same string, so the resource is decided by the target the
+    // operator named and by nothing else — which is where issue #8's guarantee actually lives, and
+    // is why `adminLister`'s own comment says passing this "changes no request". What a discovered
+    // project would change is quieter: the run would authenticate and attribute quota under a
+    // project nobody named, so a failure would be reported against the wrong one. Passed explicitly
+    // so that ambient state decides nothing here either, and pinned so the parameter cannot quietly
+    // become inert. `_opts` is internal, and is read anyway: it is where the constructor puts this,
+    // and an assertion that cannot see the value cannot pin it.
     assert.equal(lister._opts.projectId, 'acme-prod');
 
     // Also pins the interop the types are wrong about: the runtime namespace carries `v1` under

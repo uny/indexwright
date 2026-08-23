@@ -117,10 +117,17 @@ again, by its own `corpusVersion`.
   ADC credential matches and nothing objects. The listing then arrives from another service under the
   announced target's name — the same clean-report failure, by a second route.
 
-  Two further variables in the dependency tree are deliberately *not* refused, and are named here so
-  the next audit starts from a list rather than from scratch: `GOOGLE_API_USE_CLIENT_CERTIFICATE`
-  (mTLS, which fails to connect rather than answering) and `GOOGLE_SDK_NODE_LOGGING` (a diagnostic).
-  Neither can produce a wrong answer quietly, which is the property that decides membership.
+  Other variables in the dependency tree are deliberately *not* refused, and the source comment now
+  carries the worked list. The property that decides membership is whether a variable can *silently
+  change which backend answers* — not whether it touches the client at all. Credentials come from
+  ADC because SPEC §3 says so; the project variables never reach the resource, because
+  `listIndexesAsync` sends the `parent` it is given verbatim; and the mTLS variables reach
+  `firestore.mtls.googleapis.com`, which is Google's Firestore answering for the same database.
+
+  No count is claimed here, deliberately. Two earlier drafts of this entry gave one and both were
+  wrong — the first by surveying `@google-cloud/firestore` when the admin client lives in
+  `@google-cloud/firestore-api`, the second by undercounting the tree by roughly seven. A rule that
+  can be re-applied is worth more than a list that silently rots.
 
 ### Changed
 
