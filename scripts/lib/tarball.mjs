@@ -76,12 +76,14 @@ export function withInstalledTarball(packageRoot, body, options = {}) {
     // credential before the publish step ran. Since the release jobs were split it runs in
     // `verify`, which holds no `id-token` at all — but the flag is not thereby spare. This is the
     // job that packs the tarball the privileged job publishes, so an install script here still
-    // reaches the released bytes. Nothing is fetched from the registry today — `alongside` above
-    // is what keeps it that way — but this is the one install in the release that resolves against
-    // a semver range with no lockfile, so it is the widest of them the day SPEC §3's Firestore
-    // client lands. It costs the check nothing: neither package ships an install script, and what
-    // holds each one's dependency set is its own check — `checkNoRuntimeDependencies` for
-    // `indexwright`, `checkDeclaredDependencies` for `@indexwright/record`.
+    // reaches the released bytes. That day has now come: `@indexwright/record` declares
+    // `@google-cloud/firestore`, so this install *does* reach the registry, *does* resolve a caret
+    // range against whatever is published that morning with no lockfile to pin it, and *does* pull
+    // packages that ship install scripts — `protobufjs` among them. The flag stopped being cheap
+    // insurance and became the thing holding the line, and the check is now network- and
+    // registry-dependent in a way it was not. What still holds each package's declared dependency
+    // set is its own check — `checkNoRuntimeDependencies` for `indexwright`,
+    // `checkDeclaredDependencies` for `@indexwright/record`.
     console.log('installing the tarball…');
     run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball, ...dependencies], {
       cwd: consumer,
