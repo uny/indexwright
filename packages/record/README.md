@@ -16,7 +16,10 @@ code. This is how they get collected.
 npm install --save-dev @indexwright/record
 ```
 
-Node.js 22 or newer. No runtime dependencies.
+Node.js 22 or newer. Two runtime dependencies: `indexwright`, the linter in this repository, and —
+new in this version — `@google-cloud/firestore`, which `check` needs to read a real database and
+which brings the Firestore SDK's own tree with it. It is loaded lazily, on the one path that
+constructs a client, so recording a corpus does not pay for it.
 
 ## Usage
 
@@ -75,12 +78,20 @@ alone would not. So the wrong target does not fail loudly; it returns a clean re
 required and neither has a fallback. Credentials still come from ADC: what may not come from ambient
 state is *which database* is measured.
 
-**`check` refuses to run while `FIRESTORE_EMULATOR_HOST` is set**, with no override. The client
-honours that variable whatever target it was given, and an emulator enforces no composite index at
-all — so the run would announce the named database, send every query to the emulator, and report
-that the candidate set covers everything. That is the same failure as the wrong target above: the
-wrong answer arrives as a clean report rather than as an error. Unset it to check the named
-database; replaying against an emulator cannot answer the question `check` asks.
+**`check` refuses to run while `FIRESTORE_EMULATOR_HOST` or `GOOGLE_CLOUD_UNIVERSE_DOMAIN` is set**,
+with no override. Each redirects the client whatever target it was given, and each leaves the target
+named on the command line as the target reported — so the run would announce the named database and
+measure something else. That is the same failure as the wrong target above: the wrong answer arrives
+as a clean report rather than as an error.
+
+The two redirect to different places, and were found at different times. `FIRESTORE_EMULATOR_HOST`
+points the *data* client at an emulator, which enforces no composite index at all, so every replayed
+query comes back clean and the report says the candidate set covers everything.
+`GOOGLE_CLOUD_UNIVERSE_DOMAIN` points the *admin* client — the one that lists the target's indexes —
+at `firestore.{value}`, so the listing `check` reconciles against arrives from another service; gax
+validates a universe domain, but against its own default rather than against the path the client
+built, so nothing objects. If you run in a sovereign or otherwise non-`googleapis.com` universe,
+`check` cannot answer for it at this version.
 
 Both halves are checked against an allowlist — letters, digits, `-`, `_`, `.`, parentheses, and on
 the project half `:` — rather than against a list of things to refuse.

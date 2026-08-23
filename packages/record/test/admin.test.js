@@ -110,6 +110,44 @@ test('an empty listing is a listing, and a failed one is never an empty listing'
   });
 });
 
+test('a failure the service worded is rendered, not reprinted, and a non-Error still says something', async () => {
+  // The one string on this stream the local machine did not author. A run that has just been pointed
+  // at an unexpected service is exactly when the reply is chosen by whoever answered, so a status
+  // carrying a newline would forge the line naming the target — the harm `render` exists to prevent,
+  // applied to the value that arrives from furthest away.
+  const forging = {
+    listIndexesAsync() {
+      return (async function* () {
+        throw new Error('denied\nindexwright-record: target projects/decoy/databases/(default)');
+      })();
+    },
+  };
+  await assert.rejects(() => listLiveIndexes(TARGET, forging), (error) => {
+    assert.match(error.message, /"denied\\u000aindexwright-record: target projects\/decoy/);
+    // The forged line is text inside a rendered value; it cannot start a line of its own.
+    assert.doesNotMatch(error.message, /\n/);
+    return true;
+  });
+
+  // A rejection that is not an `Error` at all — a plain object or a string off a transport that did
+  // not wrap it. `messageOf`'s other branch: without it the message ends `: undefined`, naming no
+  // cause on the one path SPEC §3 asks to explain why readiness could not be established.
+  const bare = {
+    listIndexesAsync() {
+      return (async function* () {
+        // eslint-disable-next-line no-throw-literal
+        throw 'connection reset';
+      })();
+    },
+  };
+  await assert.rejects(() => listLiveIndexes(TARGET, bare), (error) => {
+    assert.ok(error instanceof AdminError);
+    assert.match(error.message, /"connection reset"/);
+    assert.doesNotMatch(error.message, /undefined/);
+    return true;
+  });
+});
+
 test('a listing that fails part way through is not the part that arrived', async () => {
   // The failure mode auto-pagination exists to prevent, and the one worth pinning: entries already
   // yielded are discarded rather than returned as the set. A page one that arrived and a page two
@@ -126,23 +164,85 @@ test('a listing that fails part way through is not the part that arrived', async
   await assert.rejects(() => listLiveIndexes(TARGET, truncated), AdminError);
 });
 
-test('the client is refused while the emulator variable is set, and is named for the target', async () => {
+/**
+ * Run `body` with `process.env` set as described, and restore it afterwards whatever happens.
+ *
+ * `adminLister` reads `process.env` rather than an injected environment, because that is what the
+ * client reads and a guard that consults a different source can disagree with the thing it guards.
+ * The cost is here: these tests mutate the real environment, so they restore it in a `finally` and
+ * delete keys that were absent rather than setting them back to `undefined` — which would leave the
+ * string `"undefined"` behind and make the next test's guard fire on it.
+ */
+async function withEnv(overrides, body) {
+  const saved = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return await body();
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+const NO_REDIRECTS = { FIRESTORE_EMULATOR_HOST: undefined, GOOGLE_CLOUD_UNIVERSE_DOMAIN: undefined };
+
+test('the client is refused while a redirect variable is set, and is named for the target', async () => {
   // Issue #37, at the layer below the one that reports it. `parseCheck` is where an operator meets
-  // this, and the JavaScript API is public — a caller reaching the adapter directly with the
-  // variable exported would otherwise get the silent redirect the refusal exists to prevent.
-  await assert.rejects(
-    () => adminLister('acme-prod', { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' }),
-    (error) => {
+  // this, and the JavaScript API is public — a caller reaching the adapter directly with a variable
+  // exported would otherwise get the silent redirect the refusal exists to prevent.
+  await withEnv({ ...NO_REDIRECTS, FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' }, async () => {
+    await assert.rejects(() => adminLister('acme-prod'), (error) => {
       assert.ok(error instanceof AdminError);
       assert.match(error.message, /FIRESTORE_EMULATOR_HOST is set to "127\.0\.0\.1:8080"/);
       return true;
-    },
-  );
+    });
+  });
 
-  // Unset and set-to-nothing are the same thing to a client that tests it for truthiness, so they
-  // are the same thing here. This also pins the interop the types are wrong about: the runtime
-  // namespace carries `v1` under `default`, so a client constructed the way the types describe
-  // would be a `TypeError` here rather than a compile error anywhere.
-  const lister = await adminLister('acme-prod', { FIRESTORE_EMULATOR_HOST: '' });
-  assert.equal(typeof lister.listIndexesAsync, 'function');
+  // The second redirect, and the one the first version of this module missed: the admin client does
+  // not read the emulator variable at all, it reads this one, and turns it into `firestore.{value}`
+  // as the service path. Nothing downstream notices — gax validates a universe domain it was never
+  // handed — so the listing arrives from another service under the announced target's name.
+  await withEnv({ ...NO_REDIRECTS, GOOGLE_CLOUD_UNIVERSE_DOMAIN: 'other.example' }, async () => {
+    await assert.rejects(() => adminLister('acme-prod'), (error) => {
+      assert.ok(error instanceof AdminError);
+      assert.match(error.message, /GOOGLE_CLOUD_UNIVERSE_DOMAIN is set to "other\.example"/);
+      return true;
+    });
+  });
+
+  // The guard reads `process.env` and nothing else. Pinned because the bug it replaces was exactly
+  // an argument that let a caller answer the question on the client's behalf: with an `env`
+  // parameter, `adminLister('acme-prod', {})` passed while the ambient variable redirected the
+  // client it then built. There is no second source to disagree with any more, and this fails if
+  // one is reintroduced.
+  await withEnv({ ...NO_REDIRECTS, FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' }, async () => {
+    await assert.rejects(() => adminLister('acme-prod', {}), AdminError);
+  });
+});
+
+test('the constructed client is bound to the named project, and is a real admin client', async () => {
+  // Unset and set-to-nothing are the same thing to a client that tests the emulator variable for
+  // truthiness, so they are the same thing here.
+  await withEnv({ ...NO_REDIRECTS, FIRESTORE_EMULATOR_HOST: '' }, async () => {
+    const lister = await adminLister('acme-prod');
+    assert.equal(typeof lister.listIndexesAsync, 'function');
+
+    // The whole of why `project` is a parameter, and previously nothing observed it: drop the
+    // `{ projectId }` argument and every assertion above still held, while the client fell back to
+    // resolving a project from `GOOGLE_CLOUD_PROJECT`, a `gcloud` default, or the credentials in
+    // use — the ambient target inference issue #8 closed on the command line. `_opts` is internal,
+    // and is read anyway: it is where the constructor puts this, and an assertion that cannot see
+    // the value cannot pin it.
+    assert.equal(lister._opts.projectId, 'acme-prod');
+
+    // Also pins the interop the types are wrong about: the runtime namespace carries `v1` under
+    // `default`, so a client constructed the way the types describe would be a `TypeError` here
+    // rather than a compile error anywhere.
+    assert.equal(lister.constructor.name, 'FirestoreAdminClient');
+  });
 });

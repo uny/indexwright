@@ -19,7 +19,7 @@
  * therefore leaves here as an `AdminError` and never as an empty array.
  */
 
-import { EMULATOR_REDIRECT, render } from './args.js';
+import { redirectReason, render, setRedirect } from './args.js';
 import type { LiveCompositeIndex } from './reconcile.js';
 
 export class AdminError extends Error {
@@ -85,20 +85,24 @@ export function indexesParent(target: string): string {
  * explicitly, so this changes no request; what it changes is that a target the operator did not name
  * cannot be reached through the client's own defaulting either.
  *
- * The emulator variable is refused here as well as in `parseCheck`. `parseCheck` is where an operator
- * gets the message, and this is what makes it a property of the module rather than of one caller —
- * the JavaScript API is public, and a caller reaching this directly with the variable exported would
- * otherwise get exactly the silent redirect issue #37 is about.
+ * The redirect variables are refused here as well as in `parseCheck`. `parseCheck` is where an
+ * operator gets the message; this is what makes the refusal a property of the module rather than of
+ * one caller, since the JavaScript API is public and a caller reaching this directly would otherwise
+ * construct exactly the redirected client issue #37 is about.
+ *
+ * `process.env` is read here rather than an injected environment, and that is the correction rather
+ * than the convention: the client reads `process.env` itself, unconditionally, and a guard that
+ * consults anything else can disagree with the thing it is guarding. With an `env` parameter,
+ * `adminLister('acme-prod', {})` passed the refusal and built a client the ambient environment then
+ * redirected — the guard's own hole, in the shape of the hole it exists to close. The one source the
+ * client reads is the one source this reads. Tests set and restore `process.env` accordingly.
  */
-export async function adminLister(
-  project: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<IndexLister> {
-  const redirect = env[EMULATOR_REDIRECT];
-  if (redirect !== undefined && redirect !== '') {
+export async function adminLister(project: string): Promise<IndexLister> {
+  const variable = setRedirect(process.env);
+  if (variable !== undefined) {
     throw new AdminError(
-      `${EMULATOR_REDIRECT} is set to ${render(redirect)}; check reads a real database and cannot ` +
-        'be pointed at an emulator',
+      `${variable} is set to ${render(process.env[variable] as string)}; check reads the database ` +
+        `it was given, and ${redirectReason(variable)}`,
     );
   }
   // Loaded here rather than at the top of the module, which is what makes this function async. The
@@ -111,7 +115,20 @@ export async function adminLister(
   // `?? module` rather than `.default` outright: the fallback is what a version exporting `v1` as a
   // real named export would land on, and this way that is a no-op rather than a crash.
   const namespace = (module as { default?: AdminNamespace }).default ?? module;
-  return new namespace.v1.FirestoreAdminClient({ projectId: project });
+  // Checked rather than trusted, because `v1` is the one part of this that is not load-bearing for
+  // the package that publishes it: it is `@internal` and `@deprecated`, installed with
+  // `Object.defineProperty`, and so outside the semver promise `^9.0.0` buys. A consumer resolving a
+  // later 9.x that dropped it would otherwise get `Cannot read properties of undefined` out of a
+  // module whose stated contract is that its failures arrive as `AdminError` — a type nobody can
+  // catch for, naming nothing anyone can act on.
+  const admin = namespace.v1?.FirestoreAdminClient;
+  if (admin === undefined) {
+    throw new AdminError(
+      "@google-cloud/firestore did not expose the admin client at `v1.FirestoreAdminClient`; the " +
+        'installed version is likely newer than this package supports',
+    );
+  }
+  return new admin({ projectId: project });
 }
 
 /**
@@ -157,7 +174,14 @@ export async function listLiveIndexes(
     // Wrapped rather than propagated, because what the caller must not do with a failure is treat it
     // as a listing. A missing permission arrives here as well as a broken connection, and SPEC §3
     // asks that a principal which cannot list be told readiness could not be established.
-    throw new AdminError(`could not list the indexes of ${parent}: ${messageOf(error)}`, {
+    // The message is rendered, not interpolated. Everything else written to this stream is — the
+    // target, a refused segment, a redirect variable's value — and this is the one string on it that
+    // the local machine did not author: it is whatever the service at the other end put in a gRPC
+    // status. A `check` that has just been pointed somewhere unexpected is exactly when that matters,
+    // since the reply is then chosen by whoever answered, and a status carrying a newline and
+    // `indexwright-record: target …` would forge the one line an operator is asked to trust. `cause`
+    // keeps the original for a caller that wants the status itself.
+    throw new AdminError(`could not list the indexes of ${parent}: ${render(messageOf(error))}`, {
       cause: error,
     });
   }

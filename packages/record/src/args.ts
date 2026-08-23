@@ -39,15 +39,65 @@ export const DEFAULT_CORPUS = DEFAULT_OUT;
 export const DEFAULT_INDEXES = 'firestore.indexes.json';
 
 /**
- * The variable that redirects a Firestore client, whatever it was constructed with.
+ * The variables that redirect a Firestore client, whatever it was constructed with.
  *
- * Named as a constant because two modules refuse on it and they must refuse on the same thing. It is
- * also the only one: `@google-cloud/firestore` 9.0.0 reads three variables in all —
- * `FIRESTORE_PREFER_REST` and `FIRESTORE_ENABLE_TRACING` choose a transport and a diagnostic, and
- * neither changes which database is addressed — and `google-gax` reads none. So the refusal in
- * `parseCheck` is the whole of the hole rather than the first of several.
+ * Named as constants because two modules refuse on them and they must refuse on the same thing.
+ *
+ * There are two, and the second was nearly missed. `@google-cloud/firestore` 9.0.0 reads three
+ * variables in all — `FIRESTORE_EMULATOR_HOST`, plus `FIRESTORE_PREFER_REST` and
+ * `FIRESTORE_ENABLE_TRACING`, which choose a transport and a diagnostic rather than a database — and
+ * an earlier version of this comment stopped there, concluding that the emulator refusal was the
+ * whole of the hole. It measured the wrong package. `check` constructs `v1.FirestoreAdminClient`,
+ * which lives in `@google-cloud/firestore-api`, and that client reads a variable of its own:
+ * `GOOGLE_CLOUD_UNIVERSE_DOMAIN` becomes `firestore.{value}` as the service path
+ * (`v1/firestore_admin_client.js`, in the constructor).
+ *
+ * It redirects as silently as the emulator variable does, and by a narrower path than it looks.
+ * `google-gax` does validate a universe domain — but against `options.universeDomain`, which the
+ * client does not pass down, so gax defaults *its* copy to `googleapis.com`, compares that to the
+ * `googleapis.com` ordinary ADC reports, finds them equal and raises nothing. The service path it
+ * then dials is the one the client already built from the variable. So the announced target is
+ * still the target reported, and the listing comes from somewhere else entirely — SPEC §3's
+ * clean-report failure, arriving by the same route as the emulator and needing the same answer.
+ *
+ * Two further variables are read in the dependency tree and are deliberately not refused, because
+ * neither can produce a wrong answer quietly: `google-gax` reads `GOOGLE_API_USE_CLIENT_CERTIFICATE`
+ * (mTLS, which fails to connect rather than answering), and `google-logging-utils` reads
+ * `GOOGLE_SDK_NODE_LOGGING` (a diagnostic). Named here so the next reader knows they were looked at
+ * rather than missed.
  */
 export const EMULATOR_REDIRECT = 'FIRESTORE_EMULATOR_HOST';
+
+/** @see EMULATOR_REDIRECT — the second redirect, and the one that took a second look to find. */
+export const UNIVERSE_REDIRECT = 'GOOGLE_CLOUD_UNIVERSE_DOMAIN';
+
+/** Both redirects, in the order they are refused, so the two refusing modules cannot disagree. */
+export const TARGET_REDIRECTS = [EMULATOR_REDIRECT, UNIVERSE_REDIRECT] as const;
+
+/**
+ * Why a set redirect variable makes the run unanswerable, in the words its own refusal uses.
+ *
+ * Shared so `parseCheck` and `adminLister` explain the same variable the same way; each supplies its
+ * own surrounding sentence, because one is talking to an operator and the other to a caller.
+ */
+export function redirectReason(variable: string): string {
+  return variable === EMULATOR_REDIRECT
+    ? 'an emulator enforces no composite indexes, so every query would replay clean'
+    : 'the client dials firestore.{value} instead, so the listing would come from another service';
+}
+
+/** The first redirect variable that is set in `env`, or `undefined` when none is. */
+export function setRedirect(env: NodeJS.ProcessEnv): string | undefined {
+  // Set-to-empty is not set. The two reach that from different directions and both land on "let it
+  // through": the client tests the emulator variable for truthiness, so empty is inert — while an
+  // empty universe domain is *not* coalesced away (`??` does not treat `''` as nullish) and builds
+  // the service path `firestore.`, a name that does not resolve. That is a connection error, which
+  // is the one outcome this whole guard is indifferent to: it fails loudly rather than answering.
+  return TARGET_REDIRECTS.find((variable) => {
+    const value = env[variable];
+    return value !== undefined && value !== '';
+  });
+}
 
 /**
  * The verb, when one is named.
@@ -223,9 +273,9 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
 
   // Refused after the target is known, so the message can name the database that would have been
   // announced but not measured — which is the whole of what is wrong, and is not obvious from the
-  // variable alone. Refused rather than warned about, and with no override: replaying against an
-  // emulator cannot answer the question `check` asks, because the emulator enforces no composite
-  // index at all, so every query it is handed replays clean.
+  // variable alone. Refused rather than warned about, and with no override: neither an emulator nor
+  // another universe can answer the question `check` asks, and a run that cannot answer it must not
+  // produce a report that reads as an answer.
   //
   // Nothing else in this parser consults the environment, deliberately (issue #8). This is not an
   // exception to that: it is not read as a source of a value, it is refused as a source of one. The
@@ -233,13 +283,13 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
   // this parser produced, and the request goes elsewhere — so a `check` that ignored it would
   // announce a real database, measure an emulator, and report full coverage. Same failure class as
   // #8, arriving after the target is named correctly rather than before (issue #37).
-  const redirect = env[EMULATOR_REDIRECT];
-  if (redirect !== undefined && redirect !== '') {
+  const variable = setRedirect(env);
+  if (variable !== undefined) {
     throw new UsageError(
-      `${EMULATOR_REDIRECT} is set to ${render(redirect)}, which redirects the client whatever ` +
-        `target it is given; ${canonicalTarget({ project, database })} would be announced and the ` +
-        'emulator measured, and an emulator enforces no composite indexes, so every query would ' +
-        'replay clean. Unset it to check the named database',
+      `${variable} is set to ${render(env[variable] as string)}, which redirects the client ` +
+        `whatever target it is given; ${canonicalTarget({ project, database })} would be ` +
+        `announced and something else measured, and ${redirectReason(variable)}. Unset it to ` +
+        'check the named database',
     );
   }
 
@@ -427,9 +477,10 @@ export function usage(): string {
     'than the candidate set answers queries the candidate set alone would not, so the wrong target',
     'returns a clean report rather than an error. Credentials still come from ADC.',
     '',
-    `check refuses to run at all while ${EMULATOR_REDIRECT} is set, with no override. The client`,
-    'honours it whatever target it is given, and an emulator enforces no composite indexes, so the',
-    'named database would be announced and every query would replay clean against the emulator.',
+    `check refuses to run at all while ${EMULATOR_REDIRECT} or ${UNIVERSE_REDIRECT} is set, with`,
+    'no override. Each redirects the client whatever target it is given — to an emulator, which',
+    'enforces no composite indexes, or to another universe\'s service — so the named database',
+    'would be announced and something else measured, and the report would read as an answer.',
     '',
     'Exit codes:',
     '  the exit code of <command>, so a failing suite still fails',

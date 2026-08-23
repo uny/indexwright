@@ -85,9 +85,11 @@ again, by its own `corpusVersion`.
   that constructs a client: importing `@indexwright/record` for `parseCorpus` does not pay for a
   Firestore SDK it never touches.
 
-- **`check` refuses to run at all while `FIRESTORE_EMULATOR_HOST` is set**, with no override
-  (issue #37). This is the other half of issue #8 rather than a separate concern. The client honours
-  that variable unconditionally, whatever project and database it was constructed with — so with it
+- **`check` refuses to run at all while a redirect variable is set**, with no override (issue #37).
+  This is the other half of issue #8 rather than a separate concern. `FIRESTORE_EMULATOR_HOST` is the
+  first of the two; `GOOGLE_CLOUD_UNIVERSE_DOMAIN` is the second, and is described below. The data
+  client honours the emulator variable unconditionally, whatever project and database it was
+  constructed with — so with it
   exported, `check` would announce the real database it was given, send every query to the local
   emulator, and, because an emulator enforces no composite index at all, report that the candidate
   set covers everything. The wrong answer arrives as a *clean report* rather than as an error, which
@@ -100,10 +102,40 @@ again, by its own `corpusVersion`.
   `check` asks. The refusal comes after the target is read, so the message can name the database that
   would have been announced and not measured, and the value is escaped the same way the target is —
   it prints beside the line naming the target, so a value that forges a line would forge one. The
-  same refusal guards the adapter itself, for callers reaching the JavaScript API directly.
+  same refusal guards the adapter itself, for callers reaching the JavaScript API directly — reading
+  `process.env`, which is the source the client reads, rather than an environment passed in: a guard
+  that consults a different source than the thing it guards can disagree with it, and this one did.
 
-  `FIRESTORE_EMULATOR_HOST` is the only variable that does this: `@google-cloud/firestore` 9.0.0
-  reads three in total, and the other two choose a transport and a diagnostic rather than a database.
+  **`GOOGLE_CLOUD_UNIVERSE_DOMAIN` is refused on the same terms**, and finding it is the reason this
+  entry does not claim completeness the way an earlier draft did. That draft said the emulator
+  variable was the only one, having measured `@google-cloud/firestore` — which reads three variables,
+  the other two choosing a transport and a diagnostic. It measured the wrong package. `check` lists
+  indexes through `v1.FirestoreAdminClient`, which lives in `@google-cloud/firestore-api` and does
+  not read the emulator variable at all; what it reads is `GOOGLE_CLOUD_UNIVERSE_DOMAIN`, which it
+  turns into `firestore.{value}` as its service path. `google-gax` does validate a universe domain,
+  but against its own default rather than against the path the client already built, so an ordinary
+  ADC credential matches and nothing objects. The listing then arrives from another service under the
+  announced target's name — the same clean-report failure, by a second route.
+
+  Two further variables in the dependency tree are deliberately *not* refused, and are named here so
+  the next audit starts from a list rather than from scratch: `GOOGLE_API_USE_CLIENT_CERTIFICATE`
+  (mTLS, which fails to connect rather than answering) and `GOOGLE_SDK_NODE_LOGGING` (a diagnostic).
+  Neither can produce a wrong answer quietly, which is the property that decides membership.
+
+### Changed
+
+- **`reconcile` declines a live field that carries no usable path**, where it previously keyed one.
+  A live entry whose field arrives with `fieldPath` missing, `null`, or empty is now
+  `field-unreadable` and the verdict is `indeterminate`; before, `canonicalFields` rendered the
+  missing path as the literal string `undefined`, so any two such fields keyed alike and a
+  declaration for a field genuinely named `undefined` could be vouched for by an index that was not
+  it. The declared side already refused these at parse time, so this closes the live half of a guard
+  that was only ever half applied. A caller upgrading sees a previously vouched set become
+  `indeterminate` only if its listing carried such a field, which a real Admin API listing does not.
+
+  `UnreadableIndex.detail` for that reason is now the offending element serialised, rather than
+  `String(field?.fieldPath ?? field)` — which rendered a pathless object as `[object Object]` and an
+  empty path as nothing at all.
 
 ## [0.4.0] — 2026-08-15
 

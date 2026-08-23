@@ -106,14 +106,24 @@ Firestore connection.
   behaviour this whole subsection exists to rule out at the moment it is most likely to occur, which
   is right after a deploy.
 
-  **`check` must refuse to run against an emulator, and must refuse rather than warn.** The emulator
-  enforces no composite index at all, so it answers every replayed query successfully and a run
-  against one reports full coverage having measured nothing. The Firestore client libraries redirect
-  to it whenever `FIRESTORE_EMULATOR_HOST` is set, whatever project and database the client was
-  given, so the redirect is silent by construction: the target named on the command line is still the
-  target reported. That is the same class of fault as a target inferred from ambient state — the
-  wrong answer arrives as a clean report rather than as an error — and it is why the two are settled
-  together. There is no override, because there is nothing an emulator run could answer.
+  **`check` must refuse to run when the environment redirects the client, and must refuse rather
+  than warn.** Two variables do this, and the rule is about the class rather than about either one.
+  `FIRESTORE_EMULATOR_HOST` sends the data client to an emulator, which enforces no composite index
+  at all, so it answers every replayed query successfully and a run against one reports full coverage
+  having measured nothing. `GOOGLE_CLOUD_UNIVERSE_DOMAIN` sends the admin client — the one that lists
+  the target's indexes — to `firestore.{value}`, so the set `check` reconciles against comes from
+  another service. Both redirect whatever project and database the client was given, so both are
+  silent by construction: the target named on the command line is still the target reported. That is
+  the same class of fault as a target inferred from ambient state — the wrong answer arrives as a
+  clean report rather than as an error — and it is why they are settled together. There is no
+  override, because there is nothing a redirected run could answer.
+
+  The list is a floor, not a proof. Membership turns on whether the variable can produce a *wrong
+  answer quietly*: one that fails to connect, or changes only a transport or a diagnostic, does not
+  belong on it. An implementation adding a client is adding the obligation to re-derive the list from
+  the package it actually constructs — the first version of this rule measured the wrong package and
+  missed the second variable entirely, and the reason it missed it is that it reasoned about a client
+  it was not using.
 
 The v0.2/v0.3 split is deliberate: capture is cheap and offline, while the coverage decision is
 delegated to the platform. Reimplementing index matching would risk emitting false

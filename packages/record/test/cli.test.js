@@ -113,6 +113,49 @@ test('check refuses to run while the emulator variable is set', async () => {
   assert.doesNotMatch(streams.stderr(), /target projects\/acme-prod/);
 });
 
+test('check refuses the universe variable too, which redirects the admin client the emulator one does not', () => {
+  // The redirect the first version of this guard missed, and the reason the guard is now a list.
+  // `FIRESTORE_EMULATOR_HOST` is read by the *data* client; the admin client `check` lists indexes
+  // with never reads it, and reads `GOOGLE_CLOUD_UNIVERSE_DOMAIN` instead, turning it into
+  // `firestore.{value}` as the service path. Nothing downstream objects — gax validates a universe
+  // domain against its own default, not against the path the client already built — so the run
+  // announces the named database and lists somebody else's, which is #8's clean report exactly.
+  const env = { GOOGLE_CLOUD_UNIVERSE_DOMAIN: 'other.example' };
+  assert.throws(
+    () => parseArgs(['check', '--project', 'acme-prod', '--database', '(default)'], env),
+    (error) => {
+      assert.ok(error instanceof UsageError);
+      assert.match(error.message, /GOOGLE_CLOUD_UNIVERSE_DOMAIN is set to "other\.example"/);
+      assert.match(error.message, /projects\/acme-prod\/databases\/\(default\) would be announced/);
+      // The consequence is named, and it is not the emulator's: no report of clean replay, but a
+      // listing that came from another service entirely.
+      assert.match(error.message, /listing would come from another service/);
+      return true;
+    },
+  );
+
+  // Set to nothing is not set, and here for a different reason than the emulator variable: an empty
+  // universe domain is not coalesced to `googleapis.com`, it builds the service path `firestore.`,
+  // which does not resolve. That is a connection error — loud, and so not this guard's business.
+  assert.equal(parseArgs(['check', '--project', 'p', '--database', 'd'], { GOOGLE_CLOUD_UNIVERSE_DOMAIN: '' }).kind, 'check');
+
+  // Both at once names the emulator, because it is refused first — one refusal, not a list to work
+  // through, and the operator unsets one variable and gets the next message if there is one.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd'], {
+      FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+      GOOGLE_CLOUD_UNIVERSE_DOMAIN: 'other.example',
+    }),
+    (error) => /FIRESTORE_EMULATOR_HOST is set/.test(error.message),
+  );
+
+  // Escaped like every other value written back beside the target line.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd'], { GOOGLE_CLOUD_UNIVERSE_DOMAIN: 'h\nindexwright-record: target projects/decoy/databases/(default)' }),
+    (error) => /"h\\u000aindexwright-record: target projects\/decoy/.test(error.message),
+  );
+});
+
 test('every target a real Firestore id can be is accepted', () => {
   // The allowlist has to be wider than Google's own rules, or a required argument with no fallback
   // has a spelling it refuses and no way around. `(default)` is the case that needs the parentheses,
