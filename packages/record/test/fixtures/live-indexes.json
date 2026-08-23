@@ -7,11 +7,13 @@
     "declared": "created with no density: `gcloud firestore indexes composite create --collection-group probe --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending`"
   },
   "observations": {
-    "densityIsAlwaysStamped": "An index created with no density comes back SPARSE_ALL, and so does one created with --density density-unspecified: the API normalises rather than echoing. DENSITY_UNSPECIFIED was never returned.",
-    "enumsAreStrings": "v1.FirestoreAdminClient returns state, density, apiScope and queryScope as enum names, identically over gRPC and over `fallback: true`. Not numbers, which `readiness.ts` warns the generated protos can deliver.",
+    "densityIsAlwaysStamped": "An index created with no density comes back SPARSE_ALL, and so does one created with --density density-unspecified: the API normalises rather than echoing. DENSITY_UNSPECIFIED was never returned. Re-observed 2026-08-23: the group created as density-unspecified still lists as SPARSE_ALL.",
+    "enumsAreStrings": "v1.FirestoreAdminClient returns state, density, apiScope and queryScope as enum names, identically over gRPC and over `fallback: true`. Not numbers, which `readiness.ts` warns the generated protos can deliver. Re-observed 2026-08-23 through the adapter, on all three indexes.",
     "sparseAnyAndDenseAreUnreachableHere": "`--density sparse-any` and `--density dense` are refused at creation: 'Indexes with api scope ANY_API does not support SPARSE_ANY density on standard database'. So SPARSE_ALL is the only density a standard native database produces.",
     "uniqueIsEnterpriseOnly": "`--unique` is refused: 'Unique index is only supported in the Enterprise database.' The field is still returned, as false.",
-    "renderingsDiffer": "Only the admin client fills in the fields holding their proto3 default — apiScope, unique, multikey, shardCount. gcloud omits them. That is why an absent apiScope has to count as comparable."
+    "renderingsDiffer": "Only the admin client fills in the fields holding their proto3 default — apiScope, unique, multikey, shardCount. gcloud omits them. That is why an absent apiScope has to count as comparable.",
+    "wildcardListsEveryGroup": "2026-08-23, through `admin.ts` against the same disposable database: the parent `.../collectionGroups/-` returned every composite index in one call, across three different collection groups (probe, probe_sparse_all, probe_density_unspecified). This is the observation the adapter's design rests on — listing group by group would make the observed set a function of the corpus. Paging was not exercised: three entries is one page.",
+    "searchIndexOptionsArrivesNull": "The 2026-08-23 listing carried `searchIndexOptions: null`, which the 2026-08-15 one did not — the same client, eight days later. It is not modelled by `LiveCompositeIndex` and is not compared: it belongs to the MONGODB_COMPATIBLE_API scope that `COMPARABLE_API_SCOPES` already refuses, and null under ANY_API states nothing the canonical key could disagree with. What has not been observed is a non-null one under ANY_API, which would be the `unique`/`multikey`/`shardCount` hole of issue #30 by a fourth route."
   },
   "liveByAdminClient": {
     "fields": [
