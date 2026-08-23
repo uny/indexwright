@@ -60,11 +60,30 @@ export const DEFAULT_INDEXES = 'firestore.indexes.json';
  * still the target reported, and the listing comes from somewhere else entirely — SPEC §3's
  * clean-report failure, arriving by the same route as the emulator and needing the same answer.
  *
- * Two further variables are read in the dependency tree and are deliberately not refused, because
- * neither can produce a wrong answer quietly: `google-gax` reads `GOOGLE_API_USE_CLIENT_CERTIFICATE`
- * (mTLS, which fails to connect rather than answering), and `google-logging-utils` reads
- * `GOOGLE_SDK_NODE_LOGGING` (a diagnostic). Named here so the next reader knows they were looked at
- * rather than missed.
+ * What this list is NOT is a complete census of the environment, and it is worth being blunt about
+ * that, because two successive versions of this comment claimed completeness and both were wrong —
+ * the first missed the universe domain by surveying the wrong package, the second said "two further
+ * variables" when the tree reads at least eleven. The membership rule is what to reason from:
+ * **a variable belongs here when it can silently change which backend answers.** Measured against
+ * the installed tree, the rest fall into three groups that the rule excludes.
+ *
+ * - *Chooses credentials, by design.* `GOOGLE_APPLICATION_CREDENTIALS`, `GCE_METADATA_HOST`,
+ *   `GCE_METADATA_IP`, `METADATA_SERVER_DETECTION`, `GOOGLE_CLOUD_QUOTA_PROJECT` (all
+ *   `google-auth-library` / `gcp-metadata`). SPEC §3 says credentials come from ADC — that is how a
+ *   runner is credentialed and refusing it would leave the verb unrunnable. A principal that cannot
+ *   read the target declines loudly, which is the outcome §3 asks for.
+ * - *Chooses a project that this code then overrides.* `GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`.
+ *   `adminLister` passes `projectId` explicitly and the parent resource name carries the project, so
+ *   neither reaches the request. That is issue #8's guarantee, and it is held by construction here
+ *   rather than by a refusal.
+ * - *Fails loudly, or changes nothing about the answer.* `GOOGLE_API_USE_CLIENT_CERTIFICATE` and
+ *   `GOOGLE_API_USE_MTLS_ENDPOINT` (`google-gax`, mTLS: a connection outcome, not a listing),
+ *   `FIRESTORE_PREFER_REST` (transport), `FIRESTORE_ENABLE_TRACING`, `GOOGLE_SDK_NODE_LOGGING`,
+ *   `DETECT_GCP_RETRIES`, `DEBUG_AUTH` (diagnostics).
+ *
+ * Re-derive this from the packages actually constructed whenever a client is added, rather than
+ * extending it from memory. Both previous misses came from reasoning about a client that was not
+ * the one being built.
  */
 export const EMULATOR_REDIRECT = 'FIRESTORE_EMULATOR_HOST';
 

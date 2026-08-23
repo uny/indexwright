@@ -408,9 +408,13 @@ function incomparableReason(
  * A field element written back into a decline, when it carried no path to be named by.
  *
  * `JSON.stringify` rather than `String`, so an object reports its keys instead of `[object Object]`.
- * It returns `undefined` for a value it cannot serialise — `undefined` itself, and any of the
- * non-JSON primitives the generated protos would never send but a hand-built listing might — so the
- * `String` fallback stays, now reached only by the values it renders usefully.
+ *
+ * The three ways out, since an earlier version of this comment described two of them wrongly and
+ * made the crash below look impossible. `JSON.stringify` *returns* `undefined` only for a symbol or
+ * a function, which is the sole case the `String` fallback serves — not for `undefined` itself,
+ * which `?? null` has already turned into the string `"null"` by the time the call happens. And it
+ * *throws* on a cycle or a `BigInt` rather than returning anything, which is what the `catch` is
+ * for. A non-JSON primitive is therefore not one case but two, landing on opposite branches.
  */
 function describeField(field: unknown): string {
   try {
