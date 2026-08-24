@@ -146,6 +146,26 @@ test('a failure the service worded is rendered, not reprinted, and a non-Error s
     assert.doesNotMatch(error.message, /undefined/);
     return true;
   });
+
+  // A rejection with no route to a primitive at all. `Object.create(null)` has no prototype and so
+  // no `toString`, and `String()` on it throws `Cannot convert object to primitive value` — from
+  // inside the very catch block whose promise is that a failure leaves as an `AdminError` rather
+  // than as a listing. Thrown there, it would replace that `AdminError` with a `TypeError` naming
+  // neither the parent nor the cause, which is the failure this whole path exists to prevent
+  // wearing its own handler's clothes.
+  const hostile = {
+    listIndexesAsync() {
+      return (async function* () {
+        throw Object.create(null);
+      })();
+    },
+  };
+  await assert.rejects(() => listLiveIndexes(TARGET, hostile), (error) => {
+    assert.ok(error instanceof AdminError);
+    assert.match(error.message, /could not list the indexes of projects\/indexwright-probe/);
+    assert.match(error.message, /\[object Object\]/);
+    return true;
+  });
 });
 
 test('a listing that fails part way through is not the part that arrived', async () => {

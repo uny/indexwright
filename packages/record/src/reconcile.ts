@@ -410,15 +410,20 @@ function incomparableReason(
  * `JSON.stringify` rather than `String`, so an object reports its keys instead of `[object Object]`.
  *
  * The three ways out, since an earlier version of this comment described two of them wrongly and
- * made the crash below look impossible. `JSON.stringify` *returns* `undefined` only for a symbol or
- * a function, which is the sole case the `String` fallback serves — not for `undefined` itself,
- * which `?? null` has already turned into the string `"null"` by the time the call happens. And it
- * *throws* on a cycle or a `BigInt` rather than returning anything, which is what the `catch` is
- * for. A non-JSON primitive is therefore not one case but two, landing on opposite branches.
+ * made the crash below look impossible. `JSON.stringify` *returns* `undefined` for `undefined`
+ * itself and for a symbol or a function, which is what the `String` fallback serves — rendering
+ * them `"undefined"`, `"Symbol(x)"`, `"() => {}"`. And it *throws* on a cycle or a `BigInt` rather
+ * than returning anything, which is what the `catch` is for. A non-JSON value is therefore not one
+ * case but two, landing on opposite branches.
  */
 function describeField(field: unknown): string {
   try {
-    const serialised = JSON.stringify(field ?? null);
+    // `field` directly, not `field ?? null`. The coalesce was a reflex and it cost a distinction:
+    // it turned an `undefined` element into the string `"null"`, so the two nullish shapes the loop
+    // above rejects reported themselves identically — and `String(field?.fieldPath ?? field)`, the
+    // expression this replaced, did tell them apart. Undefined survives to `JSON.stringify`, which
+    // returns `undefined` for it, and the `String` fallback below renders it as `"undefined"`.
+    const serialised = JSON.stringify(field);
     return serialised ?? String(field);
   } catch {
     // `JSON.stringify` throws on a cycle and on a `BigInt`, and this function is reached from the

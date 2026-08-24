@@ -324,6 +324,13 @@ test('a live field carrying no usable path is refused, because every one of them
     { shape: { order: 'ASCENDING' }, detail: '{"order":"ASCENDING"}' },
     { shape: { fieldPath: null, order: 'ASCENDING' }, detail: '{"fieldPath":null,"order":"ASCENDING"}' },
     { shape: { fieldPath: '', order: 'ASCENDING' }, detail: '{"fieldPath":"","order":"ASCENDING"}' },
+    // The two nullish elements report themselves apart. They are both rejected by the same clause
+    // and it would be easy to render them alike — coalescing the element before serialising it does
+    // exactly that, turning `undefined` into `"null"` — but "the array had a hole" and "the array
+    // held an explicit null" are different observations about the listing, and the detail is the
+    // only place the difference survives.
+    { shape: undefined, detail: 'undefined' },
+    { shape: null, detail: 'null' },
   ];
 
   for (const { shape, detail } of pathless) {
