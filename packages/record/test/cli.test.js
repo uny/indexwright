@@ -61,10 +61,99 @@ test('check refuses a half-named target, and says which half', () => {
 test('check does not read the target out of the environment', () => {
   // The whole of issue #8: a project inherited from a shell is whatever was last worked against,
   // and a database carrying more indexes than the candidate set reports clean rather than failing.
-  const env = { GOOGLE_CLOUD_PROJECT: 'inherited', FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' };
+  const env = { GOOGLE_CLOUD_PROJECT: 'inherited', GCLOUD_PROJECT: 'inherited-too' };
   assert.throws(() => parseArgs(['check', '--database', 'd'], env), (error) => /--project is required/.test(error.message));
   const command = parseArgs(['check', '--project', 'named', '--database', 'd'], env);
   assert.equal(command.project, 'named');
+});
+
+test('check refuses to run while the emulator variable is set', async () => {
+  // Issue #37, and the other half of #8 rather than a separate concern: #8 closed the case where the
+  // target is inferred, and this is the one where it is named correctly and then quietly not used.
+  // The client honours the variable whatever it was constructed with, and an emulator enforces no
+  // composite index at all — so the run would announce the named database and report that the
+  // candidate set covers every query, having measured nothing.
+  const env = { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' };
+  assert.throws(
+    () => parseArgs(['check', '--project', 'acme-prod', '--database', '(default)'], env),
+    (error) => {
+      assert.ok(error instanceof UsageError);
+      assert.match(error.message, /FIRESTORE_EMULATOR_HOST is set to "127\.0\.0\.1:8080"/);
+      // The target is in the message because the variable alone does not say what is wrong: what is
+      // wrong is that this database would be announced and a different one measured.
+      assert.match(error.message, /projects\/acme-prod\/databases\/\(default\) would be announced/);
+      return true;
+    },
+  );
+
+  // Set to nothing is not set: a client tests it for truthiness, so refusing it here would refuse a
+  // shell that exports the variable empty to disable exactly this redirect.
+  assert.equal(parseArgs(['check', '--project', 'p', '--database', 'd'], { FIRESTORE_EMULATOR_HOST: '' }).kind, 'check');
+
+  // Refused after the command line is read, so the message an operator gets first is the one about
+  // what they typed. Fixing the environment for a half-named target would only earn the other error.
+  assert.throws(() => parseArgs(['check', '--database', 'd'], env), (error) => /--project is required/.test(error.message));
+  // And the questions that reach no database are still answered.
+  assert.equal(parseArgs(['check', '--help'], env).kind, 'help');
+  assert.equal(parseArgs(['check', '--version'], env).kind, 'version');
+
+  // The value is written back with the same escaping the target gets, and for the same reason: this
+  // message is printed beside the line naming the target, so a value forging a line would forge one.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd'], { FIRESTORE_EMULATOR_HOST: 'h\nindexwright-record: target projects/decoy/databases/(default)' }),
+    // Escaped as `\\u000a` rather than as `\\n`: `render` writes every non-printable back as its
+    // code point, so the forged line arrives as text that cannot itself break a line.
+    (error) => /"h\\u000aindexwright-record: target projects\/decoy/.test(error.message),
+  );
+
+  // End to end, it is exit 2 and the refusal on stderr — not a run that reaches a client.
+  const streams = collect();
+  assert.equal(await run(['check', '--project', 'acme-prod', '--database', '(default)'], streams, env), 2);
+  assert.match(streams.stderr(), /FIRESTORE_EMULATOR_HOST is set/);
+  assert.doesNotMatch(streams.stderr(), /target projects\/acme-prod/);
+});
+
+test('check refuses the universe variable too, which redirects the admin client the emulator one does not', () => {
+  // The redirect the first version of this guard missed, and the reason the guard is now a list.
+  // `FIRESTORE_EMULATOR_HOST` is read by the *data* client; the admin client `check` lists indexes
+  // with never reads it, and reads `GOOGLE_CLOUD_UNIVERSE_DOMAIN` instead, turning it into
+  // `firestore.{value}` as the service path. Nothing downstream objects — gax validates a universe
+  // domain against its own default, not against the path the client already built — so the run
+  // announces the named database and lists somebody else's, which is #8's clean report exactly.
+  const env = { GOOGLE_CLOUD_UNIVERSE_DOMAIN: 'other.example' };
+  assert.throws(
+    () => parseArgs(['check', '--project', 'acme-prod', '--database', '(default)'], env),
+    (error) => {
+      assert.ok(error instanceof UsageError);
+      assert.match(error.message, /GOOGLE_CLOUD_UNIVERSE_DOMAIN is set to "other\.example"/);
+      assert.match(error.message, /projects\/acme-prod\/databases\/\(default\) would be announced/);
+      // The consequence is named, and it is not the emulator's: no report of clean replay, but a
+      // listing that came from another service entirely.
+      assert.match(error.message, /listing would come from another service/);
+      return true;
+    },
+  );
+
+  // Set to nothing is not set, and here for a different reason than the emulator variable: an empty
+  // universe domain is not coalesced to `googleapis.com`, it builds the service path `firestore.`,
+  // which does not resolve. That is a connection error — loud, and so not this guard's business.
+  assert.equal(parseArgs(['check', '--project', 'p', '--database', 'd'], { GOOGLE_CLOUD_UNIVERSE_DOMAIN: '' }).kind, 'check');
+
+  // Both at once names the emulator, because it is refused first — one refusal, not a list to work
+  // through, and the operator unsets one variable and gets the next message if there is one.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd'], {
+      FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+      GOOGLE_CLOUD_UNIVERSE_DOMAIN: 'other.example',
+    }),
+    (error) => /FIRESTORE_EMULATOR_HOST is set/.test(error.message),
+  );
+
+  // Escaped like every other value written back beside the target line.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd'], { GOOGLE_CLOUD_UNIVERSE_DOMAIN: 'h\nindexwright-record: target projects/decoy/databases/(default)' }),
+    (error) => /"h\\u000aindexwright-record: target projects\/decoy/.test(error.message),
+  );
 });
 
 test('every target a real Firestore id can be is accepted', () => {
@@ -192,18 +281,18 @@ test('the help does not promise a replay the verb cannot run yet', async () => {
   // The two have to move together: the exit-2 stub below and this line are the same claim, and a
   // usage that describes working behaviour is the one thing a reader cannot check against the code.
   const streams = collect();
-  assert.equal(await run(['check', '--help'], streams), 0);
+  assert.equal(await run(['check', '--help'], streams, {}), 0);
   assert.match(streams.stdout(), /Replay is not implemented yet/);
   // `-h` is documented as check's alias and is answered before the option loop, which would
   // otherwise reject it for not starting with `--`.
   const short = collect();
-  assert.equal(await run(['check', '-h'], short), 0);
+  assert.equal(await run(['check', '-h'], short, {}), 0);
   assert.match(short.stdout(), /Replay is not implemented yet/);
 });
 
 test('check answers --version, so the flag does not stop working once a verb is named', async () => {
   const streams = collect();
-  assert.equal(await run(['check', '--version'], streams), 0);
+  assert.equal(await run(['check', '--version'], streams, {}), 0);
   assert.match(streams.stdout(), /^\d+\.\d+\.\d+/);
 });
 
@@ -213,7 +302,7 @@ test('check prints the target before it could reach a network, and exits non-zer
   const streams = collect();
   // The exit code is the half a CI step branches on. Unasserted, a stub that regressed to `return 0`
   // would report a replay that never ran as a clean one — the silent pass the verb exists to prevent.
-  assert.equal(await run(['check', '--project', 'acme-prod', '--database', '(default)'], streams), 2);
+  assert.equal(await run(['check', '--project', 'acme-prod', '--database', '(default)'], streams, {}), 2);
   assert.match(streams.stderr(), /target projects\/acme-prod\/databases\/\(default\)/);
   assert.match(streams.stderr(), /check is not implemented yet/);
 });

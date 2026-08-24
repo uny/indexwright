@@ -45,11 +45,11 @@ again, by its own `corpusVersion`.
   request out of it. `projects/{project}/databases/{database}` assembled into a URL path is the case
   this guards against — a backslash is folded to a slash by the WHATWG parser and then resolved, so
   `throwaway\..\prod` would echo as itself and request `prod`; `.` and `..` collapse unaided; `?` and
-  `#` end the path; `%2e%2e` arrives already decoded. **Whether that path is ever taken is not yet
-  settled**: no Firestore client is a dependency of this package at this version, and over gRPC the
-  resource name is a protobuf string field with no URL parser anywhere near it, so the server would
-  reject these rather than resolve them. The allowlist refuses them either way, on the grounds that
-  the transport is a choice still to be made and this costs nothing to hold.
+  `#` end the path; `%2e%2e` arrives already decoded. That path is **not** the one this version
+  takes: the client is now a dependency, and it sends the resource name as a protobuf string field
+  over gRPC with no URL parser anywhere near it, so the server rejects these rather than resolves
+  them. The allowlist refuses them regardless, which costs nothing and stops the guard from being a
+  function of a transport that could change under it.
 
   The allowlist is deliberately **wider** than Google's rules for either half — both are lowercase
   alphanumerics and hyphens, plus the literal `(default)` — which is the property a blacklist was
@@ -69,6 +69,80 @@ again, by its own `corpusVersion`.
 
 - `--corpus` and `--indexes` on `check`, defaulting to `firestore.queries.json` (what `record` writes)
   and `firestore.indexes.json`.
+
+- **The Firestore Admin adapter** — `listLiveIndexes`, `adminLister`, `indexesParent`, `AdminError` —
+  which asks a database for its composite indexes and hands the listing to `ReadinessGate` and
+  `reconcile`. It is one call to `projects.databases.collectionGroups.indexes.list`, across every
+  collection group at once, and it classifies nothing: an unrecognised state, a numeric enum, an
+  unreadable field are all conveyed to the modules whose job it is to decline on them. What it does
+  own is the difference between *listed and empty* and *could not list* — a failure leaves it as an
+  `AdminError` and never as an empty array, because `[]` means "observed, and empty" to everything
+  downstream. `listIndexesAsync` follows the page tokens, so a partial listing cannot be mistaken
+  for a set.
+
+  This adds the package's first non-repository runtime dependency, `@google-cloud/firestore`, which
+  covers both the admin client and the replay client to come. It is loaded lazily, on the one path
+  that constructs a client: importing `@indexwright/record` for `parseCorpus` does not pay for a
+  Firestore SDK it never touches.
+
+- **`check` refuses to run at all while a redirect variable is set**, with no override (issue #37).
+  This is the other half of issue #8 rather than a separate concern. `FIRESTORE_EMULATOR_HOST` is the
+  first of the two; `GOOGLE_CLOUD_UNIVERSE_DOMAIN` is the second, and is described below. The data
+  client honours the emulator variable unconditionally, whatever project and database it was
+  constructed with — so with it
+  exported, `check` would announce the real database it was given, send every query to the local
+  emulator, and, because an emulator enforces no composite index at all, report that the candidate
+  set covers everything. The wrong answer arrives as a *clean report* rather than as an error, which
+  is exactly what #8 was about; #8 closed the case where the target is inferred, and this closes the
+  one where it is named correctly and then quietly not used. It is not a contrived setup:
+  `indexwright-record` exports the variable into the suite it runs, and it lives in plenty of shell
+  profiles.
+
+  There is no `--allow-emulator`, because replaying against an emulator cannot answer the question
+  `check` asks. The refusal comes after the target is read, so the message can name the database that
+  would have been announced and not measured, and the value is escaped the same way the target is —
+  it prints beside the line naming the target, so a value that forges a line would forge one. The
+  same refusal guards the adapter itself, for callers reaching the JavaScript API directly — reading
+  `process.env`, which is the source the client reads, rather than an environment passed in: a guard
+  that consults a different source than the thing it guards can disagree with it, and this one did.
+
+  **`GOOGLE_CLOUD_UNIVERSE_DOMAIN` is refused on the same terms**, and finding it is the reason this
+  entry does not claim completeness the way an earlier draft did. That draft said the emulator
+  variable was the only one, having measured `@google-cloud/firestore` — which reads three variables,
+  the other two choosing a transport and a diagnostic. It measured the wrong package. `check` lists
+  indexes through `v1.FirestoreAdminClient`, which lives in `@google-cloud/firestore-api` and does
+  not read the emulator variable at all; what it reads is `GOOGLE_CLOUD_UNIVERSE_DOMAIN`, which it
+  turns into `firestore.{value}` as its service path. `google-gax` does validate a universe domain,
+  but against its own default rather than against the path the client already built, so an ordinary
+  ADC credential matches and nothing objects. The listing then arrives from another service under the
+  announced target's name — the same clean-report failure, by a second route.
+
+  Other variables in the dependency tree are deliberately *not* refused, and the source comment now
+  carries the worked list. The property that decides membership is whether a variable can *silently
+  change which backend answers* — not whether it touches the client at all. Credentials come from
+  ADC because SPEC §3 says so; the project variables never reach the resource, because
+  `listIndexesAsync` sends the `parent` it is given verbatim; and the mTLS variables reach
+  `firestore.mtls.googleapis.com`, which is Google's Firestore answering for the same database.
+
+  No count is claimed here, deliberately. Two earlier drafts of this entry gave one and both were
+  wrong — the first by surveying `@google-cloud/firestore` when the admin client lives in
+  `@google-cloud/firestore-api`, the second by undercounting the tree by roughly seven. A rule that
+  can be re-applied is worth more than a list that silently rots.
+
+### Changed
+
+- **`reconcile` declines a live field that carries no usable path**, where it previously keyed one.
+  A live entry whose field arrives with `fieldPath` missing, `null`, or empty is now
+  `field-unreadable` and the verdict is `indeterminate`; before, `canonicalFields` rendered the
+  missing path as the literal string `undefined`, so any two such fields keyed alike and a
+  declaration for a field genuinely named `undefined` could be vouched for by an index that was not
+  it. The declared side already refused these at parse time, so this closes the live half of a guard
+  that was only ever half applied. A caller upgrading sees a previously vouched set become
+  `indeterminate` only if its listing carried such a field, which a real Admin API listing does not.
+
+  `UnreadableIndex.detail` for that reason is now the offending element serialised, rather than
+  `String(field?.fieldPath ?? field)` — which rendered a pathless object as `[object Object]` and an
+  empty path as nothing at all.
 
 ## [0.4.0] — 2026-08-15
 

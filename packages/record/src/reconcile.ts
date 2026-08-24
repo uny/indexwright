@@ -90,7 +90,7 @@ export const UNREADABLE_REASONS = [
   'name-unparseable',
   'query-scope-missing',
   'fields-missing',
-  /** A field carried none of `order`, `arrayConfig`, or `vectorConfig`. */
+  /** A field carried no field path, or none of `order`, `arrayConfig`, and `vectorConfig`. */
   'field-unreadable',
   /** An `apiScope` this version does not compare under. */
   'api-scope-unrecognised',
@@ -336,10 +336,34 @@ function readLive(live: LiveCompositeIndex): ReadableLive | UnreadableIndex {
     // Nullish first, because `fieldDirection` reads `.order` off its argument and would throw
     // rather than reach a fallback — and throwing is the one thing this module must not do, since
     // §3 asks `check` to decline on an entry it cannot read, not to die on it.
-    if (field === null || field === undefined || LOSSY_DIRECTIONS.has(fieldDirection(field))) {
-      // The element itself when it has no `fieldPath` to name, so the detail reports what was
-      // observed rather than the `undefined` a missing property would render as.
-      return { name, reason: 'field-unreadable', detail: String(field?.fieldPath ?? field) };
+    //
+    // The field path is checked for the same reason `name` is coerced: `IndexField` declares it
+    // `string` because that is what a declaration carries, while a live entry arrives from a service
+    // whose generated protos type it nullable — and `admin.ts` conveys an entry rather than
+    // coercing one, precisely so the decision lands here. It is load-bearing rather than defensive:
+    // a pathless field is keyed by `canonicalFields` as the string `undefined`, so two of them key
+    // alike and a declaration for a field genuinely named `undefined` would be vouched for by one.
+    if (
+      field === null ||
+      field === undefined ||
+      typeof field.fieldPath !== 'string' ||
+      field.fieldPath === '' ||
+      LOSSY_DIRECTIONS.has(fieldDirection(field))
+    ) {
+      // The element itself when it has no usable `fieldPath` to name it by, so the detail reports
+      // what was observed rather than the `undefined` a missing property would render as.
+      //
+      // `??` is not the test, because the two shapes it would hand back are the two worthless ones:
+      // `''` is nullish to nobody, so an empty path reported itself as nothing at all, and a
+      // pathless object went to `String(field)` and reported itself as `[object Object]`. Both are
+      // the case this branch newly catches, and both told an operator only that some field of some
+      // index could not be read. Serialised, the element names itself.
+      const usable = typeof field?.fieldPath === 'string' && field.fieldPath !== '';
+      return {
+        name,
+        reason: 'field-unreadable',
+        detail: usable ? (field as IndexField).fieldPath : describeField(field),
+      };
     }
   }
 
@@ -378,6 +402,36 @@ function incomparableReason(
     return { reason: 'field-unreadable', detail: `${lossy.fieldPath}:${lossy.direction}` };
   }
   return null;
+}
+
+/**
+ * A field element written back into a decline, when it carried no path to be named by.
+ *
+ * `JSON.stringify` rather than `String`, so an object reports its keys instead of `[object Object]`.
+ *
+ * The three ways out, since an earlier version of this comment described two of them wrongly and
+ * made the crash below look impossible. `JSON.stringify` *returns* `undefined` only for a symbol or
+ * a function, which is the sole case the `String` fallback serves — not for `undefined` itself,
+ * which `?? null` has already turned into the string `"null"` by the time the call happens. And it
+ * *throws* on a cycle or a `BigInt` rather than returning anything, which is what the `catch` is
+ * for. A non-JSON primitive is therefore not one case but two, landing on opposite branches.
+ */
+function describeField(field: unknown): string {
+  try {
+    const serialised = JSON.stringify(field ?? null);
+    return serialised ?? String(field);
+  } catch {
+    // `JSON.stringify` throws on a cycle and on a `BigInt`, and this function is reached from the
+    // one loop in this module that documents throwing as the thing it must not do: §3 asks `check`
+    // to decline on an entry it cannot read, not to die on it, and dying while *describing* why it
+    // declined would be the worst version of that — the guard working and the report lost anyway.
+    //
+    // Not hypothetical for the sake of it. The listing `admin.ts` conveys comes off the wire and is
+    // not cyclic, but `reconcile` is a public export that takes the listing from its caller, so the
+    // input is whatever a caller passes. `Object.prototype.toString` is used rather than `String`
+    // because it reads no user-defined `toString` and so cannot throw a second time.
+    return Object.prototype.toString.call(field);
+  }
 }
 
 function isUnreadable(read: ReadableLive | UnreadableIndex): read is UnreadableIndex {
