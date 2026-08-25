@@ -364,9 +364,9 @@ test('a live field carrying no usable path is refused, because every one of them
   // One level below that. `Object.prototype.toString` is what the loop above falls back to, and it
   // is not the total function this file's comment used to claim: it looks up `Symbol.toStringTag`,
   // so a proxy trap or a throwing getter defeats the fallback exactly as it defeats `JSON.stringify`
-  // — and the decline is lost to its own describer on the second try instead of the first. The
-  // literal is also the one rendering here that no caller can influence, which is the other half:
-  // a `Symbol.toStringTag` is caller-supplied text, and `[object <that>]` would carry it verbatim.
+  // — and the decline is lost to its own describer on the second try instead of the first. Only a
+  // tag that throws, though: one that returns still reaches `detail` inside `[object …]`, which is
+  // the input describing itself and is the point of the field.
   const untaggable = new Proxy(
     { order: 'ASCENDING' },
     {

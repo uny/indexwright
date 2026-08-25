@@ -437,8 +437,11 @@ function describeField(field: unknown): string {
     // because it reads no user-defined `toString` — but it is not total either, and the nesting is
     // what makes the claim true rather than nearly true: it looks up `Symbol.toStringTag`, which a
     // getter or a Proxy trap throws from, and the decline would be lost to the describer a second
-    // time. The literal is also the one rendering here no caller can influence, which matters
-    // because a `Symbol.toStringTag` is attacker-supplied text that `detail` would carry verbatim.
+    // time. Only that path: a tag that *returns* still reaches `detail` verbatim inside
+    // `[object …]`, which is caller-supplied text and is meant to be — `detail` is a description of
+    // the input, and `String(live.apiScope)` and its four siblings above carry the same. Escaping
+    // belongs at the print site, the way `admin.ts` wraps this module's other operator-facing
+    // string in `render`; nothing prints `detail` yet, and the guard would be in the wrong place.
     try {
       return Object.prototype.toString.call(field);
     } catch {
