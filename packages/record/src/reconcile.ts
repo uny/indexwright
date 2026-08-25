@@ -434,8 +434,16 @@ function describeField(field: unknown): string {
     // Not hypothetical for the sake of it. The listing `admin.ts` conveys comes off the wire and is
     // not cyclic, but `reconcile` is a public export that takes the listing from its caller, so the
     // input is whatever a caller passes. `Object.prototype.toString` is used rather than `String`
-    // because it reads no user-defined `toString` and so cannot throw a second time.
-    return Object.prototype.toString.call(field);
+    // because it reads no user-defined `toString` — but it is not total either, and the nesting is
+    // what makes the claim true rather than nearly true: it looks up `Symbol.toStringTag`, which a
+    // getter or a Proxy trap throws from, and the decline would be lost to the describer a second
+    // time. The literal is also the one rendering here no caller can influence, which matters
+    // because a `Symbol.toStringTag` is attacker-supplied text that `detail` would carry verbatim.
+    try {
+      return Object.prototype.toString.call(field);
+    } catch {
+      return '[undescribable field]';
+    }
   }
 }
 

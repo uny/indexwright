@@ -359,6 +359,27 @@ test('a live field carrying no usable path is refused, because every one of them
     assert.equal(result.unreadable[0].detail, '[object Object]');
   }
 
+  // One level below that. `Object.prototype.toString` is what the loop above falls back to, and it
+  // is not the total function this file's comment used to claim: it looks up `Symbol.toStringTag`,
+  // so a proxy trap or a throwing getter defeats the fallback exactly as it defeats `JSON.stringify`
+  // — and the decline is lost to its own describer on the second try instead of the first. The
+  // literal is also the one rendering here that no caller can influence, which is the other half:
+  // a `Symbol.toStringTag` is caller-supplied text, and `[object <that>]` would carry it verbatim.
+  const untaggable = new Proxy(
+    { order: 'ASCENDING' },
+    {
+      get(_target, key) {
+        if (key === 'fieldPath') return undefined;
+        throw new Error('boom');
+      },
+    },
+  );
+  const undescribed = reconcile(declare(), [live('posts', [untaggable, asc('__name__')])]);
+  assert.equal(undescribed.verdict, 'indeterminate');
+  assert.deepEqual(undescribed.unreadable, [
+    { name: named('posts'), reason: 'field-unreadable', detail: '[undescribable field]' },
+  ]);
+
   // And the collision itself, stated as the property rather than as the mechanism: two live indexes
   // whose pathless fields differ must not both be answered by one declaration. Refused, neither is
   // keyed at all, so there is nothing for a declaration to match.
