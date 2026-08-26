@@ -277,17 +277,18 @@ test('check is a verb only as the first word, so a suite of that name still runs
   assert.deepEqual(command.argv, ['check', '--project', 'p']);
 });
 
-test('the help does not promise a replay the verb cannot run yet', async () => {
-  // The two have to move together: the exit-2 stub below and this line are the same claim, and a
-  // usage that describes working behaviour is the one thing a reader cannot check against the code.
+test('the help says what the verb costs, since that is what a reader cannot check against the code', async () => {
+  // The settling period is the surprising part of running this: a `check` that answers in under a
+  // minute is a `check` that did not establish readiness. A usage that leaves it out is one a reader
+  // discovers by watching a CI job appear to hang.
   const streams = collect();
   assert.equal(await run(['check', '--help'], streams, {}), 0);
-  assert.match(streams.stdout(), /Replay is not implemented yet/);
+  assert.match(streams.stdout(), /takes a minute at the least/);
   // `-h` is documented as check's alias and is answered before the option loop, which would
   // otherwise reject it for not starting with `--`.
   const short = collect();
   assert.equal(await run(['check', '-h'], short, {}), 0);
-  assert.match(short.stdout(), /Replay is not implemented yet/);
+  assert.match(short.stdout(), /takes a minute at the least/);
 });
 
 test('check answers --version, so the flag does not stop working once a verb is named', async () => {
@@ -300,11 +301,15 @@ test('check prints the target before it could reach a network, and exits non-zer
   // Printed on every run rather than only on a failure: a real database in place of a throwaway one
   // is the mistake that produces no error, so the target is the one thing a run has to say out loud.
   const streams = collect();
-  // The exit code is the half a CI step branches on. Unasserted, a stub that regressed to `return 0`
-  // would report a replay that never ran as a clean one — the silent pass the verb exists to prevent.
+  // No files exist at the defaults here, which is what makes this a test of the *order*: the verb
+  // announces the target, then fails on a file it could read offline, and never builds a client.
+  //
+  // The exit code is the half a CI step branches on. Unasserted, a verb that regressed to `return 0`
+  // would report a replay that never ran as a clean one — the silent pass it exists to prevent.
   assert.equal(await run(['check', '--project', 'acme-prod', '--database', '(default)'], streams, {}), 2);
-  assert.match(streams.stderr(), /target projects\/acme-prod\/databases\/\(default\)/);
-  assert.match(streams.stderr(), /check is not implemented yet/);
+  const [first, second] = streams.stderr().split('\n');
+  assert.match(first, /target projects\/acme-prod\/databases\/\(default\)/);
+  assert.match(second, /could not read the candidate indexes/);
 });
 
 test('--help and --version report without running anything', async () => {

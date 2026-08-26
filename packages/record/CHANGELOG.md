@@ -10,9 +10,10 @@ again, by its own `corpusVersion`.
 ### Added
 
 - **`indexwright-record check`**, the verb [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md)
-  §3 names — as its argument surface only. **Replay is not implemented**: the verb parses and
-  validates its target, echoes it, and exits `2`. What lands here is the flag surface (issue #8), so
-  that the adapter and the gating can be written against a target that is already settled.
+  §3 names. It replays a captured corpus against a database that already has the candidate index set
+  applied, and reports the queries that come back `FAILED_PRECONDITION`. It applies nothing and reads
+  only. The paragraphs below are its argument surface (issue #8); what the verb *does* with a target
+  it accepted is the entry after next.
 
   **The target is two required flags with no fallback of any kind.** `--project` and `--database` are
   never read from `GOOGLE_CLOUD_PROJECT`, from a `gcloud config` default, or from the project inside
@@ -69,6 +70,42 @@ again, by its own `corpusVersion`.
 
 - `--corpus` and `--indexes` on `check`, defaulting to `firestore.queries.json` (what `record` writes)
   and `firestore.indexes.json`.
+
+- **The verb body** — readiness, then reconciliation, then replay, each one a gate rather than a
+  step. `check` reads the corpus and the candidate declarations first, before it constructs anything,
+  because everything up to the first client is offline and everything after it costs a settling
+  period at the least; a mistyped path is then found on the near side of that minute. It then polls
+  the Admin API until `ReadinessGate` says the set has been quiet long enough, reconciles the listing
+  it settled on against the candidate file, and only then replays. A run that cannot settle one of
+  those questions declines and says which — it does not fall back to replaying against a set it
+  cannot vouch for, which is the quietly-wrong behaviour §3 exists to rule out.
+
+  **Exit `1` is the finding and exit `2` is the absence of one.** Unlike `lint`, which defaults to
+  exit `0` even with findings because its rules have unmeasured false-positive rates, the oracle here
+  is Firestore itself — so a `FAILED_PRECONDITION` is worth failing a pipeline on. `2` covers every
+  way the run could not answer, and it outranks `1`: a report missing entries is not a clean report
+  with a caveat, and an operator who sees `1` should be able to read it as "these and no others".
+  An entry that cannot be replayed, an `INVALID_ARGUMENT`, and a status the run cannot interpret all
+  land there and are named out loud, because SPEC §7 reports `FAILED_PRECONDITION` and never the
+  others: an invalid replay is a defect in this tool or in the test that issued the query, not a
+  statement about the index set.
+
+  Replay materialises SPEC §7's plan against the SDK and adds nothing to it. There is no `limit` and
+  no `select`: the corpus records neither, and if either narrowed index selection the cost would be a
+  query served that should have failed — a false clean verdict, which §2 forbids more strictly than a
+  false alarm. A wire field path that this version cannot convert into the SDK's own is refused as
+  un-replayable rather than approximated, because the approximation filters on a *differently named
+  field* and reports a `FAILED_PRECONDITION` for a query nobody issued.
+
+- **Both clients are released, on every path out** (issue #39). The gRPC stub is lazy, so the channel
+  appears on the first call and then refs the event loop — a `check` that listed and reported would
+  have printed its report and never exited, which is a worse failure for a CI step than one that
+  errors. `IndexLister` gains `close` in its `Pick`, which is the other half of the issue: narrowed
+  to `listIndexesAsync` alone, a caller had no typed way to release the channel even if it wanted to,
+  and the JavaScript API is public. `listLiveIndexes` still does not close — readiness is established
+  by observing the same set at least twice, so a lister that closed itself would build and tear down
+  a channel per poll. The verb closes the lister before it builds the replay client, so at most one
+  channel is open at a time.
 
 - **The Firestore Admin adapter** — `listLiveIndexes`, `adminLister`, `indexesParent`, `AdminError` —
   which asks a database for its composite indexes and hands the listing to `ReadinessGate` and

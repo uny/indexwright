@@ -12,6 +12,21 @@ export {
   listLiveIndexes,
   type IndexLister,
 } from './admin.js';
+export {
+  check,
+  DEFAULT_DEADLINE_MS,
+  DEFAULT_POLL_MS,
+  type CheckOptions,
+  type Streams,
+} from './check.js';
+export {
+  FAILED_PRECONDITION,
+  INVALID_ARGUMENT,
+  loadFirestore,
+  messageOf,
+  redirectRefusal,
+  type FirestoreModule,
+} from './client.js';
 export { buildCorpus, CorpusError, parseCorpus, serialiseCorpus, writeCorpus } from './corpus.js';
 export { decodeRunQuery, type DecodeResult } from './decode.js';
 export {
@@ -52,6 +67,16 @@ export {
   type UnreadableReason,
 } from './reconcile.js';
 export { Recorder } from './recorder.js';
+export {
+  buildReplayQuery,
+  classifyRejection,
+  replayClient,
+  replayFieldPath,
+  REPLAY_SENTINEL,
+  TargetError,
+  type Replayer,
+  type ReplayStatus,
+} from './replay.js';
 export {
   compareByCodePoint,
   escapeComponent,

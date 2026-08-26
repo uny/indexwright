@@ -5,16 +5,14 @@ import { resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { canonicalTarget, parseArgs, usage, UsageError } from './args.js';
+import { check, type Streams } from './check.js';
 import { buildCorpus, writeCorpus } from './corpus.js';
 import { startCapture } from './proxy.js';
 import type { Recorder } from './recorder.js';
 import { compareByCodePoint } from './shape.js';
 import { VERSION } from './version.js';
 
-export interface Streams {
-  out(text: string): void;
-  err(text: string): void;
-}
+export type { Streams };
 
 export async function run(
   argv: readonly string[],
@@ -47,8 +45,7 @@ export async function run(
     // for how production-like it looks, because a rule that fires on `prod-sandbox` and stays quiet
     // on `db-7` teaches its own silence to be read as an all-clear.
     streams.err(`indexwright-record: target ${canonicalTarget(command)}\n`);
-    streams.err('indexwright-record: check is not implemented yet\n');
-    return 2;
+    return check(command, streams);
   }
 
   let capture;
