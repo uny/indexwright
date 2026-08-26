@@ -324,6 +324,15 @@ test('a live field carrying no usable path is refused, because every one of them
     { shape: { order: 'ASCENDING' }, detail: '{"order":"ASCENDING"}' },
     { shape: { fieldPath: null, order: 'ASCENDING' }, detail: '{"fieldPath":null,"order":"ASCENDING"}' },
     { shape: { fieldPath: '', order: 'ASCENDING' }, detail: '{"fieldPath":"","order":"ASCENDING"}' },
+    // The two nullish elements report themselves apart. They are both rejected by the same clause
+    // and it would be easy to render them alike — coalescing the element before serialising it does
+    // exactly that, turning `undefined` into `"null"` — but "nothing was there" and "the array held
+    // an explicit null" are different observations about the listing, and the detail is the only
+    // place the difference survives. Not three observations, though: a hole and an explicit
+    // `undefined` are one, and the loop could not tell them apart if it wanted to, because
+    // `for...of` yields `undefined` for both.
+    { shape: undefined, detail: 'undefined' },
+    { shape: null, detail: 'null' },
   ];
 
   for (const { shape, detail } of pathless) {
@@ -351,6 +360,27 @@ test('a live field carrying no usable path is refused, because every one of them
     assert.equal(result.unreadable[0].reason, 'field-unreadable');
     assert.equal(result.unreadable[0].detail, '[object Object]');
   }
+
+  // One level below that. `Object.prototype.toString` is what the loop above falls back to, and it
+  // is not the total function this file's comment used to claim: it looks up `Symbol.toStringTag`,
+  // so a proxy trap or a throwing getter defeats the fallback exactly as it defeats `JSON.stringify`
+  // — and the decline is lost to its own describer on the second try instead of the first. Only a
+  // tag that throws, though: one that returns still reaches `detail` inside `[object …]`, which is
+  // the input describing itself and is the point of the field.
+  const untaggable = new Proxy(
+    { order: 'ASCENDING' },
+    {
+      get(_target, key) {
+        if (key === 'fieldPath') return undefined;
+        throw new Error('boom');
+      },
+    },
+  );
+  const undescribed = reconcile(declare(), [live('posts', [untaggable, asc('__name__')])]);
+  assert.equal(undescribed.verdict, 'indeterminate');
+  assert.deepEqual(undescribed.unreadable, [
+    { name: named('posts'), reason: 'field-unreadable', detail: '[undescribable field]' },
+  ]);
 
   // And the collision itself, stated as the property rather than as the mechanism: two live indexes
   // whose pathless fields differ must not both be answered by one declaration. Refused, neither is

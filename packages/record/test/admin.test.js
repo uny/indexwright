@@ -148,6 +148,70 @@ test('a failure the service worded is rendered, not reprinted, and a non-Error s
   });
 });
 
+/**
+ * A rejection the handler cannot describe still leaves as an `AdminError`.
+ *
+ * Its own test rather than a fourth block appended to the one above, because these run in sequence
+ * inside a single `test()` and the first assertion to fail ends the function: a regression in
+ * `render` would take the coverage below it with it, and report one failure where there were two.
+ * The property here is also a different one — not that the message is worded or rendered, but that
+ * composing it cannot throw.
+ */
+test('a rejection with no route to a primitive still declines, and says what it can', async () => {
+  const rejecting = (value) => ({
+    listIndexesAsync() {
+      return (async function* () {
+        throw value;
+      })();
+    },
+  });
+
+  const declines = async (lister, detail) => {
+    await assert.rejects(() => listLiveIndexes(TARGET, lister), (error) => {
+      assert.ok(error instanceof AdminError);
+      assert.match(error.message, /could not list the indexes of projects\/indexwright-probe/);
+      assert.match(error.message, detail);
+      return true;
+    });
+  };
+
+  // No prototype, so no `toString`: `String()` on it throws `Cannot convert object to primitive
+  // value` — from inside the very catch block whose promise is that a failure leaves as an
+  // `AdminError` rather than as a listing. Thrown there, it would replace that `AdminError` with a
+  // `TypeError` naming neither the parent nor the cause, which is the failure this whole path
+  // exists to prevent wearing its own handler's clothes.
+  await declines(rejecting(Object.create(null)), /\[object Object\]/);
+
+  // The same hole one level down. `Object.prototype.toString` is what the line above falls back to,
+  // and it is not the total function an earlier comment here claimed: it looks up
+  // `Symbol.toStringTag`, so a getter that throws defeats the fallback exactly as a throwing
+  // `Symbol.toPrimitive` defeats `String`. Without the nested catch this rejects with `boom`.
+  const untaggable = Object.create(null);
+  Object.defineProperty(untaggable, Symbol.toStringTag, {
+    get() {
+      throw new Error('boom');
+    },
+  });
+  await declines(rejecting(untaggable), /\[unprintable rejection\]/);
+
+  // An `Error` whose `message` is not a string. `render` iterates its argument, so returning the
+  // number raw threw `value is not iterable` out of the handler — the same death, reached through
+  // the branch that looks the safest. `Object.assign` over a real `Error` is not exotic for
+  // something that crossed a transport.
+  await declines(rejecting(Object.assign(new Error('ignored'), { message: 7 })), /"7"/);
+
+  // And an `Error` whose `message` is a throwing getter, which is the second route into the catch:
+  // the read itself fails, before any coercion. The instance is still an `Error`, so the fallback
+  // can name that much.
+  const unreadable = new Error('ignored');
+  Object.defineProperty(unreadable, 'message', {
+    get() {
+      throw new TypeError('boom');
+    },
+  });
+  await declines(rejecting(unreadable), /\[object Error\]/);
+});
+
 test('a listing that fails part way through is not the part that arrived', async () => {
   // The failure mode auto-pagination exists to prevent, and the one worth pinning: entries already
   // yielded are discarded rather than returned as the set. A page one that arrived and a page two

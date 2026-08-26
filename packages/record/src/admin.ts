@@ -189,5 +189,25 @@ export async function listLiveIndexes(
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  try {
+    const message = error instanceof Error ? error.message : error;
+    return typeof message === 'string' ? message : String(message);
+  } catch {
+    // A rejection with no route to a primitive. `Object.create(null)` is the plain case — no
+    // prototype, so no `toString` — and a throwing `Symbol.toPrimitive` is the general one. Reached
+    // from the catch in `listLiveIndexes`, where throwing is the one thing left to get wrong: the
+    // whole point of that block is that a failure leaves as an `AdminError` rather than as a
+    // listing, and a `messageOf` that threw would replace it with a `TypeError` from inside the
+    // handler, naming neither the parent nor the cause.
+    try {
+      // Reads no user-defined `toString`, so it survives both cases above — but it is not itself
+      // total, and the comment that said it was is the reason this nesting is here. It looks up
+      // `Symbol.toStringTag`, which a getter or a Proxy trap throws from as readily as
+      // `Symbol.toPrimitive` does, and a fallback that can fail is not a fallback. The literal is
+      // the floor: it names the shape of the failure without reading anything to do it.
+      return Object.prototype.toString.call(error);
+    } catch {
+      return '[unprintable rejection]';
+    }
+  }
 }
