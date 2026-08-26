@@ -87,6 +87,11 @@ reporting `READY` through the Admin API, *and* the set unchanged for a settling 
 replays anything. A `check` that answered in two seconds would be a `check` that reported inside that
 window.
 
+**A corpus with nothing replayable in it is refused, not reported as a pass.** An empty corpus
+replays cleanly by construction, so exiting `0` on one would say the candidate set covers everything
+having measured nothing. That happens for a real reason: a suite driven through the Firebase Web SDK
+issues no gRPC, so `record` observes no queries to record.
+
 **It also establishes that the set on the target is the candidate set**, in both directions. A target
 holding an index the file does not declare serves queries the candidate set alone would not, so the
 run would come back clean and the coverage gap would never appear; a file declaring one the target

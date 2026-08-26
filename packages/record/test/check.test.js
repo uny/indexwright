@@ -240,7 +240,37 @@ test('an entry that cannot be replayed makes the report incomplete rather than c
   const h = harness({ corpus });
   assert.equal(await h.run(), 2);
   assert.match(h.said(), /cannot replay:/);
+  assert.equal(h.replayed.length, 0);
+  // Every entry in this corpus is the unreplayable one, so there is nothing left to ask the target
+  // about — and the run says so instead of spending a settling period to arrive at the same line.
+  assert.match(h.said(), /no entry in the corpus .* has a replayable form/);
+  assert.deepEqual(h.slept, []);
+});
+
+test('a corpus with one replayable entry beside an unreplayable one still asks about the one', async () => {
+  const corpus = JSON.parse(ONE_QUERY);
+  corpus.queries.push({
+    key: 'orders::COLLECTION::OR()::',
+    collectionGroup: 'orders',
+    queryScope: 'COLLECTION',
+    where: { op: 'OR', filters: [] },
+    orderBy: [],
+  });
+  corpus.queries.sort((a, b) => (a.key < b.key ? -1 : 1));
+  const h = harness({ corpus: JSON.stringify(corpus) });
+  assert.equal(await h.run(), 2);
+  assert.equal(h.replayed.length, 1);
+  assert.match(h.said(), /1 query replayed, 0 not served/);
+  // The entry that could not be replayed is why: a report missing an entry is not a clean one.
   assert.match(h.said(), /this report is incomplete/);
+});
+
+test('an empty corpus is refused rather than reported as full coverage', async () => {
+  // It replays cleanly by construction, so exit 0 would say the candidate set covers everything
+  // having measured nothing. A suite driven through the Firebase Web SDK really does produce one.
+  const h = harness({ corpus: JSON.stringify({ corpusVersion: 1, queries: [], skipped: ['listen-query'] }) });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /the corpus at .* holds no queries/);
   assert.equal(h.replayed.length, 0);
 });
 
@@ -310,6 +340,41 @@ test('both clients are released on every path out, including the ones that fail'
   await assert.rejects(thrown.run(), /went away/);
   assert.equal(released, 1);
   assert.equal(thrown.closed.lister, 1);
+});
+
+test('a client that will not close does not replace the answer the run reached', async () => {
+  // A `finally` that throws discards what the block was carrying — the report about to be printed,
+  // or the decline being raised — and leaves a rejection naming nothing anyone asked about. That is
+  // the shape issue #41 fixed on the decline path, and closing a client is the other place it lives.
+  const reporting = harness({
+    statuses: [{ kind: 'uncovered', message: '"needs an index"' }],
+    replayer: async () => ({
+      run: async () => ({ kind: 'uncovered', message: '"needs an index"' }),
+      close: async () => {
+        throw new Error('the channel would not close');
+      },
+    }),
+  });
+  assert.equal(await reporting.run(), 1);
+  assert.match(reporting.said(), /not served:/);
+  // Said rather than swallowed: a channel that would not close is the likeliest explanation for a
+  // run that then does not exit.
+  assert.match(reporting.said(), /could not release the replay client/);
+
+  const declining = harness({
+    listings: [[{ ...READY[0], state: 'NEEDS_REPAIR' }]],
+    lister: async () => ({
+      listIndexesAsync: () => (async function* () {
+        yield { ...READY[0], state: 'NEEDS_REPAIR' };
+      })(),
+      close: async () => {
+        throw new Error('the channel would not close');
+      },
+    }),
+  });
+  assert.equal(await declining.run(), 2);
+  assert.match(declining.said(), /readiness could not be established: 1 index in NEEDS_REPAIR/);
+  assert.match(declining.said(), /could not release the index lister/);
 });
 
 test('the lister is closed before the replay client is built, so one channel is open at a time', async () => {

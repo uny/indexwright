@@ -90,6 +90,12 @@ again, by its own `corpusVersion`.
   others: an invalid replay is a defect in this tool or in the test that issued the query, not a
   statement about the index set.
 
+  **A corpus with nothing replayable in it is refused rather than reported as full coverage.** It
+  replays cleanly by construction, so the run would exit `0` having measured nothing — and that is a
+  shape which really occurs, since a suite driven through the Firebase Web SDK issues no gRPC at all
+  and `record` writes a corpus with no queries and counts what it could not capture. The refusal is
+  answered before any client is built, because no gate beyond it could change the answer.
+
   Replay materialises SPEC §7's plan against the SDK and adds nothing to it. There is no `limit` and
   no `select`: the corpus records neither, and if either narrowed index selection the cost would be a
   query served that should have failed — a false clean verdict, which §2 forbids more strictly than a

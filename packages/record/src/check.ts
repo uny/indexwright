@@ -123,6 +123,24 @@ export async function check(
   }
   for (const line of unreplayable) say(`cannot replay: ${line}`);
 
+  if (entries.length === 0) {
+    // Answered here rather than after the gates, because nothing beyond this point could change it:
+    // there is no entry to ask the target about, so a settling period would be a minute spent to
+    // arrive at the same line.
+    //
+    // An empty corpus is refused rather than reported as full coverage. It replays cleanly by
+    // construction, so the run would exit 0 having measured nothing — the false clean verdict §2
+    // forbids most strictly, arriving at the one moment nothing looks wrong. It is also a shape that
+    // really occurs: a suite driven through the Firebase Web SDK issues no gRPC at all, so `record`
+    // writes a corpus with no queries and counts the requests it could not capture (SPEC §7).
+    say(
+      unreplayable.length === 0
+        ? `there is nothing to replay: the corpus at ${command.corpus} holds no queries`
+        : `there is nothing to replay: no entry in the corpus at ${command.corpus} has a replayable form`,
+    );
+    return 2;
+  }
+
   let live: readonly LiveCompositeIndex[];
   try {
     live = await establishReadiness(target, command.project, say, {
@@ -186,7 +204,7 @@ export async function check(
   } finally {
     // A live gRPC channel refs the event loop, so this is what makes the process exit after the
     // report rather than sit there having printed it (issue #39).
-    await replayer.close();
+    await release('replay client', replayer, say);
   }
 
   return reportReplay(attempted, uncovered, invalid, unreplayable, halted, say);
@@ -224,6 +242,11 @@ async function establishReadiness(
   const lister = await deps.lister(project);
   const gate = new ReadinessGate(deps.settleMs);
   const started = deps.now();
+  // Said when it changes rather than on every poll. A fifteen-minute deadline at five seconds a poll
+  // is a hundred and eighty identical lines, and a progress line that repeats is one a reader stops
+  // reading — including the line that says *which* index is still building, which is the only part
+  // of it worth anything.
+  let last: string | undefined;
   try {
     for (;;) {
       const live = await listLiveIndexes(target, lister);
@@ -236,11 +259,36 @@ async function establishReadiness(
           `${describe(verdict)}, and this run has waited ${Math.round(waited / 1000)}s`,
         );
       }
-      if (verdict.kind === 'building') say(`waiting: ${describe(verdict)}`);
+      if (verdict.kind === 'building') {
+        const line = describe(verdict);
+        if (line !== last) say(`waiting: ${line}`);
+        last = line;
+      }
       await deps.sleep(verdict.kind === 'settling' ? verdict.remainingMs : deps.pollMs);
     }
   } finally {
-    await lister.close();
+    await release('index lister', lister, say);
+  }
+}
+
+/**
+ * Let go of a client without letting the release replace the outcome.
+ *
+ * A `finally` that throws discards whatever the block was carrying — the decline being raised, or
+ * the report about to be printed — and leaves a rejection naming nothing anyone asked about. That is
+ * the shape issue #41 fixed twice over on the decline path, and closing a client is the other place
+ * this verb has one. Reported rather than swallowed: a channel that would not close is worth a line,
+ * not least because it is the likeliest explanation for a run that then does not exit.
+ */
+async function release(
+  what: string,
+  client: { close(): Promise<void> },
+  say: (text: string) => void,
+): Promise<void> {
+  try {
+    await client.close();
+  } catch (error) {
+    say(`could not release the ${what}: ${detail(error)}`);
   }
 }
 
