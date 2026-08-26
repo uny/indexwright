@@ -109,7 +109,7 @@ export async function check(
   try {
     candidate = analyse(parseDocument(readFile(command.indexes)));
   } catch (error) {
-    say(`could not read the candidate indexes at ${command.indexes}: ${detail(error)}`);
+    say(`could not read the candidate indexes at ${render(command.indexes)}: ${detail(error)}`);
     return 2;
   }
 
@@ -118,7 +118,7 @@ export async function check(
   try {
     ({ entries, unreplayable } = plan(readFile(command.corpus)));
   } catch (error) {
-    say(`could not read the corpus at ${command.corpus}: ${detail(error)}`);
+    say(`could not read the corpus at ${render(command.corpus)}: ${detail(error)}`);
     return 2;
   }
   for (const line of unreplayable) say(`cannot replay: ${line}`);
@@ -135,8 +135,8 @@ export async function check(
     // writes a corpus with no queries and counts the requests it could not capture (SPEC §7).
     say(
       unreplayable.length === 0
-        ? `there is nothing to replay: the corpus at ${command.corpus} holds no queries`
-        : `there is nothing to replay: no entry in the corpus at ${command.corpus} has a replayable form`,
+        ? `there is nothing to replay: the corpus at ${render(command.corpus)} holds no queries`
+        : `there is nothing to replay: no entry in the corpus at ${render(command.corpus)} has a replayable form`,
     );
     return 2;
   }
@@ -166,7 +166,7 @@ export async function check(
   }
   say(
     `${count(live.length, 'index', 'indexes')} on the target, and the candidate set at ` +
-      `${command.indexes} is the set that is there`,
+      `${render(command.indexes)} is the set that is there`,
   );
 
   let replayer: Replayer;
@@ -180,19 +180,31 @@ export async function check(
 
   const uncovered: { key: string; message: string }[] = [];
   const invalid: string[] = [];
+  // Seeded with what planning refused, and added to by anything materialisation refuses that
+  // planning did not. Both mean the same thing to the report: an entry with no verdict.
+  const cannotReplay: string[] = [...unreplayable];
   let attempted = 0;
   let halted: string | undefined;
   try {
     for (const entry of entries) {
-      attempted += 1;
       // One at a time. The order of the report is then the order of the corpus rather than of
       // whichever request happened to come back first, and a throwaway database is not the place to
       // find out how a burst of concurrent queries is throttled.
       const status = await replayer.run(entry.plan);
+      // Counted once the target has answered, so an entry that never reached it is not reported as
+      // a query that was replayed.
+      if (status.kind !== 'unbuildable') attempted += 1;
       if (status.kind === 'served') continue;
       if (status.kind === 'uncovered') uncovered.push({ key: entry.shape.key, message: status.message });
       else if (status.kind === 'invalid') invalid.push(`${render(entry.shape.key)}: ${status.message}`);
-      else {
+      else if (status.kind === 'unbuildable') {
+        // The same bucket a plan-time refusal lands in, because it is the same answer: this run has
+        // no verdict for this entry. `planReplay` is supposed to have caught it already, so arriving
+        // here means the two disagree — said out loud, counted as incomplete, and not carried on
+        // with as though the corpus had been covered.
+        cannotReplay.push(`${render(entry.shape.key)}: ${status.message}`);
+        say(`cannot replay: ${render(entry.shape.key)}: ${status.message}`);
+      } else {
         // Stopped rather than carried on with. A status this verb cannot interpret is almost never
         // about the one entry that met it — a missing permission, a database that is not there, a
         // connection that is gone — so the remaining entries would meet the same wall and the report
@@ -207,7 +219,7 @@ export async function check(
     await release('replay client', replayer, say);
   }
 
-  return reportReplay(attempted, uncovered, invalid, unreplayable, halted, say);
+  return reportReplay(attempted, uncovered, invalid, cannotReplay, halted, say);
 }
 
 /** A verdict the gate reached that waiting cannot change, carried out of the poll as a message. */
@@ -239,8 +251,10 @@ async function establishReadiness(
   say: (text: string) => void,
   deps: ReadinessDeps,
 ): Promise<readonly LiveCompositeIndex[]> {
-  const lister = await deps.lister(project);
+  // Constructed before the client, not after: `ReadinessGate` rejects a `settleMs` it cannot use,
+  // and a throw between building the lister and entering the `try` below is one nothing would close.
   const gate = new ReadinessGate(deps.settleMs);
+  const lister = await deps.lister(project);
   const started = deps.now();
   // Said when it changes rather than on every poll. A fifteen-minute deadline at five seconds a poll
   // is a hundred and eighty identical lines, and a progress line that repeats is one a reader stops
@@ -324,7 +338,7 @@ function reportDivergence(
   indexesPath: string,
   say: (text: string) => void,
 ): void {
-  say(`cannot report: the target does not hold the candidate index set at ${indexesPath}`);
+  say(`cannot report: the target does not hold the candidate index set at ${render(indexesPath)}`);
   for (const index of reconciliation.missing) say(`  declared but not on the target: ${render(index.key)}`);
   for (const index of reconciliation.extra) say(`  on the target but not declared: ${render(index.key)}`);
   for (const index of reconciliation.unreadable) {

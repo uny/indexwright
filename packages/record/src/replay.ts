@@ -28,6 +28,8 @@ import {
   isReplayComposite,
   NAME_FIELD,
   ReplayError,
+  replayCollectionId,
+  replaySegments,
   type ReplayLeaf,
   type ReplayNode,
   type ReplayPlan,
@@ -52,6 +54,20 @@ export type ReplayStatus =
    * rather than what succeeded — and both are defects in the tooling or in the test that issued it.
    */
   | { readonly kind: 'invalid'; readonly message: string }
+  /**
+   * The plan could not be turned into a query at all. Not a status the target answered with.
+   *
+   * `planReplay` refuses every shape this version knows it cannot replay, so reaching here means the
+   * refusal missed one — a field path, a collection id, or an operand table this module and
+   * `synthesise.ts` disagree about. It is its own kind rather than `failed` or `invalid` for the
+   * reason `buildReplayQuery` used to be built outside the `try`: it is a defect in this tool, and
+   * reporting it as either of those would dress a tooling defect as a verdict about the index set.
+   *
+   * What it must not do is escape. An entry `check` is documented to *report* as unreplayable used
+   * to leave as an uncaught rejection, taking the whole run — and every verdict it had already
+   * reached — down with it, and exiting with the code that means "this query was not served".
+   */
+  | { readonly kind: 'unbuildable'; readonly message: string }
   /** Any other status. `check` could not answer for this entry, and says so rather than guessing. */
   | { readonly kind: 'failed'; readonly message: string };
 
@@ -109,30 +125,17 @@ const UNARY_VALUES: Partial<Record<FilterOperator, null | number>> = {
 /**
  * A field path the SDK will build the same path from, or a `ReplayError`.
  *
- * The corpus records the wire `field_path`, whose segments are joined with `.` and backtick-quoted
- * when a segment is not a plain name. The SDK's string form understands the dots and not the
- * backticks, so handing it a quoted path silently produces a filter on a *differently named field* —
- * which the candidate set does not cover, so the run reports a `FAILED_PRECONDITION` for a query
- * nobody issued. That is the false positive §2 forbids acting on, arriving as a confident finding,
- * so a path this version cannot convert is refused instead.
- *
- * Without a backtick the split is exact rather than a guess: a segment containing a `.` would have
- * had to be quoted, so an unquoted path has no segment that a split on `.` could tear in half.
+ * The rule itself lives in `synthesise.ts` as `replaySegments`, and is applied during *planning* as
+ * well as here. That is deliberate: a path this version cannot convert is a property of the string
+ * the corpus recorded rather than of the client, so refusing it needs no client — and refusing it
+ * during planning is what lets `check` report the entry alongside every other unreplayable one
+ * instead of meeting it halfway through the replay loop. What is left here is the conversion.
  */
 export function replayFieldPath(sdk: FirestoreModule, fieldPath: string): FirebaseFirestore.FieldPath {
   // `documentId()` rather than `new FieldPath('__name__')`: the SDK reserves the name and the
   // sentinel is the supported way to say it.
   if (fieldPath === NAME_FIELD) return sdk.FieldPath.documentId();
-  if (fieldPath.includes('`')) {
-    throw new ReplayError(
-      `the field path ${render(fieldPath)} is quoted, and this version cannot replay a quoted path`,
-    );
-  }
-  const segments = fieldPath.split('.');
-  if (segments.some((segment) => segment.length === 0)) {
-    throw new ReplayError(`the field path ${render(fieldPath)} has an empty segment`);
-  }
-  return new sdk.FieldPath(...segments);
+  return new sdk.FieldPath(...replaySegments(fieldPath));
 }
 
 function leafFilter(
@@ -188,9 +191,13 @@ export function buildReplayQuery(
   db: FirebaseFirestore.Firestore,
   plan: ReplayPlan,
 ): FirebaseFirestore.Query {
-  const collection = db.collection(plan.collectionGroup);
+  // Re-checked rather than trusted, for the reason `adminLister` re-checks the redirect: a
+  // `ReplayPlan` is a plain object and this function is exported, so a caller reaching it by another
+  // route must not be able to hand `db.collection` a *path*. See `replayCollectionId`.
+  const id = replayCollectionId(plan.collectionGroup);
+  const collection = db.collection(id);
   let query: FirebaseFirestore.Query =
-    plan.queryScope === 'COLLECTION_GROUP' ? db.collectionGroup(plan.collectionGroup) : collection;
+    plan.queryScope === 'COLLECTION_GROUP' ? db.collectionGroup(id) : collection;
   if (plan.where !== null) query = query.where(nodeFilter(sdk, collection, plan.where));
   for (const order of plan.orderBy) {
     query = query.orderBy(
@@ -237,10 +244,20 @@ export async function replayClient(project: string, database: string): Promise<R
   const db = new sdk.Firestore({ projectId: project, databaseId: database });
   return {
     async run(plan: ReplayPlan): Promise<ReplayStatus> {
-      // Built outside the `try` on purpose: a plan this version cannot materialise is a
-      // `ReplayError` about the corpus entry, not a status the target answered with, and swallowing
-      // it here would report a tooling defect as a coverage verdict.
-      const query = buildReplayQuery(sdk, db, plan);
+      // Materialisation is caught separately from the call, and kept separate from it. The concern
+      // that once kept this outside a `try` — that a plan this version cannot build is a defect in
+      // this tool rather than a status the target answered with, so swallowing it into a coverage
+      // verdict would be a lie — is met by `unbuildable` being its own kind. Letting it throw met
+      // that concern by losing the run instead.
+      //
+      // Rendered here rather than by the caller: unlike a `ReplayError`, an error out of the SDK is
+      // a string this package did not author, and it reaches the same stream as everything else.
+      let query: FirebaseFirestore.Query;
+      try {
+        query = buildReplayQuery(sdk, db, plan);
+      } catch (error) {
+        return { kind: 'unbuildable', message: render(messageOf(error)) };
+      }
       try {
         await query.get();
         return { kind: 'served' };

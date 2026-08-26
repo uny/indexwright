@@ -18,6 +18,7 @@
  * would accept. Those are properties of the corpus vocabulary rather than of the plan, and the
  * verdict for them belongs to whatever executes the plan.
  */
+import { render } from './args.js';
 import type {
   CompositeOperator,
   FilterComposite,
@@ -48,6 +49,66 @@ export class ReplayError extends Error {
  * takes the dependency for. The linter states the same constant as `NAME_FIELD` in `src/key.ts`.
  */
 export const NAME_FIELD = '__name__';
+
+/**
+ * The segments of a wire field path, or a `ReplayError`.
+ *
+ * Decided here rather than at materialisation, and that is the whole of the fix: the rule is a
+ * property of the *string the corpus recorded*, so it needs no client, and settling it during
+ * planning is what puts an unreplayable entry on the near side of the settling minute along with
+ * every other one. Left to `replayFieldPath`, it fired a `ReplayError` out of the middle of the
+ * replay loop instead — a throw the verb has no route to the report for, so an entry it is
+ * documented to *report* took the whole run down with an uncaught rejection.
+ *
+ * The corpus records the wire `field_path`, whose segments are joined with `.` and backtick-quoted
+ * when a segment is not a plain name. The SDK's string form understands the dots and not the
+ * backticks, so handing it a quoted path silently builds a filter on a *differently named field* —
+ * which the candidate set does not cover, so the run reports a `FAILED_PRECONDITION` for a query
+ * nobody issued. That is the false positive §2 forbids acting on, arriving as a confident finding,
+ * so a path this version cannot convert is refused instead of approximated.
+ *
+ * Without a backtick the split is exact rather than a guess: a segment containing a `.` would have
+ * had to be quoted, so an unquoted path has no segment that a split on `.` could tear in half.
+ */
+export function replaySegments(fieldPath: string): string[] {
+  if (fieldPath.includes('`')) {
+    throw new ReplayError(
+      `the field path ${render(fieldPath)} is quoted, and this version cannot replay a quoted path`,
+    );
+  }
+  const segments = fieldPath.split('.');
+  if (segments.some((segment) => segment.length === 0)) {
+    throw new ReplayError(`the field path ${render(fieldPath)} has an empty segment`);
+  }
+  return segments;
+}
+
+/**
+ * A collection id that names one collection, or a `ReplayError`.
+ *
+ * A corpus is a committed artefact this machine did not necessarily author, and `parseCorpus` checks
+ * only that `collectionGroup` is a string. A `/` in it is the one character that changes *which
+ * collection is measured*: the SDK reads `users/u1/orders` as a path and hands back the subcollection
+ * at it, so the run would replay against a collection the corpus never named and report the verdict
+ * as though it were about the recorded one — a wrong answer with nothing about it that looks wrong.
+ * An odd number of segments does not even get that far; it leaves the SDK as a plain `Error` from
+ * inside the replay loop, which is the uncaught path `replaySegments` above exists to close.
+ *
+ * Empty is refused for the same reason `requirePath` refuses an empty path: it is not an id, and the
+ * SDK's own message for it names an argument this package's caller never wrote.
+ */
+export function replayCollectionId(collectionGroup: string): string {
+  if (collectionGroup.length === 0) {
+    throw new ReplayError('the collection id is empty, and cannot be replayed');
+  }
+  if (collectionGroup.includes('/')) {
+    throw new ReplayError(
+      `the collection id ${render(collectionGroup)} contains a '/', and this version cannot replay ` +
+        'a query against anything but a collection named by its id alone',
+    );
+  }
+  return collectionGroup;
+}
 
 /** Operators that compare against a list rather than a single operand. */
 const LIST_OPERATORS = new Set<FilterOperator>(['IN', 'NOT_IN', 'ARRAY_CONTAINS_ANY']);
@@ -125,6 +186,9 @@ export function operandFor(fieldPath: string, op: FilterOperator): Operand {
 
 function planNode(node: FilterNode): ReplayNode {
   if (!isComposite(node)) {
+    // `__name__` is exempt: it is the SDK's own reserved sentinel, reached through `documentId()`
+    // rather than through a segment split, so the rule about segments has nothing to say about it.
+    if (node.fieldPath !== NAME_FIELD) replaySegments(node.fieldPath);
     return { fieldPath: node.fieldPath, op: node.op, operand: operandFor(node.fieldPath, node.op) };
   }
   // Below the root, a childless composite is never the wrapper `normaliseRoot` manufactures — it is
@@ -171,10 +235,15 @@ function planRoot(where: FilterComposite): ReplayComposite | null {
  * for a query other than the one recorded.
  */
 export function planReplay(shape: QueryShape): ReplayPlan {
+  const orderBy = [...shape.orderBy];
+  // Checked here so that every way an entry can turn out to have no replayable form arrives at the
+  // caller as one `ReplayError`, before a client exists. `where` is walked by `planRoot`; these are
+  // the two parts of a shape it does not reach.
+  for (const order of orderBy) if (order.fieldPath !== NAME_FIELD) replaySegments(order.fieldPath);
   return {
-    collectionGroup: shape.collectionGroup,
+    collectionGroup: replayCollectionId(shape.collectionGroup),
     queryScope: shape.queryScope,
     where: planRoot(shape.where),
-    orderBy: [...shape.orderBy],
+    orderBy,
   };
 }

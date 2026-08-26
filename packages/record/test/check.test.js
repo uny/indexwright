@@ -265,6 +265,98 @@ test('a corpus with one replayable entry beside an unreplayable one still asks a
   assert.match(h.said(), /this report is incomplete/);
 });
 
+test('a corpus entry the SDK cannot name a field from is reported, not thrown', async () => {
+  // The wire backtick-quotes any segment that is not a plain name, so `where('first-name', ...)` is
+  // recorded as `` `first-name` ``. The SDK's string form reads the dots and not the backticks, so
+  // replaying it would filter on a *differently named field* and report a FAILED_PRECONDITION for a
+  // query nobody issued. Refused — and refused during planning, so the run says so before it spends
+  // the settling minute, and exits 2 rather than dying with an uncaught ReplayError.
+  const shape = toQueryShape({
+    collectionGroup: 'orders',
+    queryScope: 'COLLECTION',
+    where: { op: 'AND', filters: [{ fieldPath: 'user.`first-name`', op: 'EQUAL' }] },
+    orderBy: [],
+  });
+  const h = harness({ corpus: serialiseCorpus(buildCorpus([shape], [])) });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /cannot replay: .*is quoted/);
+  assert.equal(h.replayed.length, 0);
+  assert.deepEqual(h.slept, []);
+});
+
+test('an order clause names a field too, and is refused on the same rule', async () => {
+  const shape = toQueryShape({
+    collectionGroup: 'orders',
+    queryScope: 'COLLECTION',
+    where: { op: 'AND', filters: [equals('status')] },
+    orderBy: [{ fieldPath: 'a..b', direction: 'ASCENDING' }],
+  });
+  const h = harness({ corpus: serialiseCorpus(buildCorpus([shape], [])) });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /cannot replay: .*has an empty segment/);
+});
+
+test('a collection id carrying a path is refused rather than measured somewhere else', async () => {
+  // `db.collection('users/u1/orders')` is not an error: the SDK reads it as a path and hands back
+  // the subcollection at it. The run would then replay against a collection the corpus never named
+  // and report the verdict as though it were about the recorded one — a wrong answer with nothing
+  // about it that looks wrong, which is the one outcome §2 forbids most strictly.
+  const shape = toQueryShape({
+    collectionGroup: 'users/u1/orders',
+    queryScope: 'COLLECTION',
+    where: { op: 'AND', filters: [equals('status')] },
+    orderBy: [],
+  });
+  const h = harness({ corpus: serialiseCorpus(buildCorpus([shape], [])) });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /cannot replay: .*contains a '\/'/);
+  assert.equal(h.replayed.length, 0);
+});
+
+test('a plan that reaches the target unbuildable is reported, and does not end the run', async () => {
+  // The backstop behind the plan-time refusals: if the two ever disagree, the entry has no verdict
+  // and says so, while the entries around it still get one. Before, it left as an uncaught
+  // rejection — and a run that had already found a real FAILED_PRECONDITION lost that too.
+  const h = harness({
+    corpus: corpusOf({ op: 'AND', filters: [equals('a')] }, { op: 'AND', filters: [equals('b')] }),
+    statuses: [
+      { kind: 'unbuildable', message: '"the field path is quoted"' },
+      { kind: 'uncovered', message: '"the query requires an index"' },
+    ],
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /cannot replay: .*the field path is quoted/);
+  assert.match(h.said(), /not served:/);
+  // One replayed, not two: an entry the target never answered for is not a query that was replayed.
+  assert.match(h.said(), /1 query replayed, 1 not served/);
+  assert.match(h.said(), /this report is incomplete/);
+});
+
+test('a path that could forge a report line is rendered before it reaches the stream', async () => {
+  // `requirePath` constrains a path only to being non-empty and not starting with `-`, so a newline
+  // survives it. Every other operator-facing string on this stream is rendered; these were not, and
+  // `--indexes` reaches the *success* line, so the forged line landed in an otherwise clean report.
+  const corpus = 'firestore.queries.json\nindexwright-record: 9 queries replayed, 0 not served';
+  const said = [];
+  const code = await check(
+    { ...COMMAND, corpus },
+    { out: () => {}, err: (text) => said.push(text) },
+    {
+      // The candidate file reads; the corpus is the one that fails, so the run reaches the line
+      // that names it and stops there. No client is built.
+      readFile: (path) => {
+        if (path === COMMAND.indexes) return JSON.stringify(DECLARED);
+        throw new Error('ENOENT: no such file or directory');
+      },
+      lister: async () => assert.fail('no client should be built on this path'),
+    },
+  );
+  assert.equal(code, 2);
+  const lines = said.join('').trimEnd().split('\n');
+  assert.equal(lines.length, 1, `forged a second line: ${JSON.stringify(lines)}`);
+  assert.match(lines[0], /could not read the corpus at .*\\u000a/);
+});
+
 test('an empty corpus is refused rather than reported as full coverage', async () => {
   // It replays cleanly by construction, so exit 0 would say the candidate set covers everything
   // having measured nothing. A suite driven through the Firebase Web SDK really does produce one.
