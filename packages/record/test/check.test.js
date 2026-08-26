@@ -166,10 +166,17 @@ test('an index still building is waited on, and one that will never build is not
 
   // NEEDS_REPAIR and a state this version cannot name are both outcomes waiting does not resolve, so
   // polling on them would spend the whole deadline to arrive at the same answer.
-  for (const state of ['NEEDS_REPAIR', 'DEFRAGMENTING']) {
+  // Pinned apart rather than together: `/readiness could not be established/` is the prefix
+  // `establishReadiness`'s caller prepends, so it matches whichever verdict `describe` produced —
+  // and the `unrecognised` arm is the only place the unknown state name reaches the operator.
+  for (const [state, expected] of [
+    ['NEEDS_REPAIR', /1 index in NEEDS_REPAIR, which waiting does not resolve/],
+    ['DEFRAGMENTING', /1 index in a state this version cannot classify \("DEFRAGMENTING"\)/],
+  ]) {
     const stuck = harness({ listings: [[{ ...READY[0], state }]] });
     assert.equal(await stuck.run(), 2);
     assert.match(stuck.said(), /readiness could not be established/);
+    assert.match(stuck.said(), expected);
     assert.deepEqual(stuck.slept, []);
   }
 });
@@ -453,11 +460,14 @@ test('a client that will not close does not replace the answer the run reached',
   // run that then does not exit.
   assert.match(reporting.said(), /could not release the replay client/);
 
+  // No `listings` here: `harness` spreads `...rest` last, so an explicit `lister` overwrites the
+  // queue-driven one and a `listings` beside it would be inert — an argument a later reader would
+  // edit to change the scenario and see no effect.
+  const damaged = { ...READY[0], state: 'NEEDS_REPAIR' };
   const declining = harness({
-    listings: [[{ ...READY[0], state: 'NEEDS_REPAIR' }]],
     lister: async () => ({
       listIndexesAsync: () => (async function* () {
-        yield { ...READY[0], state: 'NEEDS_REPAIR' };
+        yield damaged;
       })(),
       close: async () => {
         throw new Error('the channel would not close');

@@ -174,6 +174,12 @@ again, by its own `corpusVersion`.
 
 ### Changed
 
+- **`IndexLister` now requires `close`.** The exported type widened from
+  `Pick<…, 'listIndexesAsync'>` to `Pick<…, 'listIndexesAsync' | 'close'>`, so an external test
+  double or wrapper built to the old shape no longer typechecks. The affordance is the point — see
+  issue #39 above — and the fix is one method: the real client's `close()` is idempotent and safe on
+  one that never opened a channel.
+
 - **`reconcile` declines a live field that carries no usable path**, where it previously keyed one.
   A live entry whose field arrives with `fieldPath` missing, `null`, or empty is now
   `field-unreadable` and the verdict is `indeterminate`; before, `canonicalFields` rendered the

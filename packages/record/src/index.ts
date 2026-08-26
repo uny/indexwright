@@ -12,6 +12,10 @@ export {
   listLiveIndexes,
   type IndexLister,
 } from './admin.js';
+// The type of `check`'s first parameter. `args.ts` is otherwise the CLI's own business — nothing
+// else from it is published — but a caller that can reach `check` and not name what to pass it has
+// to write `Parameters<typeof check>[0]`.
+export type { CheckCommand } from './args.js';
 export {
   check,
   DEFAULT_DEADLINE_MS,
