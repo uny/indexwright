@@ -203,7 +203,11 @@ export function buildReplayQuery(
 
 /** Which of the three answers a rejection is. */
 export function classifyRejection(error: unknown): ReplayStatus {
-  const code = (error as { code?: unknown }).code;
+  // Read through a guard rather than a cast. `messageOf` is total on purpose, and a `.code` lookup
+  // that threw would undo that from inside the one handler whose whole job is that any failure
+  // leaves as a status — `Promise.reject()` with no argument is enough to reach it, and the entry's
+  // verdict and the report around it would both be lost to a `TypeError` naming neither.
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
   // Rendered for the reason `listLiveIndexes` renders: this is the one string on the stream that the
   // local machine did not author, and a status carrying a newline would forge a well-formed
   // `indexwright-record:` line beside the one an operator is asked to read.

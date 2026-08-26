@@ -301,12 +301,17 @@ test('check prints the target before it could reach a network, and exits non-zer
   // Printed on every run rather than only on a failure: a real database in place of a throwaway one
   // is the mistake that produces no error, so the target is the one thing a run has to say out loud.
   const streams = collect();
-  // No files exist at the defaults here, which is what makes this a test of the *order*: the verb
-  // announces the target, then fails on a file it could read offline, and never builds a client.
+  // The candidate file is named explicitly and does not exist, which is what makes this a test of
+  // the *order*: the verb announces the target, then fails on a file it could read offline, and
+  // never builds a client. Named rather than defaulted because the default is resolved against the
+  // working directory, and a directory that happened to hold a `firestore.indexes.json` would send
+  // this test somewhere else entirely.
   //
   // The exit code is the half a CI step branches on. Unasserted, a verb that regressed to `return 0`
   // would report a replay that never ran as a clean one — the silent pass it exists to prevent.
-  assert.equal(await run(['check', '--project', 'acme-prod', '--database', '(default)'], streams, {}), 2);
+  const missing = join(mkdtempSync(join(tmpdir(), 'indexwright-')), 'absent.json');
+  const argv = ['check', '--project', 'acme-prod', '--database', '(default)', '--indexes', missing];
+  assert.equal(await run(argv, streams, {}), 2);
   const [first, second] = streams.stderr().split('\n');
   assert.match(first, /target projects\/acme-prod\/databases\/\(default\)/);
   assert.match(second, /could not read the candidate indexes/);

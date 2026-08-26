@@ -176,8 +176,12 @@ test('only FAILED_PRECONDITION is the finding, and the status text cannot forge 
   assert.equal(classifyRejection(status(3, 'bad')).kind, 'invalid');
   assert.equal(classifyRejection(status(7, 'denied')).kind, 'failed');
   // A rejection with no route to a primitive still classifies, rather than throwing from inside the
-  // handler whose whole purpose is that a failure leaves as a status.
+  // handler whose whole purpose is that a failure leaves as a status. `Promise.reject()` with no
+  // argument is the one that reaches it with nothing to read a `code` off at all.
   assert.equal(classifyRejection(Object.create(null)).kind, 'failed');
+  assert.equal(classifyRejection(undefined).kind, 'failed');
+  assert.equal(classifyRejection(null).kind, 'failed');
+  assert.equal(classifyRejection('a string rejection').kind, 'failed');
 
   // The one string on this stream the local machine did not author. A status carrying a newline and
   // `indexwright-record: target …` would otherwise write a second well-formed line beside the one an
