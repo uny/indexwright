@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { parseCorpus } from '../dist/index.js';
+import { buildCorpus, parseCorpus, serialiseCorpus, toQueryShape } from '../dist/index.js';
 import { canonicalTarget, parseArgs, UsageError } from '../dist/args.js';
 import { run, shouldForward } from '../dist/cli.js';
 
@@ -315,6 +315,68 @@ test('check prints the target before it could reach a network, and exits non-zer
   const [first, second] = streams.stderr().split('\n');
   assert.match(first, /target projects\/acme-prod\/databases\/\(default\)/);
   assert.match(second, /could not read the candidate indexes/);
+});
+
+test('check\'s exit code is the one the CLI returns, for each of the three', async () => {
+  // The one line of the shipped path that nothing reached: `run` hands `check`'s code back, and
+  // every 0/1/2 assertion in the suite lived in `check.test.js`, which calls `check` directly.
+  // Replacing that line with `await check(...); return 2` left all 335 tests green — so a corpus
+  // fully covered would have reported 2 from the CLI while the library said 0, and a
+  // FAILED_PRECONDITION would have lost its distinct 1. Measured, not assumed.
+  const live = [
+    {
+      name: 'projects/p/databases/(default)/collectionGroups/orders/indexes/ix',
+      state: 'READY',
+      queryScope: 'COLLECTION',
+      fields: [
+        { fieldPath: 'status', order: 'ASCENDING' },
+        { fieldPath: '__name__', order: 'ASCENDING' },
+      ],
+    },
+  ];
+  const declared = {
+    indexes: [
+      {
+        collectionGroup: 'orders',
+        queryScope: 'COLLECTION',
+        fields: [{ fieldPath: 'status', order: 'ASCENDING' }],
+      },
+    ],
+  };
+  const corpus = serialiseCorpus(
+    buildCorpus(
+      [
+        toQueryShape({
+          collectionGroup: 'orders',
+          queryScope: 'COLLECTION',
+          where: { op: 'AND', filters: [{ fieldPath: 'status', op: 'EQUAL' }] },
+          orderBy: [],
+        }),
+      ],
+      [],
+    ),
+  );
+
+  for (const [status, expected] of [
+    [{ kind: 'served' }, 0],
+    [{ kind: 'uncovered', message: '"the query requires an index"' }, 1],
+    [{ kind: 'invalid', message: '"inequality on two fields"' }, 2],
+  ]) {
+    const streams = collect();
+    const argv = ['check', '--project', 'p', '--database', '(default)'];
+    const code = await run(argv, streams, {}, {
+      settleMs: 0,
+      now: () => 0,
+      sleep: async () => {},
+      readFile: (path) => (path === 'firestore.indexes.json' ? JSON.stringify(declared) : corpus),
+      lister: async () => ({
+        listIndexesAsync: () => (async function* () { for (const i of live) yield i; })(),
+        close: async () => {},
+      }),
+      replayer: async () => ({ run: async () => status, close: async () => {} }),
+    });
+    assert.equal(code, expected, `${status.kind} should exit ${expected}, said: ${streams.stderr()}`);
+  }
 });
 
 test('--help and --version report without running anything', async () => {

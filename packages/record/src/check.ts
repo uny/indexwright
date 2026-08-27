@@ -278,7 +278,13 @@ async function establishReadiness(
         if (line !== last) say(`waiting: ${line}`);
         last = line;
       }
-      await deps.sleep(verdict.kind === 'settling' ? verdict.remainingMs : deps.pollMs);
+      // Clamped to what is left of the deadline. A settling period is up to a minute, and sleeping
+      // it whole from 14 minutes in returned *past* the bound this run advertises — benign, since
+      // the set really was settling, but a bound that is only approximately kept is one a reader
+      // cannot use. The loop re-observes either way; a short sleep costs one extra listing.
+      const remaining = deps.deadlineMs - waited;
+      const wanted = verdict.kind === 'settling' ? verdict.remainingMs : deps.pollMs;
+      await deps.sleep(Math.max(0, Math.min(wanted, remaining)));
     }
   } finally {
     await release('index lister', lister, say);

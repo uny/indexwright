@@ -181,6 +181,17 @@ function nodeFilter(
  * false alarm. And there is no `select`: a projection can be served by a covering index the full
  * query would need more of, which is the same mistake in the other clothes.
  *
+ * **What that costs is not bounded, and this version does not bound it.** The argument above is
+ * about index selection only; it says nothing about how much comes back. The synthesised sentinel
+ * matches nothing for an equality, but `!=`, `not-in`, and the negated unary operators match every
+ * document that merely *has* the field — so an entry recorded from `status != x` replays as a read
+ * of the whole collection, and `get()` buffers all of it. Against a throwaway target that is free;
+ * against a populated one it is the whole collection billed and held in memory, per such entry, and
+ * a `DEADLINE_EXCEEDED` from it classifies as `failed` and stops the run. Reading the status without
+ * reading the result — a stream closed after the first document, which leaves the request on the
+ * wire unchanged — would fix it, and is not attempted here because it is unmeasured against the
+ * channel lifetime issue #39 is about.
+ *
  * A `COLLECTION`-scope plan replays against the *root* collection of that id, because the corpus
  * records a collection id and never the parent path (SPEC §7). Index selection is by collection id
  * and scope, so the root collection asks the same question of the same index; what is lost is
@@ -250,13 +261,16 @@ export async function replayClient(project: string, database: string): Promise<R
       // verdict would be a lie — is met by `unbuildable` being its own kind. Letting it throw met
       // that concern by losing the run instead.
       //
-      // Rendered here rather than by the caller: unlike a `ReplayError`, an error out of the SDK is
-      // a string this package did not author, and it reaches the same stream as everything else.
+      // A `ReplayError` is this package's own sentence and already carries `render`ed parts, so
+      // rendering it again would double-escape the one quoted path it names. Anything else out of
+      // the SDK is a string this package did not author, and gets the treatment every such string
+      // on this stream gets.
       let query: FirebaseFirestore.Query;
       try {
         query = buildReplayQuery(sdk, db, plan);
       } catch (error) {
-        return { kind: 'unbuildable', message: render(messageOf(error)) };
+        const message = error instanceof ReplayError ? error.message : render(messageOf(error));
+        return { kind: 'unbuildable', message };
       }
       try {
         await query.get();
