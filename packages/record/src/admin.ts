@@ -17,9 +17,12 @@
  * `ReadinessGate.observe` reads `[]` as a database with nothing left to build, and SPEC §3 requires
  * that a principal which cannot list indexes be told readiness could not be established. A failure
  * therefore leaves here as an `AdminError` and never as an empty array.
+ *
+ * What it does *not* own is the client's lifetime. See `IndexLister`.
  */
 
-import { redirectReason, render, setRedirect } from './args.js';
+import { render } from './args.js';
+import { loadFirestore, messageOf, redirectRefusal, type FirestoreModule } from './client.js';
 import type { LiveCompositeIndex } from './reconcile.js';
 
 export class AdminError extends Error {
@@ -27,36 +30,30 @@ export class AdminError extends Error {
 }
 
 /**
- * The admin client's type, reached through `@google-cloud/firestore` rather than as its own
- * dependency.
- *
- * `Firestore.v1` is marked deprecated in 9.0.0, which moved these clients into
- * `@google-cloud/firestore-api` and left this accessor pointing at them. Declaring that package here
- * instead would be the un-deprecated path, and is not taken: `@google-cloud/firestore` depends on
- * `^0.2.0` of it while 0.5.0 is current, so a range of our own either duplicates the package in the
- * tree — two copies of the generated protos, and the replay client using the other one — or pins us
- * to whatever range the data client happens to carry, to be re-synchronised by hand at every bump.
- * Through the accessor there is one version by construction, and it is the one the replay client
- * uses. The cost is a rewrite of these few lines the day the accessor goes; that is cheaper than
- * either half of the alternative, and it is a compile error rather than a silent drift.
- *
- * The types describe the package as `export = FirebaseFirestore`, so `v1` sits directly on the
- * module type here. What the *runtime* hands back under ESM is a namespace whose `default` holds
- * those exports and whose `v1` is `undefined` — which is why `adminLister` unwraps and this does
- * not. Measured, not assumed: the two disagree, and following the types would be a `TypeError` no
- * compiler catches.
- */
-type AdminNamespace = typeof import('@google-cloud/firestore');
-
-/**
- * The slice of the admin client this module uses.
+ * The slice of the admin client this module uses, and the one method it does not.
  *
  * Typed off the client itself, so a fake cannot drift from what the real one accepts, and so nothing
  * here has to model the request or the response shape a second time.
+ *
+ * `close` is in the `Pick` without being called anywhere in this module, which is issue #39's
+ * answer in one line. The gRPC stub is lazy — the constructor opens nothing and `close` is a no-op
+ * until the first call creates it — so the channel appears on the first `listIndexesAsync` and then
+ * refs the event loop until something closes it. A `check` that listed and reported would print its
+ * report and never exit. Narrowed to `listIndexesAsync` alone, a caller holding an `IndexLister`
+ * had no typed way to release it even if it wanted to, and the JavaScript API is public.
+ *
+ * Closing it *here* would be the smaller change and the wrong one: readiness is established by
+ * observing the same set at least twice, separated by a settling period, so `listLiveIndexes` is
+ * called repeatedly against one client and a lister that closed itself would build and tear down a
+ * channel per poll. The lifetime is known by the caller that knows how many listings it will ask
+ * for, so the affordance goes in the type and the decision stays with `check`.
+ *
+ * The client's `close()` is idempotent and safe on one that never opened a channel, so a caller may
+ * close unconditionally in a `finally`.
  */
 export type IndexLister = Pick<
-  InstanceType<AdminNamespace['v1']['FirestoreAdminClient']>,
-  'listIndexesAsync'
+  InstanceType<FirestoreModule['v1']['FirestoreAdminClient']>,
+  'listIndexesAsync' | 'close'
 >;
 
 /**
@@ -88,39 +85,25 @@ export function indexesParent(target: string): string {
  * The redirect variables are refused here as well as in `parseCheck`. `parseCheck` is where an
  * operator gets the message; this is what makes the refusal a property of the module rather than of
  * one caller, since the JavaScript API is public and a caller reaching this directly would otherwise
- * construct exactly the redirected client issue #37 is about.
+ * construct exactly the redirected client issue #37 is about. `replayClient` carries the same
+ * refusal for the same reason — see `client.ts`.
  *
- * `process.env` is read here rather than an injected environment, and that is the correction rather
- * than the convention: the client reads `process.env` itself, unconditionally, and a guard that
- * consults anything else can disagree with the thing it is guarding. With an `env` parameter,
- * `adminLister('acme-prod', {})` passed the refusal and built a client the ambient environment then
- * redirected — the guard's own hole, in the shape of the hole it exists to close. The one source the
- * client reads is the one source this reads. Tests set and restore `process.env` accordingly.
+ * The caller owns what comes back and must close it. See `IndexLister`.
  */
 export async function adminLister(project: string): Promise<IndexLister> {
-  const variable = setRedirect(process.env);
-  if (variable !== undefined) {
-    throw new AdminError(
-      `${variable} is set to ${render(process.env[variable] as string)}; check reads the database ` +
-        `it was given, and ${redirectReason(variable)}`,
-    );
-  }
-  // Loaded here rather than at the top of the module, which is what makes this function async. The
-  // client costs about 80ms to load against the 4ms the rest of this package does, and `index.ts`
-  // is a single entry point — so an eager import would charge every caller of `parseCorpus` for a
-  // Firestore SDK they never touch. Deferred, the cost lands on the one verb that needs it. The
-  // refusal above stays in front of it deliberately: nothing is loaded, let alone constructed, on
-  // the path where the client would have been silently redirected.
-  const module = await import('@google-cloud/firestore');
-  // `?? module` rather than `.default` outright: the fallback is what a version exporting `v1` as a
-  // real named export would land on, and this way that is a no-op rather than a crash.
-  const namespace = (module as { default?: AdminNamespace }).default ?? module;
+  const refusal = redirectRefusal();
+  if (refusal !== undefined) throw new AdminError(refusal);
+  const namespace = await loadFirestore();
   // Checked rather than trusted, because `v1` is the one part of this that is not load-bearing for
   // the package that publishes it: it is `@internal` and `@deprecated`, installed with
   // `Object.defineProperty`, and so outside the semver promise `^9.0.0` buys. A consumer resolving a
   // later 9.x that dropped it would otherwise get `Cannot read properties of undefined` out of a
   // module whose stated contract is that its failures arrive as `AdminError` — a type nobody can
   // catch for, naming nothing anyone can act on.
+  //
+  // `Firestore` itself gets no such check in `replay.ts`, and the asymmetry is the point: that class
+  // is the package's headline export and is inside the semver promise. This one is reached through
+  // an accessor the package says is not for us.
   const admin = namespace.v1?.FirestoreAdminClient;
   if (admin === undefined) {
     throw new AdminError(
@@ -145,6 +128,9 @@ export async function adminLister(project: string): Promise<IndexLister> {
  * where a partial listing comes from, and a partial listing is the worst answer this function could
  * return — indexes the target holds but this run did not see come back as `missing` from
  * `reconcile`, which reads as a divergence that is not there.
+ *
+ * The client is neither closed nor kept: this may be called many times against one lister, which is
+ * what the readiness gate needs. See `IndexLister`.
  */
 export async function listLiveIndexes(
   target: string,
@@ -186,28 +172,4 @@ export async function listLiveIndexes(
     });
   }
   return indexes;
-}
-
-function messageOf(error: unknown): string {
-  try {
-    const message = error instanceof Error ? error.message : error;
-    return typeof message === 'string' ? message : String(message);
-  } catch {
-    // A rejection with no route to a primitive. `Object.create(null)` is the plain case — no
-    // prototype, so no `toString` — and a throwing `Symbol.toPrimitive` is the general one. Reached
-    // from the catch in `listLiveIndexes`, where throwing is the one thing left to get wrong: the
-    // whole point of that block is that a failure leaves as an `AdminError` rather than as a
-    // listing, and a `messageOf` that threw would replace it with a `TypeError` from inside the
-    // handler, naming neither the parent nor the cause.
-    try {
-      // Reads no user-defined `toString`, so it survives both cases above — but it is not itself
-      // total, and the comment that said it was is the reason this nesting is here. It looks up
-      // `Symbol.toStringTag`, which a getter or a Proxy trap throws from as readily as
-      // `Symbol.toPrimitive` does, and a fallback that can fail is not a fallback. The literal is
-      // the floor: it names the shape of the failure without reading anything to do it.
-      return Object.prototype.toString.call(error);
-    } catch {
-      return '[unprintable rejection]';
-    }
-  }
 }

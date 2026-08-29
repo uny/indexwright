@@ -52,14 +52,10 @@ Options:
       --version           show the version
 ```
 
-## `check` — not yet implemented
+## `check`
 
 `check` replays a corpus against a database that already has the candidate index set applied, and
 reports the queries it cannot serve. It applies nothing and reads only.
-
-**Replay is not implemented in this version.** The verb parses and echoes its target, then exits
-`2`. What it accepts is settled, so a wrapper script can be written against it now; what it does is
-not.
 
 ```text
 indexwright-record check --project <id> --database <name> [options]
@@ -70,6 +66,37 @@ Options:
   --corpus <file>         the corpus to replay (default: firestore.queries.json)
   --indexes <file>        the candidate index declarations (default: firestore.indexes.json)
 ```
+
+| Exit | Meaning |
+|-----:|:--------|
+| 0 | Every entry in the corpus was served by the candidate set. |
+| 1 | At least one was not. That is the finding. |
+| 2 | Usage error, or the run could not answer. |
+
+Exit `1` is a finding and exit `2` is the absence of one. Unlike `indexwright lint`, which exits `0`
+even with findings, the oracle here is Firestore itself rather than a rule this tool applies — so a
+`FAILED_PRECONDITION` is worth failing a pipeline on. `2` covers every way the run could not answer:
+a file it could not read, a readiness it could not establish, a target that is not carrying the
+candidate set, an entry it could not replay, a status it cannot interpret. It outranks `1`, because
+a report that is missing entries is not a clean report with a caveat.
+
+**A run takes a minute at the least, and that is the design.** A composite index answers
+`FAILED_PRECONDITION` for a period *after* it can already serve some queries, so one query succeeding
+is not evidence that the set is ready. `check` establishes readiness twice over — every index
+reporting `READY` through the Admin API, *and* the set unchanged for a settling period — before it
+replays anything. A `check` that answered in two seconds would be a `check` that reported inside that
+window.
+
+**A corpus with nothing replayable in it is refused, not reported as a pass.** An empty corpus
+replays cleanly by construction, so exiting `0` on one would say the candidate set covers everything
+having measured nothing. That happens for a real reason: a suite driven through the Firebase Web SDK
+issues no gRPC, so `record` observes no queries to record.
+
+**It also establishes that the set on the target is the candidate set**, in both directions. A target
+holding an index the file does not declare serves queries the candidate set alone would not, so the
+run would come back clean and the coverage gap would never appear; a file declaring one the target
+does not hold produces a `FAILED_PRECONDITION` that the file does not actually have. Either way the
+verdict would be about neither set, so `check` declines rather than reports.
 
 **The target is never inferred.** `GOOGLE_CLOUD_PROJECT`, a `gcloud config` default, and the project
 inside application default credentials are all whatever the person running this last worked against

@@ -316,5 +316,16 @@ test('the constructed client is bound to the named project, and is a real admin 
     // `default`, so a client constructed the way the types describe would be a `TypeError` here
     // rather than a compile error anywhere.
     assert.equal(lister.constructor.name, 'FirestoreAdminClient');
+
+    // The affordance issue #39 is about. Narrowed to `listIndexesAsync` alone, a caller holding an
+    // `IndexLister` had no typed way to release the channel the first call opens — and a live gRPC
+    // channel refs the event loop, so `check` would print its report and then not exit.
+    assert.equal(typeof lister.close, 'function');
+    // Safe on a client that never opened one, which is what lets `check` close in a `finally`
+    // without knowing whether it got as far as a call. `close()` is a no-op when the stub was never
+    // created, and this test is the only place that construction alone is enough to pin: it is a
+    // claim about a client with no channel, and the channel is what a call would create.
+    await lister.close();
+    await lister.close();
   });
 });

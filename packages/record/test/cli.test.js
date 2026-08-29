@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { parseCorpus } from '../dist/index.js';
+import { buildCorpus, parseCorpus, serialiseCorpus, toQueryShape } from '../dist/index.js';
 import { canonicalTarget, parseArgs, UsageError } from '../dist/args.js';
 import { run, shouldForward } from '../dist/cli.js';
 
@@ -277,17 +277,18 @@ test('check is a verb only as the first word, so a suite of that name still runs
   assert.deepEqual(command.argv, ['check', '--project', 'p']);
 });
 
-test('the help does not promise a replay the verb cannot run yet', async () => {
-  // The two have to move together: the exit-2 stub below and this line are the same claim, and a
-  // usage that describes working behaviour is the one thing a reader cannot check against the code.
+test('the help says what the verb costs, since that is what a reader cannot check against the code', async () => {
+  // The settling period is the surprising part of running this: a `check` that answers in under a
+  // minute is a `check` that did not establish readiness. A usage that leaves it out is one a reader
+  // discovers by watching a CI job appear to hang.
   const streams = collect();
   assert.equal(await run(['check', '--help'], streams, {}), 0);
-  assert.match(streams.stdout(), /Replay is not implemented yet/);
+  assert.match(streams.stdout(), /takes a minute at the least/);
   // `-h` is documented as check's alias and is answered before the option loop, which would
   // otherwise reject it for not starting with `--`.
   const short = collect();
   assert.equal(await run(['check', '-h'], short, {}), 0);
-  assert.match(short.stdout(), /Replay is not implemented yet/);
+  assert.match(short.stdout(), /takes a minute at the least/);
 });
 
 test('check answers --version, so the flag does not stop working once a verb is named', async () => {
@@ -300,11 +301,82 @@ test('check prints the target before it could reach a network, and exits non-zer
   // Printed on every run rather than only on a failure: a real database in place of a throwaway one
   // is the mistake that produces no error, so the target is the one thing a run has to say out loud.
   const streams = collect();
-  // The exit code is the half a CI step branches on. Unasserted, a stub that regressed to `return 0`
-  // would report a replay that never ran as a clean one — the silent pass the verb exists to prevent.
-  assert.equal(await run(['check', '--project', 'acme-prod', '--database', '(default)'], streams, {}), 2);
-  assert.match(streams.stderr(), /target projects\/acme-prod\/databases\/\(default\)/);
-  assert.match(streams.stderr(), /check is not implemented yet/);
+  // The candidate file is named explicitly and does not exist, which is what makes this a test of
+  // the *order*: the verb announces the target, then fails on a file it could read offline, and
+  // never builds a client. Named rather than defaulted because the default is resolved against the
+  // working directory, and a directory that happened to hold a `firestore.indexes.json` would send
+  // this test somewhere else entirely.
+  //
+  // The exit code is the half a CI step branches on. Unasserted, a verb that regressed to `return 0`
+  // would report a replay that never ran as a clean one — the silent pass it exists to prevent.
+  const missing = join(mkdtempSync(join(tmpdir(), 'indexwright-')), 'absent.json');
+  const argv = ['check', '--project', 'acme-prod', '--database', '(default)', '--indexes', missing];
+  assert.equal(await run(argv, streams, {}), 2);
+  const [first, second] = streams.stderr().split('\n');
+  assert.match(first, /target projects\/acme-prod\/databases\/\(default\)/);
+  assert.match(second, /could not read the candidate indexes/);
+});
+
+test('check\'s exit code is the one the CLI returns, for each of the three', async () => {
+  // The one line of the shipped path that nothing reached: `run` hands `check`'s code back, and
+  // every 0/1/2 assertion in the suite lived in `check.test.js`, which calls `check` directly.
+  // Replacing that line with `await check(...); return 2` left all 335 tests green — so a corpus
+  // fully covered would have reported 2 from the CLI while the library said 0, and a
+  // FAILED_PRECONDITION would have lost its distinct 1. Measured, not assumed.
+  const live = [
+    {
+      name: 'projects/p/databases/(default)/collectionGroups/orders/indexes/ix',
+      state: 'READY',
+      queryScope: 'COLLECTION',
+      fields: [
+        { fieldPath: 'status', order: 'ASCENDING' },
+        { fieldPath: '__name__', order: 'ASCENDING' },
+      ],
+    },
+  ];
+  const declared = {
+    indexes: [
+      {
+        collectionGroup: 'orders',
+        queryScope: 'COLLECTION',
+        fields: [{ fieldPath: 'status', order: 'ASCENDING' }],
+      },
+    ],
+  };
+  const corpus = serialiseCorpus(
+    buildCorpus(
+      [
+        toQueryShape({
+          collectionGroup: 'orders',
+          queryScope: 'COLLECTION',
+          where: { op: 'AND', filters: [{ fieldPath: 'status', op: 'EQUAL' }] },
+          orderBy: [],
+        }),
+      ],
+      [],
+    ),
+  );
+
+  for (const [status, expected] of [
+    [{ kind: 'served' }, 0],
+    [{ kind: 'uncovered', message: '"the query requires an index"' }, 1],
+    [{ kind: 'invalid', message: '"inequality on two fields"' }, 2],
+  ]) {
+    const streams = collect();
+    const argv = ['check', '--project', 'p', '--database', '(default)'];
+    const code = await run(argv, streams, {}, {
+      settleMs: 0,
+      now: () => 0,
+      sleep: async () => {},
+      readFile: (path) => (path === 'firestore.indexes.json' ? JSON.stringify(declared) : corpus),
+      lister: async () => ({
+        listIndexesAsync: () => (async function* () { for (const i of live) yield i; })(),
+        close: async () => {},
+      }),
+      replayer: async () => ({ run: async () => status, close: async () => {} }),
+    });
+    assert.equal(code, expected, `${status.kind} should exit ${expected}, said: ${streams.stderr()}`);
+  }
 });
 
 test('--help and --version report without running anything', async () => {

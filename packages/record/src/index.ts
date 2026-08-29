@@ -12,6 +12,25 @@ export {
   listLiveIndexes,
   type IndexLister,
 } from './admin.js';
+// The type of `check`'s first parameter. `args.ts` is otherwise the CLI's own business — nothing
+// else from it is published — but a caller that can reach `check` and not name what to pass it has
+// to write `Parameters<typeof check>[0]`.
+export type { CheckCommand } from './args.js';
+export {
+  check,
+  DEFAULT_DEADLINE_MS,
+  DEFAULT_POLL_MS,
+  type CheckOptions,
+  type Streams,
+} from './check.js';
+export {
+  FAILED_PRECONDITION,
+  INVALID_ARGUMENT,
+  loadFirestore,
+  messageOf,
+  redirectRefusal,
+  type FirestoreModule,
+} from './client.js';
 export { buildCorpus, CorpusError, parseCorpus, serialiseCorpus, writeCorpus } from './corpus.js';
 export { decodeRunQuery, type DecodeResult } from './decode.js';
 export {
@@ -52,6 +71,16 @@ export {
   type UnreadableReason,
 } from './reconcile.js';
 export { Recorder } from './recorder.js';
+export {
+  buildReplayQuery,
+  classifyRejection,
+  replayClient,
+  replayFieldPath,
+  REPLAY_SENTINEL,
+  TargetError,
+  type Replayer,
+  type ReplayStatus,
+} from './replay.js';
 export {
   compareByCodePoint,
   escapeComponent,
