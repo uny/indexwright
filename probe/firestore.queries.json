@@ -1,0 +1,164 @@
+{
+  "corpusVersion": 1,
+  "queries": [
+    {
+      "key": "probe::COLLECTION::AND(__name__:GREATER_THAN|a:EQUAL)::",
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "where": {
+        "op": "AND",
+        "filters": [
+          {
+            "fieldPath": "__name__",
+            "op": "GREATER_THAN"
+          },
+          {
+            "fieldPath": "a",
+            "op": "EQUAL"
+          }
+        ]
+      },
+      "orderBy": []
+    },
+    {
+      "key": "probe::COLLECTION::AND(a:EQUAL)::b:DESCENDING",
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "where": {
+        "op": "AND",
+        "filters": [
+          {
+            "fieldPath": "a",
+            "op": "EQUAL"
+          }
+        ]
+      },
+      "orderBy": [
+        {
+          "fieldPath": "b",
+          "direction": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "key": "probe::COLLECTION::AND(a:EQUAL|b:GREATER_THAN)::b:ASCENDING",
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "where": {
+        "op": "AND",
+        "filters": [
+          {
+            "fieldPath": "a",
+            "op": "EQUAL"
+          },
+          {
+            "fieldPath": "b",
+            "op": "GREATER_THAN"
+          }
+        ]
+      },
+      "orderBy": [
+        {
+          "fieldPath": "b",
+          "direction": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "key": "probe::COLLECTION::AND(a:EQUAL|b:IN)::",
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "where": {
+        "op": "AND",
+        "filters": [
+          {
+            "fieldPath": "a",
+            "op": "EQUAL"
+          },
+          {
+            "fieldPath": "b",
+            "op": "IN"
+          }
+        ]
+      },
+      "orderBy": []
+    },
+    {
+      "key": "probe::COLLECTION::AND(a:EQUAL|b:IS_NULL)::",
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "where": {
+        "op": "AND",
+        "filters": [
+          {
+            "fieldPath": "a",
+            "op": "EQUAL"
+          },
+          {
+            "fieldPath": "b",
+            "op": "IS_NULL"
+          }
+        ]
+      },
+      "orderBy": []
+    },
+    {
+      "key": "probe::COLLECTION::AND(a:EQUAL|b:NOT_EQUAL)::",
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "where": {
+        "op": "AND",
+        "filters": [
+          {
+            "fieldPath": "a",
+            "op": "EQUAL"
+          },
+          {
+            "fieldPath": "b",
+            "op": "NOT_EQUAL"
+          }
+        ]
+      },
+      "orderBy": []
+    },
+    {
+      "key": "probe::COLLECTION::AND(a:EQUAL|n:GREATER_THAN)::",
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "where": {
+        "op": "AND",
+        "filters": [
+          {
+            "fieldPath": "a",
+            "op": "EQUAL"
+          },
+          {
+            "fieldPath": "n",
+            "op": "GREATER_THAN"
+          }
+        ]
+      },
+      "orderBy": []
+    },
+    {
+      "key": "probe::COLLECTION::AND(a:EQUAL|tags:ARRAY_CONTAINS)::",
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "where": {
+        "op": "AND",
+        "filters": [
+          {
+            "fieldPath": "a",
+            "op": "EQUAL"
+          },
+          {
+            "fieldPath": "tags",
+            "op": "ARRAY_CONTAINS"
+          }
+        ]
+      },
+      "orderBy": []
+    }
+  ],
+  "skipped": []
+}

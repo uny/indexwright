@@ -1,0 +1,5 @@
+# Emulator and run output. The corpus is committed — it is the input `check` replays, and a diff of
+# it is how a change to capture becomes visible. Everything below is a byproduct of one run.
+emulator.log
+firestore-debug.log
+differential.json
