@@ -164,8 +164,8 @@ earlier session, or no project argument — and they exit before the first byte 
 redirect leaves `differential-before.json` empty rather than partial. An empty report is that, and
 not a measurement of anything.
 
-So the reading this step has to produce, in three groups — and only the first of them is a group a
-`served` can be read against:
+So the reading this step has to produce, in four groups — and only the first of them is a group a
+`served` can be read against, which is why only that group and S7 are handed to the flags:
 
 - **S1, S4, S6 and S8 `constant … uncovered`, and these four are in the flag.** Each carries a
   range, an inequality or an order-by on a second field, and a composite index is the only way
