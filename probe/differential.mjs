@@ -88,9 +88,9 @@ const VARIANTS = [
   // so it cannot drift from the ids `seed.mjs` wrote.
   //
   // There is deliberately no `ref-sentinel` here: for S7 it would be byte-for-byte the general
-  // `sentinel` variant below (same scalar, and `values.ref` already defaults to `doc(SENTINEL)`), so
-  // it added a row to the operand count without adding an operand — and that count is what an
-  // operator reads as the strength of the §7 evidence.
+  // `sentinel` variant at the top of this list — same scalar, and `values.ref` already defaults to
+  // `doc(SENTINEL)` — so it added a row to the operand count without adding an operand, and that
+  // count is what an operator reads as the strength of the §7 evidence.
   { name: 'ref-present', only: 'reference', ref: () => collection.doc(seededId(0)) },
   { name: 'ref-missing', only: 'reference', ref: () => collection.doc('does-not-exist') },
 ];

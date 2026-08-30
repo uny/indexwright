@@ -95,8 +95,12 @@ while (written < count) {
 process.stderr.write(`probe-seed: seeded ${written} documents into ${COLLECTION}\n`);
 // The number to hold the differential probe to, computed here rather than left to the operator to
 // derive: S4 reads every seeded document except the ones a `!=` skips for being null.
+// Named down to the row, because seven of S4's eight rows will report 0 and this line is where the
+// operator meets the number first: the other rows vary the operand, and the operand is what the
+// equality on `a` is matched against, so only the sentinel row addresses this collection at all.
 process.stderr.write(
-  `probe-seed: S4 should report ${written - nullCount(written)} documents read ` +
-    `(${written} seeded, ${nullCount(written)} with a null \`b\`, which \`!=\` does not match)\n`,
+  `probe-seed: S4's \`sentinel\` row should report ${written - nullCount(written)} documents read ` +
+    `(${written} seeded, ${nullCount(written)} with a null \`b\`, which \`!=\` does not match); ` +
+    `S4's other rows should report 0\n`,
 );
 await db.terminate();
