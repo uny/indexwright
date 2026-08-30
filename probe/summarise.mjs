@@ -46,10 +46,16 @@ export function summarise(results, shapes, expected = new Map()) {
     // was issued with exactly as a constant one can, and carrying the count only on the branch that
     // happens to print it is how that shortfall went unreported on the other three.
     const count = issued.get(shape.id) ?? 0;
-    if (shape.varies === 'nothing') {
+    if (shape.varies === 'nothing' && verdicts.size <= 1) {
       // For a shape whose filters are *all* unary, and no shape currently is: there would then be
       // nothing about it for a value to change, and counting it as untested would report a hole
       // where the question does not arise.
+      //
+      // `verdicts.size <= 1` because operands that *did* disagree are a falsification whatever the
+      // shape was declared to vary, and this branch running first would otherwise swallow one:
+      // `[...verdicts][0]` would pick whichever row came back first, and — now that this kind is
+      // held to an expectation — the same two answers in the opposite order would flip the gate.
+      // The declaration says the question does not arise; two different answers say it did.
       findings.push({ shape: shape.id, kind: 'not-applicable', verdict: [...verdicts][0] ?? 'none', issued: count });
     } else if (answered.length < 2) {
       findings.push({ shape: shape.id, kind: 'untested', reached: answered.length, issued: count });
@@ -124,10 +130,14 @@ export function summaryLines({ findings, unreliable, unexpected }) {
     // An expectation the run could not put to the shape. Said out loud rather than dropped: a
     // reader who supplied `--expect-uncovered S1` and reads `S1 FALSIFIES SPEC §7` would otherwise
     // have no way to tell that the prediction went unchecked, and would take the larger reading.
+    //
+    // Keyed off whether the shape *answered*, not off its kind. A `not-applicable` shape usually
+    // did, and is held to its expectation like a `constant` one — but one whose every row was
+    // `invalid` answered `none`, and that is the same unchecked prediction wearing the one kind
+    // whose line would otherwise say nothing about it.
+    const answered = finding.kind === 'constant' || (finding.kind === 'not-applicable' && finding.verdict !== 'none');
     const unevaluated =
-      finding.expected !== undefined && finding.kind !== 'constant' && finding.kind !== 'not-applicable'
-        ? ` — expected ${finding.expected}, not evaluated`
-        : '';
+      finding.expected !== undefined && !answered ? ` — expected ${finding.expected}, not evaluated` : '';
     if (finding.kind === 'constant') {
       // `N of M`, always, even when equal. A bare `constant across 2 operands` gives a reader
       // nothing to compare 2 against, and the comparison is the point.
@@ -136,7 +146,7 @@ export function summaryLines({ findings, unreliable, unexpected }) {
           `${finding.verdict}${short}`,
       );
     } else if (finding.kind === 'not-applicable') {
-      lines.push(`${finding.shape} has no operand to vary; answered ${finding.verdict}`);
+      lines.push(`${finding.shape} has no operand to vary; answered ${finding.verdict}${unevaluated}`);
     } else if (finding.kind === 'untested') {
       lines.push(
         `${finding.shape} UNTESTED — only ${finding.reached} of ${finding.issued} operands ` +

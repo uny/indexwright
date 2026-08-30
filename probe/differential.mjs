@@ -197,4 +197,10 @@ try {
   await db.terminate();
 } catch (error) {
   process.stderr.write(`probe-differential: closing the client failed: ${error?.message ?? String(error)}\n`);
+  // Exit rather than fall off the end. A teardown that failed part-way can leave gRPC channels
+  // holding referenced sockets and timers, and the event loop then keeps a finished run alive: a
+  // gate that hangs three minutes before a deploy is worse than either exit code, and worse than
+  // the unhandled rejection this catch replaced. The empty write is the flush — its callback runs
+  // after the report above has left the stream, so exiting here cannot truncate it.
+  process.stdout.write('', () => process.exit(exitCode));
 }

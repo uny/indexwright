@@ -201,12 +201,15 @@ a zero exit is the go-ahead rather than the first of four things to check by eye
 - a row printing `did not enter the comparison`, exit `2`. Only `served` and `uncovered` rows are
   compared, so an `other` or an `unbuildable` shrinks a shape's operand count while the shape still
   reads `constant` — a verdict over some of the operands presented as one over all of them. Every
-  line that reports a comparison marks the shortfall `SHORT` and prints it as `N of M`, whichever
-  kind of row went missing. An `invalid` row is different and is *not* this: it is the backend
-  refusing an operand it was always going to refuse, so it drops out of the comparison, shrinks the
-  count, marks the line `SHORT`, and does not fail the run. `other` and `unbuildable` never are.
-  So `SHORT` says the evidence is thinner than the operand list, not that the run failed — the exit
-  status says that, and a `SHORT` line beside exit `0` is an invitation to read how much thinner.
+  line that reports a comparison prints it as `N of M`, whichever kind of row went missing, and the
+  two that state a verdict over the whole shape — `constant` and `FALSIFIES SPEC §7` — add `SHORT`
+  when the two numbers differ. An `UNTESTED` line carries the counts without the marker, because a
+  shape that never reached a comparison is already saying the stronger thing. An `invalid` row is
+  different and is *not* this: it is the backend refusing an operand it was always going to refuse,
+  so it drops out of the comparison, shrinks the count, and does not fail the run. `other` and
+  `unbuildable` never are. So `SHORT` says the evidence is thinner than the operand list, not that
+  the run failed — the exit status says that, and a `SHORT` line beside exit `0` is an invitation to
+  read how much thinner.
 - a non-zero exit for any other reason: a shape `UNTESTED — only N of M operands entered the
   comparison`, or a guard refusing to run. A shape that failed on its own terms is not also reported
   `AGAINST EXPECTATION` — there is no single verdict to hold to one — so its line carries

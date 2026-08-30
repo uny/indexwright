@@ -159,8 +159,34 @@ test('a shape with no operand to vary is still held to a supplied expectation', 
   const bad = summarise(results, shapes, new Map([['S1', 'uncovered']]));
   assert.equal(bad.exitCode, 2);
   assert.deepEqual(bad.unexpected, [{ shape: 'S1', expected: 'uncovered', actual: 'served' }]);
-  // A shape that answered nothing at all has no answer to hold to one.
-  assert.equal(summarise([], shapes, new Map([['S1', 'uncovered']])).exitCode, 0);
+  // A shape that answered nothing at all has no answer to hold to one — but the prediction that
+  // went unchecked is still said out loud, or the green gate is the only thing the reader sees.
+  const silent = summarise([row('S1', 'sentinel', 'invalid', { message: 'bad' })], shapes, new Map([['S1', 'uncovered']]));
+  assert.equal(silent.exitCode, 0);
+  assert.deepEqual(silent.unexpected, []);
+  assert.deepEqual(summaryLines(silent), [
+    'S1 has no operand to vary; answered none — expected uncovered, not evaluated',
+  ]);
+});
+
+test('operands that disagree falsify the claim even on a shape declared not to vary', () => {
+  // The declaration says the question does not arise; two different answers say it did. Running the
+  // `varies: 'nothing'` branch first would swallow that — `[...verdicts][0]` picks whichever row
+  // came back first, so with the shape held to an expectation the same two answers in the opposite
+  // order would flip the gate between 0 and 2 on identical evidence.
+  const shapes = [{ id: 'S1', varies: 'nothing' }];
+  const want = new Map([['S1', 'uncovered']]);
+  for (const order of [['served', 'uncovered'], ['uncovered', 'served']]) {
+    const results = [row('S1', 'a', order[0]), row('S1', 'b', order[1])];
+    const summary = summarise(results, shapes, want);
+    assert.equal(summary.exitCode, 1, `order ${order.join(',')}`);
+    assert.equal(summary.findings[0].kind, 'claim-falsified', `order ${order.join(',')}`);
+    assert.deepEqual(summary.unexpected, [], `order ${order.join(',')}`);
+  }
+  // One answer, repeated, is still the question not arising.
+  const agreed = summarise([row('S1', 'a', 'uncovered'), row('S1', 'b', 'uncovered')], shapes, want);
+  assert.equal(agreed.findings[0].kind, 'not-applicable');
+  assert.equal(agreed.exitCode, 0);
 });
 
 test('a clean run prints no SHORT marker, on any kind of finding', () => {
