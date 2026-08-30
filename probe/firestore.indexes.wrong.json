@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "a", "order": "ASCENDING" },
+        { "fieldPath": "b", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

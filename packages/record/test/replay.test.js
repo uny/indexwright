@@ -211,6 +211,34 @@ test('a redirected environment is refused by the module that builds the client, 
   }
 });
 
+test('the sentinel is a document id Firestore will accept', () => {
+  // Deliberately not written in terms of `REPLAY_SENTINEL` beyond reading it: this is the one check
+  // in the file that has to fail when the constant changes badly. Every other test builds both the
+  // actual and the expected query from the constant, so the two move together and a sentinel that
+  // Firestore rejects compares equal to itself all the way to a green suite. This ran green against
+  // `__indexwright_replay__`, which the emulator and the service both refuse.
+  //
+  // First, because it is the premise of every assertion below: `doesNotMatch` throws
+  // `ERR_INVALID_ARG_TYPE` on a non-string, so asserting the type afterwards could never be the
+  // assertion that fails. It is also the scalar half of the constant's two jobs, which every other
+  // operand relies on.
+  assert.equal(typeof REPLAY_SENTINEL, 'string');
+  // The rule is Firestore's: a document id matching `__…__` is reserved. Only that form is — `__x`
+  // and `x__` are ordinary ids — so the pattern is anchored at both ends rather than looking for a
+  // double underscore anywhere. `[\s\S]` rather than `.`, because the service applies the rule to
+  // the whole id including newlines: it refuses `__a\nb__` as reserved, which `.` would not match.
+  assert.doesNotMatch(
+    REPLAY_SENTINEL,
+    /^__[\s\S]*__$/,
+    'a __…__ document id is reserved by Firestore',
+  );
+  // The other id rules, so that a future spelling cannot trip one of them silently either. A single
+  // or double dot is reserved, a `/` makes the id a path, and the limit is 1500 bytes.
+  assert.ok(REPLAY_SENTINEL.length > 0 && Buffer.byteLength(REPLAY_SENTINEL) <= 1500);
+  assert.ok(!REPLAY_SENTINEL.includes('/'));
+  assert.ok(REPLAY_SENTINEL !== '.' && REPLAY_SENTINEL !== '..');
+});
+
 test.after(async () => {
   await db.terminate();
 });

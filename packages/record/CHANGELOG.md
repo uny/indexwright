@@ -193,6 +193,25 @@ again, by its own `corpusVersion`.
   `String(field?.fieldPath ?? field)` — which rendered a pathless object as `[object Object]` and an
   empty path as nothing at all.
 
+### Fixed
+
+- **`REPLAY_SENTINEL` is no longer spelled `__indexwright_replay__`.** The constant does two jobs —
+  the value a synthesised filter compares against, and the id of the document a `__name__` filter
+  names — and Firestore reserves every document id matching `__…__`, rejecting one as
+  `INVALID_ARGUMENT` before it selects an index. So every corpus entry carrying a `__name__` filter
+  replayed as `invalid` and never reached the question `check` was asking, which is precisely the
+  failure SPEC §7 says the reference operand exists to avoid, arriving by the other door. Only that
+  form is reserved: `__x` and `x__` are ordinary ids, and the string is a legal scalar whichever way
+  it is spelled, so the constraint came entirely from the second job.
+
+  The suite could not have caught it as written. Every test builds both the actual and the expected
+  query from this same constant, so the two sides moved together and the comparison stayed true
+  whatever it said — 336 tests green against a sentinel the emulator and the service both refuse.
+  `replay.test.js` now pins the id rules against literals instead. Found by issuing the shapes at the
+  emulator, which is what the harness in `probe/` was added to do.
+
+  The verb is unreleased, so no published version ever carried the reserved spelling.
+
 ## [0.4.0] — 2026-08-15
 
 Minor rather than patch, because both ends of the capture proxy are now constrained and the case that

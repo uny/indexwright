@@ -1,0 +1,10 @@
+# Emulator and run output. The corpus is committed — it is the input `check` replays, and a diff of
+# it is how a change to capture becomes visible. Everything below is a byproduct of one run.
+#
+# The names are the ones the tools actually write, checked by running them from this directory
+# rather than guessed: `firebase emulators:start` writes `firebase-debug.log` and
+# `firestore-debug.log` here, and there is no `emulator.log` — that entry was ignoring nothing.
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+differential.json

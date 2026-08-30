@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "a", "order": "ASCENDING" },
+        { "fieldPath": "b", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tags", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "a", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

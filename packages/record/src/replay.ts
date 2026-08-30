@@ -91,8 +91,20 @@ export interface Replayer {
  *
  * One string for both, and it never has to exist: the target is queried, not written to, and a
  * reference operand is validated against the collection being queried rather than resolved.
+ *
+ * **It carries no leading-and-trailing double underscore, and that is a requirement rather than a
+ * style.** Firestore reserves every document id matching `__…__` for its own use and rejects one as
+ * `INVALID_ARGUMENT` before it selects an index. This string is a legal scalar whichever form it
+ * takes, so the constraint comes entirely from the second job it does — and a sentinel that looks
+ * like a sentinel is exactly the spelling that reaches for the reserved form. Spelled `__…__`, every
+ * corpus entry carrying a `__name__` filter replays as `invalid`, which is the failure SPEC §7 says
+ * the reference operand exists to avoid, arriving by the other door.
+ *
+ * The suite cannot catch this by using the constant, which is how it went unnoticed: every test that
+ * builds an expected query builds it from this same string, so both sides move together and the
+ * comparison stays true whatever it says. `replay.test.js` pins the rule against a literal instead.
  */
-export const REPLAY_SENTINEL = '__indexwright_replay__';
+export const REPLAY_SENTINEL = 'indexwright_replay_sentinel';
 
 const SDK_OPERATORS: Readonly<Record<FilterOperator, FirebaseFirestore.WhereFilterOp>> = {
   LESS_THAN: '<',
