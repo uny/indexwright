@@ -21,7 +21,8 @@ paths without a second build.
 The §7 question is asked twice, and the first asking costs no build at all: against a bare target
 every shape a composite index is the only way to serve should fail for every operand, so a `served`
 on one of those stops the run — either the claim is false, or the target was not bare — and it is
-answered before a minute of wall clock is spent.
+answered before a minute of wall clock is spent. Both readings exit non-zero: the probe is told what
+to expect, so nothing about the stop rule depends on the summary being read closely.
 
 ## Why `check` cannot test §7 by itself
 
@@ -60,7 +61,9 @@ it was done ahead of the run — and it found a bug in shipped code before a sin
 |:--|:--|
 | `shapes.mjs` | The eight query shapes, defined once and shared by both instruments so they cannot drift apart |
 | `suite.mjs` | The driver `record` captures from. `PROBE_SHAPES=S1,S2` issues a subset |
-| `differential.mjs` | The §7 instrument. Writes a JSON report to stdout |
+| `differential.mjs` | The §7 instrument: issues the shapes, writes a JSON report to stdout |
+| `summarise.mjs` | Its stop rule — rows in, findings and an exit code out. Pure, so it can be tested without a database |
+| `summarise.test.mjs` | Tests for that rule. Runs in `npm test` alongside the packages' suites |
 | `seed.mjs` | Populates the collection, so #43's cost is observed rather than deduced |
 | `watch-readiness.mjs` | Timestamped index states through the same Admin path `check` uses |
 | `firestore.queries.json` | The captured corpus. Committed — it is the input `check` replays |
@@ -68,7 +71,9 @@ it was done ahead of the run — and it found a bug in shipped code before a sin
 | `firestore.indexes.wrong.json` | A set that is *not* the deployed one, for the exit-2 divergence path |
 
 `covered` in `shapes.mjs` is a **prediction**, written down so the run can falsify it. Neither
-instrument consults it.
+instrument consults it, and the `--expect-` flags are passed the runbook's predictions by hand
+rather than reading it — which is what keeps a prediction from being able to block a correct run
+without someone having typed it.
 
 ## Credentials
 
@@ -128,16 +133,24 @@ With no composite index deployed, every shape that needs one should come back
 arrives in one of two forms the instrument reports differently. Mixed with `uncovered` inside a
 single shape, it is SPEC §7 falsified: the probe prints `FALSIFIES SPEC §7` with the per-variant
 mapping and exits `1`. Uniform across every operand of that shape, it is not a §7 finding at all,
-and the probe cannot say so: it compares verdicts only *within* a shape, so it prints
-`constant … served` and exits `0`. What that means is that the target was not bare — step 1 was
-misread, or run against another database — and the whole reading is of the covered side. The
-instrument has no signal for it, which is why the stop rule below names it explicitly.
+and the probe cannot see it on its own: it compares verdicts only *within* a shape, so it would
+print `constant … served` and exit `0`. What that means is that the target was not bare — step 1 was
+misread, or run against another database — and the whole reading is of the covered side.
+
+That is what `--expect-uncovered` is for. The expectation below is *supplied* to the probe rather
+than left for a reader to check the summary against, so a shape answering against it exits `2`
+instead of printing a line that has to be noticed. The predictions stay here, in prose, where they
+can be argued with; the instrument holds only the mechanism.
 
 ```bash
-node probe/differential.mjs indexwright-probe '(default)' > probe/differential-before.json
+node probe/differential.mjs indexwright-probe '(default)' \
+  --expect-uncovered S1,S3,S4,S6,S8 --expect-served S7 \
+  > probe/differential-before.json
 ```
 
-Read the stderr summary. Per shape it prints `constant across N operands`, or
+S2 and S5 are named by neither flag, deliberately — see the third group below.
+
+Read the stderr summary. Per shape it prints `constant across N of M operands`, or
 `FALSIFIES SPEC §7` with the disagreeing variants. Exit `0` means the claim survived, `1` means it
 did not, `2` means a shape had too few operands reach the backend to say — and `2` outranks `1`, so
 a run that both falsified the claim and left a shape unanswered exits `2`. That is `check`'s own
@@ -168,24 +181,26 @@ So the reading this step has to produce, in three groups — and only the first 
 Do not read `covered` in `shapes.mjs` as the expectation here. It is a prediction about the
 *deployed* set — `true` for S1–S5 alike — and says nothing about which of them a bare target serves.
 
-**Stop here, and do not deploy, on any of these.** The probe's exit status carries the first and the
-third; the second and fourth are caught by reading the summary or not at all:
+**Stop here, and do not deploy, on any of these.** All four are now carried by the exit status, so
+a zero exit is the go-ahead rather than the first of four things to check by eye:
 
 - a shape printing `FALSIFIES SPEC §7`, exit `1`. Read the per-variant mapping it prints rather than
   assuming a direction: the sentinel `uncovered` where a real operand is `served` is the false
   positive §2 forbids acting on; the sentinel `served` where a real operand is not is the false
   negative. Both are the claim failing, and only the mapping says which.
-- S1, S3, S4, S6 or S8 printing `constant … served`. The target was not bare, so the whole reading
-  is of the covered side. Exit status `0`. S3 is the least certain of the five — if it is the only
-  one that trips, the other reading is that Firestore merged an `array-contains` with an equality
-  after all, so confirm against step 1's listing before concluding which.
+- `AGAINST EXPECTATION`, exit `2`. A shape named in `--expect-uncovered` that answered `served`
+  means the target was not bare, so the whole reading is of the covered side. S3 is the least
+  certain of the five — if it is the only one that trips, the other reading is that Firestore merged
+  an `array-contains` with an equality after all, so confirm against step 1's listing before
+  concluding which.
+- a row printing `did not enter the comparison`, exit `2`. Only `served` and `uncovered` rows are
+  compared, so an `other` or an `unbuildable` shrinks a shape's operand count while the shape still
+  reads `constant` — a verdict over some of the operands presented as one over all of them. The
+  `constant` line marks it `SHORT` as well. An `invalid` row is different and is *not* this: it is
+  the backend refusing an operand it was always going to refuse, so it drops out of the comparison,
+  shrinks the count, marks the line `SHORT`, and does not fail the run. `other` and `unbuildable`
+  never are.
 - a non-zero exit for any other reason: a shape `UNTESTED`, or a guard refusing to run.
-- a `constant across N operands` line whose `N` falls short of the variants that shape was issued
-  with — count the per-variant lines above the summary. Only `served` and `uncovered` rows enter the
-  comparison — `invalid`, `other` and `unbuildable` rows all drop out — so one transient failure
-  shrinks the count while the shape still prints `constant` and still exits `0`: a verdict over some
-  of the operands, presented as one over all of them. An `invalid` row is expected for some variants
-  and is not this; `other` and `unbuildable` never are.
 
 In every one of them the claim the verb rests on is either false or unmeasured, the design question
 is what `check` can honestly report without it, and nothing further down this runbook is worth the
@@ -213,16 +228,19 @@ The same instrument against the covered side. Step 3 could only show the claim h
 is served; this shows it holding where something is, and this is where issue #43's number comes
 from — a shape that came back `FAILED_PRECONDITION` read nothing.
 
+The expected reading settles here, and every shape is named: S1–S5 and S7 served, S6 and S8
+uncovered — those two are the shapes the candidate set deliberately does not declare. S2 and S5 have
+stopped being open questions, because the set now declares a composite that covers them either way.
+
 ```bash
-node probe/differential.mjs indexwright-probe '(default)' > probe/differential-after.json
+node probe/differential.mjs indexwright-probe '(default)' \
+  --expect-served S1,S2,S3,S4,S5,S7 --expect-uncovered S6,S8 \
+  > probe/differential-after.json
 ```
 
-The summary reads the same way as in step 3, but the expected reading settles: S1–S5 and S7
-`constant … served`, and S6 and S8 `constant … uncovered` — those two are the shapes the candidate
-set deliberately does not declare. So step 3's bare-target prong does not carry over — `served` is
-what success looks like here, and S2 and S5 have stopped being open questions. The rest do carry
-over: stop on a shape printing `FALSIFIES SPEC §7`, on a non-zero exit, and on a short operand
-count, before reading anything below for #43 or handing ids to step 6.
+The summary reads the same way as in step 3, and so does the stop rule — the expectations have
+inverted but the four conditions have not, and all four are carried by the exit status. A non-zero
+exit here means stop, before reading anything below for #43 or handing ids to step 6.
 
 A falsification here is the claim failing on the covered side, and which direction it fails in is
 read off the disagreeing variants rather than assumed. The sentinel served where a real operand is

@@ -18,7 +18,7 @@
   "scripts": {
     "build": "tsc --build --force packages/indexwright/tsconfig.json packages/record/tsconfig.json",
     "typecheck": "tsc --build packages/indexwright/tsconfig.json && tsc --noEmit -p packages/record/tsconfig.json",
-    "test": "npm run build && node --test \"packages/*/test/*.test.js\"",
+    "test": "npm run build && node --test \"packages/*/test/*.test.js\" \"probe/*.test.mjs\"",
     "verify-package": "npm run build && node scripts/verify-package.mjs && node scripts/verify-record-package.mjs"
   },
   "devDependencies": {
