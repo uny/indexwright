@@ -31,10 +31,26 @@
  * exists to be a second opinion about what the database said.
  *
  * Usage: node probe/differential.mjs <project> [database]
+ *          [--expect-uncovered <ids>] [--expect-served <ids>]
+ *
+ * The two `--expect-` flags take comma-separated shape ids and are how the runbook's expected
+ * reading reaches the instrument. A shape that answers against its expectation exits non-zero
+ * instead of printing a line an operator has to notice, which is the contract `check` keeps and this
+ * probe did not: two of its four documented stop conditions were carried by the summary alone, and
+ * the one that matters most is read three minutes before a deploy.
+ *
+ * **The predictions are supplied, never held here.** Which shapes a bare target serves is the sort
+ * of thing this run exists to observe, and a prediction compiled into the instrument that blocks the
+ * run is worse than one written in prose that does not: an earlier revision of the runbook expected
+ * every non-S7 shape uncovered on a bare target, which is false — Firestore merges single-field
+ * indexes for equality-only shapes — and would have diagnosed a correct run as a dirty target. A
+ * shape named by neither flag is unconstrained, which is what S2 and S5 have to stay.
  */
 
 import { Firestore, Timestamp } from '@google-cloud/firestore';
 import { COLLECTION, SENTINEL, SHAPES, seededId } from './shapes.mjs';
+import { UsageError, parseExpectations } from './expectations.mjs';
+import { summarise, summaryLines } from './summarise.mjs';
 
 // The guard `check` applies, for the reason `check` applies it: each of these redirects the client
 // whatever target it is given, so the named database would be announced and something else
@@ -46,9 +62,21 @@ for (const name of ['FIRESTORE_EMULATOR_HOST', 'GOOGLE_CLOUD_UNIVERSE_DOMAIN']) 
   }
 }
 
-const [project, database = '(default)'] = process.argv.slice(2);
-if (project === undefined) {
-  process.stderr.write('probe-differential: usage: node probe/differential.mjs <project> [database]\n');
+/** Expected verdicts by shape id, from the `--expect-` flags. Absent means unconstrained. */
+let expected;
+let project;
+let database;
+try {
+  const parsed = parseExpectations(process.argv.slice(2), SHAPES.map((shape) => shape.id));
+  expected = parsed.expected;
+  [project, database = '(default)'] = parsed.positional;
+} catch (error) {
+  if (!(error instanceof UsageError)) throw error;
+  process.stderr.write(`probe-differential: ${error.message}\n`);
+  process.stderr.write(
+    'probe-differential: usage: node probe/differential.mjs <project> [database] ' +
+      '[--expect-uncovered <ids>] [--expect-served <ids>]\n',
+  );
   process.exit(2);
 }
 
@@ -145,55 +173,34 @@ for (const shape of SHAPES) {
   }
 }
 
-// The comparison. Only variants that reached the backend are compared, and a shape with fewer than
-// two of them is reported as untested rather than as agreeing with itself.
-const findings = [];
-for (const shape of SHAPES) {
-  const answered = results.filter((r) => r.shape === shape.id && (r.verdict === 'served' || r.verdict === 'uncovered'));
-  const verdicts = new Set(answered.map((r) => r.verdict));
-  if (shape.varies === 'nothing') {
-    // For a shape whose filters are *all* unary, and no shape currently is: there would then be
-    // nothing about it for a value to change, and counting it as untested would report a hole where
-    // the question does not arise. It would still be run, for the three questions that are not §7's.
-    //
-    // S5 used to set this and should not have. It pairs a unary `IS_NULL` with an ordinary equality,
-    // so it has an operand; marking the whole shape as having none excluded it from the comparison
-    // and printed `has no operand to vary` over a shape that had simply never been varied. The test
-    // is whether *every* filter is unary, not whether any is.
-    findings.push({ shape: shape.id, kind: 'not-applicable', verdict: [...verdicts][0] ?? 'none' });
-  } else if (answered.length < 2) {
-    findings.push({ shape: shape.id, kind: 'untested', reached: answered.length });
-  } else if (verdicts.size > 1) {
-    findings.push({
-      shape: shape.id,
-      kind: 'claim-falsified',
-      byVariant: Object.fromEntries(answered.map((r) => [r.variant, r.verdict])),
-    });
-  } else {
-    findings.push({ shape: shape.id, kind: 'constant', verdict: [...verdicts][0], variants: answered.length });
-  }
-}
-
-const falsified = findings.filter((f) => f.kind === 'claim-falsified');
-const untested = findings.filter((f) => f.kind === 'untested');
+const { findings, unreliable, unexpected, exitCode } = summarise(results, SHAPES, expected);
 
 process.stderr.write('\n');
-for (const finding of findings) {
-  if (finding.kind === 'constant') {
-    process.stderr.write(`probe-differential: ${finding.shape} constant across ${finding.variants} operands: ${finding.verdict}\n`);
-  } else if (finding.kind === 'not-applicable') {
-    process.stderr.write(`probe-differential: ${finding.shape} has no operand to vary; answered ${finding.verdict}\n`);
-  } else if (finding.kind === 'untested') {
-    process.stderr.write(`probe-differential: ${finding.shape} UNTESTED — only ${finding.reached} operand reached the backend\n`);
-  } else {
-    process.stderr.write(`probe-differential: ${finding.shape} FALSIFIES SPEC §7: ${JSON.stringify(finding.byVariant)}\n`);
-  }
+for (const line of summaryLines({ findings, unreliable, unexpected })) {
+  process.stderr.write(`probe-differential: ${line}\n`);
 }
 
-process.stdout.write(`${JSON.stringify({ project, database, results, findings }, null, 2)}\n`);
-await db.terminate();
-
-// 1 means the claim did not survive, which is a finding rather than a failure of this script; 2
-// means the run could not answer, and takes precedence — the same contract `check` uses.
-if (untested.length > 0) process.exitCode = 2;
-else if (falsified.length > 0) process.exitCode = 1;
+process.stdout.write(
+  `${JSON.stringify({ project, database, expected: Object.fromEntries(expected), results, findings, unreliable, unexpected }, null, 2)}\n`,
+);
+// Set rather than computed here: the rule lives in `summarise.mjs`, where it is tested.
+//
+// Set *before* the teardown below, and the order is the whole point. `terminate()` closes a gRPC
+// channel, so it can reject on a network drop after the last query — and a rejected top-level await
+// in an entry module exits 1 without reaching anything after it. The stop rule would then be
+// discarded by the one event most likely to accompany the transient failures it now exits 2 on, and
+// 1 is the code the runbook reads as `FALSIFIES SPEC §7`: an operator would go hunting for a
+// per-variant mapping that was never printed. A teardown that fails is worth saying out loud and is
+// not worth a verdict, so it is caught rather than allowed to overwrite one.
+process.exitCode = exitCode;
+try {
+  await db.terminate();
+} catch (error) {
+  process.stderr.write(`probe-differential: closing the client failed: ${error?.message ?? String(error)}\n`);
+  // Exit rather than fall off the end. A teardown that failed part-way can leave gRPC channels
+  // holding referenced sockets and timers, and the event loop then keeps a finished run alive: a
+  // gate that hangs three minutes before a deploy is worse than either exit code, and worse than
+  // the unhandled rejection this catch replaced. The empty write is the flush — its callback runs
+  // after the report above has left the stream, so exiting here cannot truncate it.
+  process.stdout.write('', () => process.exit(exitCode));
+}
