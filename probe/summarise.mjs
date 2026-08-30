@@ -135,9 +135,9 @@ export function summaryLines({ findings, unreliable, unexpected }) {
     // did, and is held to its expectation like a `constant` one — but one whose every row was
     // `invalid` answered `none`, and that is the same unchecked prediction wearing the one kind
     // whose line would otherwise say nothing about it.
-    const answered = finding.kind === 'constant' || (finding.kind === 'not-applicable' && finding.verdict !== 'none');
+    const settled = finding.kind === 'constant' || (finding.kind === 'not-applicable' && finding.verdict !== 'none');
     const unevaluated =
-      finding.expected !== undefined && !answered ? ` — expected ${finding.expected}, not evaluated` : '';
+      finding.expected !== undefined && !settled ? ` — expected ${finding.expected}, not evaluated` : '';
     if (finding.kind === 'constant') {
       // `N of M`, always, even when equal. A bare `constant across 2 operands` gives a reader
       // nothing to compare 2 against, and the comparison is the point.
