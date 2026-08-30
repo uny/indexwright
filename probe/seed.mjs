@@ -17,7 +17,7 @@
  *
  * The count to expect back is therefore *not* `count`: Firestore's `!=` excludes documents whose
  * field is null as well as those where it is absent, and `b` is null for one seeded document in
- * every `B.length`. See the `B` comment below, and `README.md` step 4 for the arithmetic.
+ * every `B.length`. See the `B` comment below, and `README.md` step 5 for the arithmetic.
  *
  * Writes only. Nothing here deletes: the target is a throwaway database, and clearing it is the
  * operator's call rather than a script's.

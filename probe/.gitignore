@@ -7,4 +7,5 @@
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
-differential.json
+# Two reports now, one either side of the deploy — see README steps 3 and 5.
+differential-*.json
