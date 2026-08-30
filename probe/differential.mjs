@@ -49,6 +49,7 @@
 
 import { Firestore, Timestamp } from '@google-cloud/firestore';
 import { COLLECTION, SENTINEL, SHAPES, seededId } from './shapes.mjs';
+import { UsageError, parseExpectations } from './expectations.mjs';
 import { summarise, summaryLines } from './summarise.mjs';
 
 // The guard `check` applies, for the reason `check` applies it: each of these redirects the client
@@ -61,54 +62,23 @@ for (const name of ['FIRESTORE_EMULATOR_HOST', 'GOOGLE_CLOUD_UNIVERSE_DOMAIN']) 
   }
 }
 
-const argv = process.argv.slice(2);
-const positional = [];
 /** Expected verdicts by shape id, from the `--expect-` flags. Absent means unconstrained. */
-const expected = new Map();
-
-function die(message) {
-  process.stderr.write(`probe-differential: ${message}\n`);
+let expected;
+let project;
+let database;
+try {
+  const parsed = parseExpectations(process.argv.slice(2), SHAPES.map((shape) => shape.id));
+  expected = parsed.expected;
+  [project, database = '(default)'] = parsed.positional;
+} catch (error) {
+  if (!(error instanceof UsageError)) throw error;
+  process.stderr.write(`probe-differential: ${error.message}\n`);
   process.stderr.write(
     'probe-differential: usage: node probe/differential.mjs <project> [database] ' +
       '[--expect-uncovered <ids>] [--expect-served <ids>]\n',
   );
   process.exit(2);
 }
-
-for (let i = 0; i < argv.length; i += 1) {
-  const arg = argv[i];
-  const verdict =
-    arg === '--expect-uncovered' ? 'uncovered' : arg === '--expect-served' ? 'served' : undefined;
-  if (verdict === undefined) {
-    // A flag this script does not define is refused rather than taken as the project. A typo'd
-    // `--expect-uncoverd` read as a positional would name a project that does not exist, which is a
-    // clearer failure than the one below it — but a *third* positional would be silently ignored,
-    // and that is how an expectation goes unenforced while the run reports having enforced it.
-    if (arg.startsWith('-')) die(`${arg} is not an option this script defines`);
-    positional.push(arg);
-    continue;
-  }
-  const list = argv[i + 1];
-  if (list === undefined || list.startsWith('-')) die(`${arg} needs a comma-separated list of shape ids`);
-  i += 1;
-  for (const id of list.split(',').map((value) => value.trim()).filter((value) => value !== '')) {
-    // Refused rather than dropped, for the reason `suite.mjs` refuses an unknown PROBE_SHAPES id:
-    // the ids are retyped by hand from the runbook, and an expectation naming a shape that does not
-    // exist is an expectation that can never fail — the run then reports a stop rule it never ran.
-    if (!SHAPES.some((shape) => shape.id === id)) {
-      die(`${arg} names ${id}, which is not a shape — known ids are ${SHAPES.map((s) => s.id).join(', ')}`);
-    }
-    // A shape named by both flags cannot be satisfied, and taking the last one silently would let a
-    // copy-paste between the two runbook steps enforce the opposite of what was written.
-    const already = expected.get(id);
-    if (already !== undefined && already !== verdict) die(`${id} is expected both served and uncovered`);
-    expected.set(id, verdict);
-  }
-}
-
-if (positional.length > 2) die(`unexpected argument ${positional[2]}`);
-const [project, database = '(default)'] = positional;
-if (project === undefined) die('a project is required');
 
 const db = new Firestore({ projectId: project, databaseId: database });
 const collection = db.collection(COLLECTION);
@@ -213,7 +183,18 @@ for (const line of summaryLines({ findings, unreliable, unexpected })) {
 process.stdout.write(
   `${JSON.stringify({ project, database, expected: Object.fromEntries(expected), results, findings, unreliable, unexpected }, null, 2)}\n`,
 );
-await db.terminate();
-
 // Set rather than computed here: the rule lives in `summarise.mjs`, where it is tested.
+//
+// Set *before* the teardown below, and the order is the whole point. `terminate()` closes a gRPC
+// channel, so it can reject on a network drop after the last query — and a rejected top-level await
+// in an entry module exits 1 without reaching anything after it. The stop rule would then be
+// discarded by the one event most likely to accompany the transient failures it now exits 2 on, and
+// 1 is the code the runbook reads as `FALSIFIES SPEC §7`: an operator would go hunting for a
+// per-variant mapping that was never printed. A teardown that fails is worth saying out loud and is
+// not worth a verdict, so it is caught rather than allowed to overwrite one.
 process.exitCode = exitCode;
+try {
+  await db.terminate();
+} catch (error) {
+  process.stderr.write(`probe-differential: closing the client failed: ${error?.message ?? String(error)}\n`);
+}

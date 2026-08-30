@@ -62,8 +62,9 @@ it was done ahead of the run — and it found a bug in shipped code before a sin
 | `shapes.mjs` | The eight query shapes, defined once and shared by both instruments so they cannot drift apart |
 | `suite.mjs` | The driver `record` captures from. `PROBE_SHAPES=S1,S2` issues a subset |
 | `differential.mjs` | The §7 instrument: issues the shapes, writes a JSON report to stdout |
+| `expectations.mjs` | Its command line — argv in, the expectation map out. Pure, so what an operator types is testable |
 | `summarise.mjs` | Its stop rule — rows in, findings and an exit code out. Pure, so it can be tested without a database |
-| `summarise.test.mjs` | Tests for that rule. Runs in `npm test` alongside the packages' suites |
+| `expectations.test.mjs`, `summarise.test.mjs` | Tests for the two halves of the stop rule. Run in `npm test` alongside the packages' suites |
 | `seed.mjs` | Populates the collection, so #43's cost is observed rather than deduced |
 | `watch-readiness.mjs` | Timestamped index states through the same Admin path `check` uses |
 | `firestore.queries.json` | The captured corpus. Committed — it is the input `check` replays |
@@ -152,9 +153,10 @@ S2 and S5 are named by neither flag, deliberately — see the third group below.
 
 Read the stderr summary. Per shape it prints `constant across N of M operands`, or
 `FALSIFIES SPEC §7` with the disagreeing variants. Exit `0` means the claim survived, `1` means it
-did not, `2` means a shape had too few operands reach the backend to say — and `2` outranks `1`, so
-a run that both falsified the claim and left a shape unanswered exits `2`. That is `check`'s own
-contract: a report missing entries is not a clean report with a caveat. `2` is also what the guards
+did not, and `2` means the run could not answer — a shape with too few operands to say, an operand
+that never entered the comparison, or a shape answering against a supplied expectation. `2` outranks
+`1`, so a run that both falsified the claim and left a shape unanswered exits `2`. That is `check`'s
+own contract: a report missing entries is not a clean report with a caveat. `2` is also what the guards
 exit with before a single shape is issued — a `FIRESTORE_EMULATOR_HOST` still exported from an
 earlier session, or no project argument — and they exit before the first byte of stdout, so the
 redirect leaves `differential-before.json` empty rather than partial. An empty report is that, and
@@ -188,19 +190,28 @@ a zero exit is the go-ahead rather than the first of four things to check by eye
   assuming a direction: the sentinel `uncovered` where a real operand is `served` is the false
   positive §2 forbids acting on; the sentinel `served` where a real operand is not is the false
   negative. Both are the claim failing, and only the mapping says which.
-- `AGAINST EXPECTATION`, exit `2`. A shape named in `--expect-uncovered` that answered `served`
-  means the target was not bare, so the whole reading is of the covered side. S3 is the least
-  certain of the five — if it is the only one that trips, the other reading is that Firestore merged
-  an `array-contains` with an equality after all, so confirm against step 1's listing before
-  concluding which.
+- `AGAINST EXPECTATION`, exit `2`. Read which direction it went, because the two mean opposite
+  things. A shape named in `--expect-uncovered` that answered `served` means the target was not
+  bare, so the whole reading is of the covered side — S3 is the least certain of the five, and if it
+  is the only one that trips, the other reading is that Firestore merged an `array-contains` with an
+  equality after all, so confirm against step 1's listing before concluding which. S7 named in
+  `--expect-served` and answering `uncovered` says nothing about the target: it is this runbook's
+  assumption that the automatic single-field index serves an `a` equality with a `__name__`
+  inequality, and that assumption failing is the finding.
 - a row printing `did not enter the comparison`, exit `2`. Only `served` and `uncovered` rows are
   compared, so an `other` or an `unbuildable` shrinks a shape's operand count while the shape still
-  reads `constant` — a verdict over some of the operands presented as one over all of them. The
-  `constant` line marks it `SHORT` as well. An `invalid` row is different and is *not* this: it is
-  the backend refusing an operand it was always going to refuse, so it drops out of the comparison,
-  shrinks the count, marks the line `SHORT`, and does not fail the run. `other` and `unbuildable`
-  never are.
-- a non-zero exit for any other reason: a shape `UNTESTED`, or a guard refusing to run.
+  reads `constant` — a verdict over some of the operands presented as one over all of them. Every
+  line that reports a comparison marks the shortfall `SHORT` and prints it as `N of M`, whichever
+  kind of row went missing. An `invalid` row is different and is *not* this: it is the backend
+  refusing an operand it was always going to refuse, so it drops out of the comparison, shrinks the
+  count, marks the line `SHORT`, and does not fail the run. `other` and `unbuildable` never are.
+  So `SHORT` says the evidence is thinner than the operand list, not that the run failed — the exit
+  status says that, and a `SHORT` line beside exit `0` is an invitation to read how much thinner.
+- a non-zero exit for any other reason: a shape `UNTESTED — only N of M operands entered the
+  comparison`, or a guard refusing to run. A shape that failed on its own terms is not also reported
+  `AGAINST EXPECTATION` — there is no single verdict to hold to one — so its line carries
+  `expected <verdict>, not evaluated` instead, and a prediction that went unchecked is visible
+  rather than absent.
 
 In every one of them the claim the verb rests on is either false or unmeasured, the design question
 is what `check` can honestly report without it, and nothing further down this runbook is worth the

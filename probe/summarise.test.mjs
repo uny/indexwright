@@ -8,6 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { SHAPES as REAL_SHAPES } from './shapes.mjs';
 import { summarise, summaryLines } from './summarise.mjs';
 
 const SHAPES = [{ id: 'S1' }, { id: 'S2' }];
@@ -121,9 +122,13 @@ test('an expectation is not checked against a shape that already failed on its o
   // matters under a consequence of it, and would report exit 2 where the claim itself is the news.
   const results = clean();
   results[1] = row('S1', 'number', 'served');
-  const { exitCode, unexpected } = summarise(results, SHAPES, new Map([['S1', 'uncovered']]));
-  assert.deepEqual(unexpected, []);
-  assert.equal(exitCode, 1);
+  const summary = summarise(results, SHAPES, new Map([['S1', 'uncovered']]));
+  assert.deepEqual(summary.unexpected, []);
+  assert.equal(summary.exitCode, 1);
+  // Not checked is not the same as not reported. Dropped entirely, a reader who supplied
+  // `--expect-uncovered S1` and got `FALSIFIES SPEC §7` had nothing telling them the prediction
+  // went unchecked, and would take the larger reading over "the target was not bare".
+  assert.match(summaryLines(summary).join('\n'), /S1 FALSIFIES.*expected uncovered, not evaluated/);
 });
 
 test('a shape with fewer than two comparable operands is untested, not constant', () => {
@@ -137,8 +142,76 @@ test('a shape whose every filter is unary is not counted as a hole', () => {
   // `varies: 'nothing'` says the question does not arise, which is different from unanswered. No
   // shape currently sets it — S5 wrongly did — so this pins the branch against a future one.
   const shapes = [{ id: 'S1', varies: 'nothing' }];
-  const { exitCode, findings, untested } = summarise([row('S1', 'sentinel', 'served')], shapes);
+  const summary = summarise([row('S1', 'sentinel', 'served')], shapes);
+  assert.equal(summary.exitCode, 0);
+  assert.deepEqual(summary.untested, []);
+  assert.equal(summary.findings[0].kind, 'not-applicable');
+  assert.deepEqual(summaryLines(summary), ['S1 has no operand to vary; answered served']);
+});
+
+test('a shape with no operand to vary is still held to a supplied expectation', () => {
+  // "No operand to vary" says the §7 question does not arise, not that the coverage is unknown —
+  // the shape answered. Skipping the branch made an expectation naming it one that could never
+  // fail, which is what the parser refuses an unknown shape id to prevent.
+  const shapes = [{ id: 'S1', varies: 'nothing' }];
+  const results = [row('S1', 'sentinel', 'served')];
+  assert.equal(summarise(results, shapes, new Map([['S1', 'served']])).exitCode, 0);
+  const bad = summarise(results, shapes, new Map([['S1', 'uncovered']]));
+  assert.equal(bad.exitCode, 2);
+  assert.deepEqual(bad.unexpected, [{ shape: 'S1', expected: 'uncovered', actual: 'served' }]);
+  // A shape that answered nothing at all has no answer to hold to one.
+  assert.equal(summarise([], shapes, new Map([['S1', 'uncovered']])).exitCode, 0);
+});
+
+test('a clean run prints no SHORT marker, on any kind of finding', () => {
+  // The marker's false-positive direction. Pinned because SHORT is a documented stop-and-do-not-
+  // deploy signal: if it printed unconditionally, every clean run would read as one, and the only
+  // assertion on it used to be the case where it *should* appear.
+  for (const line of summaryLines(summarise(clean(), SHAPES))) {
+    assert.doesNotMatch(line, /SHORT/, line);
+  }
+  assert.deepEqual(summaryLines(summarise(clean(), SHAPES)), [
+    'S1 constant across 2 of 2 operands: uncovered',
+    'S2 constant across 2 of 2 operands: served',
+  ]);
+});
+
+test('every line an operator reads is emitted by the branch that owns it', () => {
+  // Three of the four finding branches used to be unreachable from any assertion: delete the
+  // `untested` arm and an untested shape fell through to `FALSIFIES SPEC §7: undefined` — an exit-2
+  // run reported as a §7 falsification — with the suite still green.
+  const results = [
+    row('S1', 'sentinel', 'uncovered'),
+    row('S1', 'number', 'served'),
+    row('S1', 'map', 'invalid', { message: 'bad operand' }),
+    row('S2', 'sentinel', 'served'),
+    row('S2', 'number', 'other', { message: 'DEADLINE_EXCEEDED' }),
+  ];
+  const lines = summaryLines(summarise(results, SHAPES));
+  // The per-variant mapping is what says which direction the claim failed in, and the operand
+  // shortfall belongs on a falsified shape exactly as it does on a constant one.
+  assert.equal(lines[0], 'S1 FALSIFIES SPEC §7: {"sentinel":"uncovered","number":"served"} (2 of 3 operands) — SHORT');
+  assert.equal(lines[1], 'S2 UNTESTED — only 1 of 2 operands entered the comparison');
+  // The gRPC message is the only thing distinguishing a transient failure from a real one, and the
+  // shape and variant are the only things saying which operand it was.
+  assert.equal(lines[2], 'S2 number answered OTHER, so it did not enter the comparison: DEADLINE_EXCEEDED');
+});
+
+test('the real shape set takes part in the comparison, all eight of it', () => {
+  // The fixture above is two hand-rolled shapes; nothing else here ever sees `shapes.mjs`. The
+  // regression that guards against actually shipped: S5 carried `varies: 'nothing'`, which dropped
+  // one shape in eight out of the experiment the instrument exists to run, printed `has no operand
+  // to vary`, and exited 0. Against this fixture that is invisible.
+  const answered = REAL_SHAPES.flatMap((shape) => [
+    row(shape.id, 'sentinel', 'uncovered'),
+    row(shape.id, 'number', 'uncovered'),
+  ]);
+  const { findings, exitCode } = summarise(answered, REAL_SHAPES);
   assert.equal(exitCode, 0);
-  assert.deepEqual(untested, []);
-  assert.equal(findings[0].kind, 'not-applicable');
+  assert.equal(findings.length, 8);
+  assert.deepEqual(
+    findings.filter((f) => f.kind !== 'constant').map((f) => `${f.shape} ${f.kind}`),
+    [],
+    'a real shape excluded from the §7 comparison is a hole in the experiment, not a clean run',
+  );
 });
