@@ -19,8 +19,9 @@ deploys **one** index set and varies the corpus against it. That reaches `check`
 paths without a second build.
 
 The §7 question is asked twice, and the first asking costs no build at all: against a bare target
-every shape needing an index should fail for every operand, so a single `served` there falsifies the
-claim in the direction that matters most — and answers it before a minute of wall clock is spent.
+every shape needing an index should fail for every operand, so any `served` there stops the run —
+either the claim is false in the direction that matters most, or the target was not bare — and it is
+answered before a minute of wall clock is spent.
 
 ## Why `check` cannot test §7 by itself
 
@@ -123,10 +124,16 @@ Run it once here, with the target still bare. It costs no index build, so none o
 half minutes the rest of the run is paced by — and it is the reading that matters most.
 
 With no composite index deployed, every shape that needs one should come back
-`FAILED_PRECONDITION` for **every** operand. A single `served` among them is SPEC §7 falsified in
-the direction that matters: the sentinel fails where a real value succeeds, so `check` would report
-a query uncovered that the application issues happily. That is the false positive §2 forbids acting
-on, and it makes every verdict the verb reaches suspect.
+`FAILED_PRECONDITION` for **every** operand. A `served` among them is the reading to stop on, and it
+arrives in one of two forms the instrument reports differently. Mixed with `uncovered` inside a
+single shape, it is SPEC §7 falsified in the direction that matters — the sentinel fails where a
+real value succeeds, so `check` would report a query uncovered that the application issues happily,
+the false positive §2 forbids acting on — and the probe prints `FALSIFIES SPEC §7` and exits `1`.
+Uniform across every operand of that shape, it is not a §7 finding at all, and the probe cannot say
+so: it compares verdicts only *within* a shape, so it prints `constant … served` and exits `0`. What
+that means is that the target was not bare — step 1 was misread, or run against another database —
+and the whole reading is of the covered side. The instrument has no signal for it, which is why the
+stop rule below names it explicitly.
 
 ```bash
 node probe/differential.mjs indexwright-probe '(default)' > probe/differential-before.json
@@ -136,15 +143,31 @@ Read the stderr summary. Per shape it prints `constant across N operands`, or
 `FALSIFIES SPEC §7` with the disagreeing variants. Exit `0` means the claim survived, `1` means it
 did not, `2` means a shape had too few operands reach the backend to say — and `2` outranks `1`, so
 a run that both falsified the claim and left a shape unanswered exits `2`. That is `check`'s own
-contract: a report missing entries is not a clean report with a caveat.
+contract: a report missing entries is not a clean report with a caveat. `2` is also what the guards
+exit with before a single shape is issued — a `FIRESTORE_EMULATOR_HOST` still exported from an
+earlier session, or no project argument — and they exit before the first byte of stdout, so the
+redirect leaves `differential-before.json` empty rather than partial. An empty report is that, and
+not a measurement of anything.
 
-**If any shape prints `FALSIFIES SPEC §7`, stop here.** Do not deploy. The claim the verb rests on
-is false, the design question is what `check` can honestly report without it, and nothing further
-down this runbook is worth the wall clock until that is answered.
+So the reading this step has to produce, shape by shape: **S7 `constant … served`, and every one of
+the other seven `constant … uncovered`.** S7 is the only shape needing no composite index — its `a`
+equality and `__name__` inequality are served by the automatic single-field index — which is why
+`shapes.mjs` predicts it `covered: true` while `firestore.indexes.json` declares nothing for it. Do
+not read `covered` as the expectation here: it is a prediction about the *deployed* set, and it is
+`true` for S1–S5 as well, every one of which needs a composite the bare target does not hold.
 
-The shapes needing no composite index — S7 among them, on the prediction in `shapes.mjs` — are
-expected to be served even here. That is not a §7 finding; it is the prediction being confirmed, and
-it is why the probe compares verdicts per shape rather than across them.
+**Stop here, and do not deploy, on any of three readings**, because the probe's exit status alone
+distinguishes only the first:
+
+- a shape printing `FALSIFIES SPEC §7` — the claim is false, and exit `1` says so;
+- any shape other than S7 printing `constant … served` — the target was not bare, and the exit
+  status is `0`, so this one is caught by reading the summary or not at all;
+- a non-zero exit for any other reason — a shape `UNTESTED`, or a guard refusing to run. The
+  question was not answered, and an unanswered §7 is not a survived §7.
+
+In all three the claim the verb rests on is either false or unmeasured, the design question is what
+`check` can honestly report without it, and nothing further down this runbook is worth the wall
+clock until that is answered.
 
 ### 4. Deploy the candidate set, and watch it settle
 
@@ -165,16 +188,25 @@ firebase deploy --only firestore:indexes --project indexwright-probe
 ### 5. The differential probe again, now that the set is there
 
 The same instrument against the covered side. Step 3 could only show the claim holding where nothing
-is served; this shows it holding where something is, and it is the run issue #43's number comes
+is served; this shows it holding where something is, and this is where issue #43's number comes
 from — a shape that came back `FAILED_PRECONDITION` read nothing.
 
 ```bash
 node probe/differential.mjs indexwright-probe '(default)' > probe/differential-after.json
 ```
 
-The summary reads the same way as in step 3, and the same stopping rule applies: a shape printing
-`FALSIFIES SPEC §7` here is the claim failing on the covered side, which is the false-negative
-direction — `check` would report served what a real query cannot get served.
+The summary reads the same way as in step 3, but the expected reading inverts: S1–S5 and S7
+`constant … served`, and S6 and S8 `constant … uncovered` — those two are the shapes the candidate
+set deliberately does not declare. So the middle prong of step 3's stop rule does not carry over;
+`served` is what success looks like here. The other two do carry over: stop on a shape printing
+`FALSIFIES SPEC §7`, and stop on a non-zero exit, before reading anything below for #43 or handing
+ids to step 6.
+
+A falsification here is the claim failing on the covered side, and which direction it fails in is
+read off the disagreeing variants rather than assumed. The sentinel served where a real operand is
+not is the false negative — `check` reports served what a real query cannot get served. The sentinel
+uncovered where a real operand is served is step 3's false positive again, on the other side of the
+deploy.
 
 **For #43**, read the `documents read` count on the S4 **`sentinel`** row — that row and no other,
 because it is the only one issuing what `check` actually replays. `seed.mjs` prints the number to

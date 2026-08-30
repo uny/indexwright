@@ -7,5 +7,8 @@
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
-# Two reports now, one either side of the deploy — see README steps 3 and 5.
+# Two reports now, one either side of the deploy — see README steps 3 and 5. The old single-report
+# name stays listed: a tree carrying one from a run of the previous runbook would otherwise stop
+# being ignored by this very change, and `differential-*.json` does not match it.
+differential.json
 differential-*.json
