@@ -150,37 +150,42 @@ not a measurement of anything.
 So the reading this step has to produce, in three groups — and only the first of them is a group a
 `served` can be read against:
 
-- **S1, S4, S6 and S8 `constant … uncovered`.** Each carries a range, an inequality or an order-by
-  on a second field, and a composite index is the only way Firestore serves those. On a bare target
-  there is no room for them to come back anything else.
-- **S7 `constant … served`.** It is the one shape needing no composite index at all: its `a`
-  equality and `__name__` inequality are served by the automatic single-field index, which is why
-  `shapes.mjs` predicts it `covered: true` while `firestore.indexes.json` declares nothing for it.
-- **S2, S3 and S5 either way — and which way is itself a result worth writing down.** All three are
-  equality-only shapes: an `IN` expands into equality branches, `array-contains` pairs with an
-  equality, and `b == null` is an equality. Firestore can merge single-field indexes to serve that
-  class, so a `served` here is not evidence the target was dirty. Whether this target does merge
-  them is exactly the sort of thing the run exists to observe rather than predict, so record it and
-  read on.
+- **S1, S3, S4, S6 and S8 `constant … uncovered`.** S1, S4, S6 and S8 each carry a range, an
+  inequality or an order-by on a second field, and a composite index is the only way Firestore
+  serves those. S3 pairs an `array-contains` with an equality, which is not the equality-only case
+  either — and it is the field pair `firestore.indexes.json` declares its second composite for, so
+  the candidate set is itself the claim that S3 needs one. On a bare target there is no room for any
+  of the five to come back anything else.
+- **S7 `constant … served`.** It is the one shape certain to be served here: its `a` equality and
+  `__name__` inequality are served by the automatic single-field index, which is why `shapes.mjs`
+  predicts it `covered: true` while `firestore.indexes.json` declares nothing for it.
+- **S2 and S5 either way — and which way is itself a result worth writing down.** Both are
+  equality-only shapes: an `IN` expands into equality branches, and `b == null` is an equality.
+  Firestore merges single-field indexes to serve that class, so a `served` on either is not evidence
+  the target was dirty. Whether this target does merge them is exactly the sort of thing the run
+  exists to observe rather than predict, so record it and read on.
 
 Do not read `covered` in `shapes.mjs` as the expectation here. It is a prediction about the
 *deployed* set — `true` for S1–S5 alike — and says nothing about which of them a bare target serves.
 
-**Stop here, and do not deploy, on any of these.** The probe's exit status carries only the first,
-so the rest are caught by reading the summary or not at all:
+**Stop here, and do not deploy, on any of these.** The probe's exit status carries the first and the
+third; the second and fourth are caught by reading the summary or not at all:
 
 - a shape printing `FALSIFIES SPEC §7`, exit `1`. Read the per-variant mapping it prints rather than
   assuming a direction: the sentinel `uncovered` where a real operand is `served` is the false
   positive §2 forbids acting on; the sentinel `served` where a real operand is not is the false
   negative. Both are the claim failing, and only the mapping says which.
-- S1, S4, S6 or S8 printing `constant … served`. The target was not bare, so the whole reading is of
-  the covered side. Exit status `0`.
+- S1, S3, S4, S6 or S8 printing `constant … served`. The target was not bare, so the whole reading
+  is of the covered side. Exit status `0`. S3 is the least certain of the five — if it is the only
+  one that trips, the other reading is that Firestore merged an `array-contains` with an equality
+  after all, so confirm against step 1's listing before concluding which.
 - a non-zero exit for any other reason: a shape `UNTESTED`, or a guard refusing to run.
 - a `constant across N operands` line whose `N` falls short of the variants that shape was issued
   with — count the per-variant lines above the summary. Only `served` and `uncovered` rows enter the
-  comparison, so one transient failure drops a row and the shape still prints `constant` and still
-  exits `0`: a verdict over some of the operands, presented as one over all of them. An `invalid`
-  row is expected for some variants and is not this; an `other` row never is.
+  comparison — `invalid`, `other` and `unbuildable` rows all drop out — so one transient failure
+  shrinks the count while the shape still prints `constant` and still exits `0`: a verdict over some
+  of the operands, presented as one over all of them. An `invalid` row is expected for some variants
+  and is not this; `other` and `unbuildable` never are.
 
 In every one of them the claim the verb rests on is either false or unmeasured, the design question
 is what `check` can honestly report without it, and nothing further down this runbook is worth the
@@ -215,7 +220,7 @@ node probe/differential.mjs indexwright-probe '(default)' > probe/differential-a
 The summary reads the same way as in step 3, but the expected reading settles: S1–S5 and S7
 `constant … served`, and S6 and S8 `constant … uncovered` — those two are the shapes the candidate
 set deliberately does not declare. So step 3's bare-target prong does not carry over — `served` is
-what success looks like here, and S2, S3 and S5 have stopped being open questions. The rest do carry
+what success looks like here, and S2 and S5 have stopped being open questions. The rest do carry
 over: stop on a shape printing `FALSIFIES SPEC §7`, on a non-zero exit, and on a short operand
 count, before reading anything below for #43 or handing ids to step 6.
 
