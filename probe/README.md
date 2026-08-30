@@ -145,11 +145,13 @@ can be argued with; the instrument holds only the mechanism.
 
 ```bash
 node probe/differential.mjs indexwright-probe '(default)' \
-  --expect-uncovered S1,S3,S4,S6,S8 --expect-served S7 \
+  --expect-uncovered S1,S4,S6,S8 --expect-served S7 \
   > probe/differential-before.json
 ```
 
-S2 and S5 are named by neither flag, deliberately — see the third group below.
+S2, S3 and S5 are named by neither flag, deliberately — see the second and third groups below. Only
+a prediction that cannot come out the other way belongs in a flag: what a flag buys is that nobody
+has to notice a line, and what it costs is that a correct run can be stopped by a guess.
 
 Read the stderr summary. Per shape it prints `constant across N of M operands`, or
 `FALSIFIES SPEC §7` with the disagreeing variants. Exit `0` means the claim survived, `1` means it
@@ -165,12 +167,17 @@ not a measurement of anything.
 So the reading this step has to produce, in three groups — and only the first of them is a group a
 `served` can be read against:
 
-- **S1, S3, S4, S6 and S8 `constant … uncovered`.** S1, S4, S6 and S8 each carry a range, an
-  inequality or an order-by on a second field, and a composite index is the only way Firestore
-  serves those. S3 pairs an `array-contains` with an equality, which is not the equality-only case
-  either — and it is the field pair `firestore.indexes.json` declares its second composite for, so
-  the candidate set is itself the claim that S3 needs one. On a bare target there is no room for any
-  of the five to come back anything else.
+- **S1, S4, S6 and S8 `constant … uncovered`, and these four are in the flag.** Each carries a
+  range, an inequality or an order-by on a second field, and a composite index is the only way
+  Firestore serves those. On a bare target there is no room for any of the four to come back
+  anything else, which is what makes them safe to hand to `--expect-uncovered`.
+- **S3 `constant … uncovered` too — but predicted, not enforced.** It pairs an `array-contains` with
+  an equality, which is not the equality-only case, and it is the field pair
+  `firestore.indexes.json` declares its second composite for, so the candidate set is itself the
+  claim that S3 needs one. What keeps it out of the flag is the other reading: if Firestore merges
+  an `array-contains` with an equality after all, `served` here is a correct answer from a bare
+  target, and a flag would have stopped the run for it. Read S3's line, and if it is `served` — and
+  the four above are not — confirm against step 1's listing before concluding the target was dirty.
 - **S7 `constant … served`.** It is the one shape certain to be served here: its `a` equality and
   `__name__` inequality are served by the automatic single-field index, which is why `shapes.mjs`
   predicts it `covered: true` while `firestore.indexes.json` declares nothing for it.
@@ -191,13 +198,10 @@ a zero exit is the go-ahead rather than the first of four things to check by eye
   positive §2 forbids acting on; the sentinel `served` where a real operand is not is the false
   negative. Both are the claim failing, and only the mapping says which.
 - `AGAINST EXPECTATION`, exit `2`. Read which direction it went, because the two mean opposite
-  things. A shape named in `--expect-uncovered` that answered `served` means the target was not
-  bare, so the whole reading is of the covered side — S3 is the least certain of the five, and if it
-  is the only one that trips, the other reading is that Firestore merged an `array-contains` with an
-  equality after all, so confirm against step 1's listing before concluding which. S7 named in
-  `--expect-served` and answering `uncovered` says nothing about the target: it is this runbook's
-  assumption that the automatic single-field index serves an `a` equality with a `__name__`
-  inequality, and that assumption failing is the finding.
+  things. One of S1, S4, S6 or S8 answering `served` means the target was not bare, so the whole
+  reading is of the covered side. S7 named in `--expect-served` and answering `uncovered` says
+  nothing about the target: it is this runbook's assumption that the automatic single-field index
+  serves an `a` equality with a `__name__` inequality, and that assumption failing is the finding.
 - a row printing `did not enter the comparison`, exit `2`. Only `served` and `uncovered` rows are
   compared, so an `other` or an `unbuildable` shrinks a shape's operand count while the shape still
   reads `constant` — a verdict over some of the operands presented as one over all of them. Every
@@ -242,13 +246,20 @@ The same instrument against the covered side. Step 3 could only show the claim h
 is served; this shows it holding where something is, and this is where issue #43's number comes
 from — a shape that came back `FAILED_PRECONDITION` read nothing.
 
-The expected reading settles here, and every shape is named: S1–S5 and S7 served, S6 and S8
-uncovered — those two are the shapes the candidate set deliberately does not declare. S2 and S5 have
-stopped being open questions, because the set now declares a composite that covers them either way.
+The expected reading settles here: S1–S5 and S7 served, S6 and S8 uncovered. S2 and S5 have stopped
+being open questions, because the set now declares a composite that covers them either way — so
+seven of the eight go into a flag.
+
+S8 does not, and the reason is worth stating precisely, because `shapes.mjs` calls it "a field pair
+the candidate set does not declare" and that is not quite right. S6 filters on `n`, which nothing
+declares; S8 is `a == …` ordered by `b desc`, and `(a ASC, b ASC)` *is* declared — only the
+direction differs. Whether Firestore serves that by traversing the declared index in reverse is
+exactly the sort of thing this run exists to observe, and getting it wrong in a flag would stop a
+correct run. So S8 is predicted here and read off the summary, not enforced.
 
 ```bash
 node probe/differential.mjs indexwright-probe '(default)' \
-  --expect-served S1,S2,S3,S4,S5,S7 --expect-uncovered S6,S8 \
+  --expect-served S1,S2,S3,S4,S5,S7 --expect-uncovered S6 \
   > probe/differential-after.json
 ```
 

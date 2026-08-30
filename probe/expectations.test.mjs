@@ -24,29 +24,35 @@ test('the runbook step-3 invocation reaches summarise as the map it describes', 
   // Verbatim from probe/README.md, because the string an operator types is the thing under test.
   const { positional, expected } = parse(
     'indexwright-probe', '(default)',
-    '--expect-uncovered', 'S1,S3,S4,S6,S8',
+    '--expect-uncovered', 'S1,S4,S6,S8',
     '--expect-served', 'S7',
   );
   assert.deepEqual(positional, ['indexwright-probe', '(default)']);
   assert.deepEqual(Object.fromEntries(expected), {
-    S1: 'uncovered', S3: 'uncovered', S4: 'uncovered', S6: 'uncovered', S8: 'uncovered', S7: 'served',
+    S1: 'uncovered', S4: 'uncovered', S6: 'uncovered', S8: 'uncovered', S7: 'served',
   });
-  // S2 and S5 unconstrained is not an incidental gap — encoding a prediction for those is the
-  // mistake 8709f68 fixed, and it would stop a correct run.
-  assert.equal(expected.has('S2'), false);
-  assert.equal(expected.has('S5'), false);
+  // S2, S3 and S5 unconstrained is not an incidental gap. For S2 and S5 it is the mistake 8709f68
+  // fixed — Firestore merges single-field indexes for equality-only shapes, so a prediction either
+  // way would stop a correct run. S3 is the same argument one step weaker: if an `array-contains`
+  // merges with an equality, `served` is a correct answer from a bare target, and the runbook says
+  // so in prose rather than in a flag.
+  for (const open of ['S2', 'S3', 'S5']) assert.equal(expected.has(open), false, open);
 });
 
 test('the runbook step-5 invocation inverts cleanly, and the database defaults', () => {
   const { positional, expected } = parse(
     'indexwright-probe',
     '--expect-served', 'S1,S2,S3,S4,S5,S7',
-    '--expect-uncovered', 'S6,S8',
+    '--expect-uncovered', 'S6',
   );
   assert.deepEqual(positional, ['indexwright-probe']);
-  assert.equal(expected.size, 8);
+  assert.equal(expected.size, 7);
   assert.equal(expected.get('S2'), 'served');
   assert.equal(expected.get('S6'), 'uncovered');
+  // S8 stays open on the covered side, and for a different reason than step 3's S3: `(a ASC, b
+  // ASC)` is declared and S8 orders by `b desc`, so whether Firestore serves it by traversing that
+  // index in reverse is the thing being observed, not a thing to enforce.
+  assert.equal(expected.has('S8'), false);
 });
 
 test('an empty list is refused rather than enforcing nothing', () => {
