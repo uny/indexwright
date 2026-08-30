@@ -16,6 +16,16 @@
  * succeeded — a false positive of exactly the kind SPEC §2 forbids acting on, and one that would
  * make every verdict the verb reaches suspect.
  *
+ * **What this does not test, stated so a `constant` verdict is not read as more than it is.** A
+ * shape's scalar slots are all filled from the *same* provider call, so a two-filter shape is only
+ * ever issued with both operands of the same type: `a == 'beta'` with `b > 'beta'`, or `a == 42`
+ * with `b > 42`, never `a == 'beta'` with `b > 42`. Selection that turned on the *combination* of
+ * operand types rather than on any one of them would survive this instrument and be reported
+ * `constant`. Varying the slots independently is a cross-product rather than a list, and is not
+ * attempted here; what is claimed is only that selection does not turn on the operands moving
+ * together, which is the axis replay actually exercises — `replay.ts` fills every slot from one
+ * sentinel too.
+ *
  * Nothing here imports the classifier `replay.ts` uses. The two are meant to be independent: a
  * shared classifier that read a status wrongly would read it wrongly for both, and this instrument
  * exists to be a second opinion about what the database said.
@@ -24,7 +34,7 @@
  */
 
 import { Firestore, Timestamp } from '@google-cloud/firestore';
-import { COLLECTION, SENTINEL, SHAPES } from './shapes.mjs';
+import { COLLECTION, SENTINEL, SHAPES, seededId } from './shapes.mjs';
 
 // The guard `check` applies, for the reason `check` applies it: each of these redirects the client
 // whatever target it is given, so the named database would be announced and something else
@@ -73,9 +83,16 @@ const VARIANTS = [
   { name: 'list-of-ten', only: 'arity', scalar: () => SENTINEL, list: () => [SENTINEL, ...Array.from({ length: 9 }, (_, i) => `v${i}`)] },
   // The reference variants, for the `__name__` shape. A key filter's operand is validated against
   // the collection being queried before an index is selected, so the interesting axis is which
-  // document it names rather than what type it is.
+  // document it names rather than what type it is — which means one of them has to name a document
+  // that is *there*. `ref-present` is that one, and `seededId` is imported rather than spelled again
+  // so it cannot drift from the ids `seed.mjs` wrote.
+  //
+  // There is deliberately no `ref-sentinel` here: for S7 it would be byte-for-byte the general
+  // `sentinel` variant below (same scalar, and `values.ref` already defaults to `doc(SENTINEL)`), so
+  // it added a row to the operand count without adding an operand — and that count is what an
+  // operator reads as the strength of the §7 evidence.
+  { name: 'ref-present', only: 'reference', ref: () => collection.doc(seededId(0)) },
   { name: 'ref-missing', only: 'reference', ref: () => collection.doc('does-not-exist') },
-  { name: 'ref-sentinel', only: 'reference', ref: () => collection.doc(SENTINEL) },
 ];
 
 const FAILED_PRECONDITION = 9;
@@ -135,9 +152,14 @@ for (const shape of SHAPES) {
   const answered = results.filter((r) => r.shape === shape.id && (r.verdict === 'served' || r.verdict === 'uncovered'));
   const verdicts = new Set(answered.map((r) => r.verdict));
   if (shape.varies === 'nothing') {
-    // Not a gap in the experiment. A unary filter carries no operand, so there is nothing about
-    // this shape for a value to change, and counting it as untested would report a hole where the
-    // question does not arise. It is still run, for the three questions that are not §7's.
+    // For a shape whose filters are *all* unary, and no shape currently is: there would then be
+    // nothing about it for a value to change, and counting it as untested would report a hole where
+    // the question does not arise. It would still be run, for the three questions that are not §7's.
+    //
+    // S5 used to set this and should not have. It pairs a unary `IS_NULL` with an ordinary equality,
+    // so it has an operand; marking the whole shape as having none excluded it from the comparison
+    // and printed `has no operand to vary` over a shape that had simply never been varied. The test
+    // is whether *every* filter is unary, not whether any is.
     findings.push({ shape: shape.id, kind: 'not-applicable', verdict: [...verdicts][0] ?? 'none' });
   } else if (answered.length < 2) {
     findings.push({ shape: shape.id, kind: 'untested', reached: answered.length });
@@ -173,5 +195,5 @@ await db.terminate();
 
 // 1 means the claim did not survive, which is a finding rather than a failure of this script; 2
 // means the run could not answer, and takes precedence — the same contract `check` uses.
-if (untested.length > 0 && falsified.length === 0) process.exitCode = 2;
+if (untested.length > 0) process.exitCode = 2;
 else if (falsified.length > 0) process.exitCode = 1;

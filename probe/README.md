@@ -102,8 +102,12 @@ gcloud firestore indexes composite list --project indexwright-probe --database '
 
 ### 2. Seed the collection
 
-Five hundred documents, with `b` deliberately of mixed type — a `!=` matches every document where
-the field exists and differs, whatever its type, and that is the read volume #43 is about.
+Five hundred documents. `a` is seeded to the sentinel itself, because S4 conjoins an equality on
+`a` with the negated filter and replay sends the sentinel to both — seeded to anything else, S4
+matches nothing and measures nothing. `b` is deliberately of mixed type: a `!=` matches every
+document where the field exists and differs, whatever its type, and that is the read volume #43 is
+about. The one exception is `null`, which a `!=` does not match, so the count to expect back is the
+seeded count minus those rows. `seed.mjs` prints it.
 
 ```bash
 node probe/seed.mjs indexwright-probe '(default)' 500
@@ -133,10 +137,20 @@ node probe/differential.mjs indexwright-probe '(default)' > probe/differential.j
 
 Read the stderr summary. Per shape it prints `constant across N operands`, or
 `FALSIFIES SPEC §7` with the disagreeing variants. Exit `0` means the claim survived, `1` means it
-did not, `2` means a shape had too few operands reach the backend to say.
+did not, `2` means a shape had too few operands reach the backend to say — and `2` outranks `1`, so
+a run that both falsified the claim and left a shape unanswered exits `2`. That is `check`'s own
+contract: a report missing entries is not a clean report with a caveat.
 
-**For #43**, read the `documents read` counts on the S4 rows. If they equal the 500 seeded, the
-issue's deduction is now an observation. If they are zero, the seed did not take.
+**For #43**, read the `documents read` count on the S4 **`sentinel`** row — that row and no other,
+because it is the only one issuing what `check` actually replays. `seed.mjs` prints the number to
+expect when it finishes: **429** for a 500-document seed, being every seeded document except the 71
+whose `b` is null, which a `!=` does not match. If it reports 429, #43's deduction is now an
+observation. If it reports 0, the seed did not take — the seeded `a` is the sentinel precisely so
+that a healthy collection cannot report 0 here.
+
+The other S4 rows are expected to report 0: they vary the operand, and the operand is the value the
+equality is matched against, so `a == 42` matches nothing in a collection seeded to the sentinel.
+That is a statement about the variant, not about the seed.
 
 ### 5. Capture the corpus of shapes the target actually covers
 
@@ -150,7 +164,8 @@ Start the emulator in one terminal, from `probe/`:
 firebase emulators:start --only firestore --project indexwright-probe
 ```
 
-Then, substituting the ids from step 4:
+Then, from the repository root, substituting the ids from step 4 — every `node` command in this
+runbook is written relative to the root, and only the two `firebase` commands run from `probe/`:
 
 ```bash
 PROBE_SHAPES=S1,S2,S3,S4,S5,S7 node packages/record/dist/cli.js --emulator 127.0.0.1:8080 --out probe/firestore.covered.json -- node probe/suite.mjs

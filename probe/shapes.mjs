@@ -15,10 +15,13 @@
  * probe's whole purpose is to fill them differently each time. `suite.mjs` passes a provider that
  * always answers with the sentinel, since capture records no values at all.
  *
- * `list(n)` takes a length because the corpus does not record one: an `IN` against three values is
- * recorded, and replayed, identically to an `IN` against one. If index selection turns on that
- * length, replay reports a verdict for a query the suite never issued — which is the sharpest way
- * SPEC §7's claim could be false, and the reason arity is a variant here rather than a constant.
+ * The providers take no arguments: `list()` returns a list whose *length* is chosen by the caller,
+ * not by the shape. The corpus does not record that length — an `IN` against three values is
+ * recorded, and replayed, identically to an `IN` against one — so if index selection turns on it,
+ * replay reports a verdict for a query the suite never issued. That is the sharpest way SPEC §7's
+ * claim could be false, and it is why arity is a *variant* in `differential.mjs` rather than a
+ * parameter here: a shape that chose its own arity would be a different shape, not the same one
+ * with a different operand.
  */
 export const SHAPES = [
   {
@@ -48,12 +51,17 @@ export const SHAPES = [
   },
   {
     id: 'S5',
-    describe: 'an equality and a unary IS_NULL, which carries no operand to vary',
+    describe: 'an equality and a unary IS_NULL, whose null half carries no operand to vary',
     covered: true,
-    // Excluded from the differential comparison by `varies: 'nothing'`: there is no operand here to
-    // change, and swapping the `null` for anything else records a different shape rather than the
-    // same shape with a different value. It is run for the other three questions, not for §7.
-    varies: 'nothing',
+    // The `b == null` half is unary and cannot be varied — swapping the `null` for anything else
+    // records a different shape rather than the same shape with a different value. The `a ==` half
+    // is an ordinary operand like any other, so this shape *does* take part in the §7 comparison and
+    // deliberately carries no `varies: 'nothing'`.
+    //
+    // It did carry one, which excluded it: `applies` then admitted only the `sentinel` variant, and
+    // the shape was reported `has no operand to vary` rather than tested. One shape in eight was
+    // silently outside the experiment the whole instrument exists to run, on the premise that a
+    // query with one unary filter has no operands at all.
     build: (c, v) => c.where('a', '==', v.scalar()).where('b', '==', null),
   },
   {
@@ -79,6 +87,18 @@ export const SHAPES = [
 
 /** The collection every shape is issued against. */
 export const COLLECTION = 'probe';
+
+/**
+ * The id of the `i`th seeded document.
+ *
+ * Here rather than in `seed.mjs` for the reason the shapes themselves are here: `differential.mjs`
+ * needs to name a document the seed actually wrote, and a second spelling of the format would drift
+ * from the one that wrote it. A `ref` variant naming a document that does not exist cannot test the
+ * axis it was added for.
+ */
+export function seededId(i) {
+  return `doc-${String(i).padStart(5, '0')}`;
+}
 
 /**
  * The value `replay.ts` synthesises, re-exported rather than copied.
