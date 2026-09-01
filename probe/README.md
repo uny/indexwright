@@ -1,18 +1,18 @@
 # The measured run
 
-`check` has never been executed against a real database. Every test it landed with is offline and
-none of them opens a channel — so the verb's network path, and the one claim its verdicts rest on,
-have never been observed. This directory is the harness for the first run that
-observes them.
+`check` landed without ever having been executed against a real database. Every test it landed with
+is offline and none of them opens a channel, so the verb's network path — and the one claim its
+verdicts rest on — went unobserved. This directory is the harness for the run that observed them, and
+the runbook below is the one that was followed.
 
-It answers four things at once, which is why it is worth doing before anything else:
+It answered four things at once, which is why it was worth doing before anything else:
 
-| Question | Instrument | Status before this run |
-|:--|:--|:--|
-| SPEC §7's claim: index selection does not depend on the compared value | `differential.mjs`, run either side of the deploy | Unverified, and §7 itself asks that it be tested |
-| Issue #43: a negated operator reads the whole collection | `differential.mjs`, on a seeded collection | Deduced, never observed |
-| Issue #39: the process exits once the report is written | `check`, timed | Untestable with a fake client |
-| `DEFAULT_SETTLE_MS` = 60s | `watch-readiness.mjs` | A guess |
+| Question | Instrument | Status before the run | What the run observed |
+|:--|:--|:--|:--|
+| SPEC §7's claim: index selection does not depend on the compared value | `differential.mjs`, run either side of the deploy | Unverified, and §7 itself asks that it be tested | **Holds.** Every shape constant across every operand, both sides, arity included |
+| Issue #43: a negated operator reads the whole collection | `differential.mjs`, on a seeded collection | Deduced, never observed | **429 documents**, the predicted count |
+| Issue #39: the process exits once the report is written | `check`, timed | Untestable with a fake client | **It exits.** Three runs, none hung |
+| `DEFAULT_SETTLE_MS` = 60s | `watch-readiness.mjs` | A guess | Still a guess, now a documented one — see below |
 
 Index builds dominate the wall clock — roughly three and a half minutes each — so the design
 deploys **one** index set and varies the corpus against it. That reaches `check`'s exit 0, 1 and 2
@@ -54,6 +54,38 @@ it was done ahead of the run — and it found a bug in shipped code before a sin
 > door. The suite could not catch it: every test builds both the actual and the expected query from
 > the constant, so the two moved together and the comparison stayed true. Fixed, with a test that
 > pins the rule against a literal instead.
+
+## What the run found
+
+Four shapes were deliberately left out of the `--expect-` flags, because each asks something the run
+existed to *observe* and a wrong guess in a flag stops a correct run. Their readings, recorded rather
+than scored:
+
+- **S8 — Firestore does not traverse a declared index in reverse.** `a == …` ordered by `b desc` came
+  back `FAILED_PRECONDITION` with `(a ASC, b ASC)` deployed and `READY`. Direction is part of the
+  index, not a property the planner can invert, so a suite that orders one way and an index that
+  orders the other do not meet.
+- **S3 — `array-contains` with an equality is served with no composite index.** It read `served` on a
+  bare target, where S1, S4, S6 and S8 all read `uncovered` and the listing in step 1 showed nothing
+  deployed, so this is a merge and not a dirty target. The candidate set declares a
+  `tags CONTAINS, a ASC` composite that S3 does not appear to need. One run is thin evidence for
+  deleting an index, but it is the reading on record.
+- **S2 and S5 — equality-only shapes are merged.** Both served on a bare target: an `IN` expands into
+  equality branches and `b == null` is an equality, and single-field indexes cover that class.
+
+The arity result belongs with them, though it was never in question in a flag: S2 at one, three and
+ten values was served identically. That is the axis the corpus discards, and the sharpest way SPEC §7
+could have been false.
+
+### On the settling period
+
+The watcher saw both indexes go `CREATING` at +36s, reach `READY` together at +337s, and nothing
+transition through the remaining 900-second window — so the interval `DEFAULT_SETTLE_MS` covers was
+observed as zero. The constant was left at 60s anyway: the window it guards is a rare transient that
+has never been timed, and a run that does not reproduce a rare event says nothing about how long it
+lasts. What the run did settle is the price. The readiness gate restarts on every invocation, so each
+`check` pays the full period no matter how long the set has been ready — the three timed runs took
+62, 63 and 62 seconds against a two-index database, which is nearly all of it.
 
 ## Files
 

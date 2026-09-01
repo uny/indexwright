@@ -12,3 +12,7 @@ ui-debug.log
 # being ignored by this very change, and `differential-*.json` does not match it.
 differential.json
 differential-*.json
+# Step 6's corpus. Derived, not input: which shapes go into it is a *result* of step 5, so it
+# describes one target's covered set on one day rather than something a diff should track. The
+# committed corpus is `firestore.queries.json`, and this one is rebuilt by re-running step 6.
+firestore.covered.json
