@@ -9,7 +9,7 @@ It answered four things at once, which is why it was worth doing before anything
 
 | Question | Instrument | Status before the run | What the run observed |
 |:--|:--|:--|:--|
-| SPEC §7's claim: index selection does not depend on the compared value | `differential.mjs`, run either side of the deploy | Unverified, and §7 itself asks that it be tested | **Holds.** Every shape constant across every operand, both sides, arity included |
+| SPEC §7's claim: index selection does not depend on the compared value | `differential.mjs`, run either side of the deploy | Unverified, and §7 itself asks that it be tested | **Holds on the axes tested.** Every shape constant across every operand, both sides, arity included — see §7 for what it does not reach |
 | Issue #43: a negated operator reads the whole collection | `differential.mjs`, on a seeded collection | Deduced, never observed | **429 documents**, the predicted count |
 | Issue #39: the process exits once the report is written | `check`, timed | Untestable with a fake client | **It exits.** Three runs, none hung |
 | `DEFAULT_SETTLE_MS` = 60s | `watch-readiness.mjs` | A guess | Still a guess, now a documented one — see below |
@@ -80,13 +80,17 @@ could have been false.
 
 ### On the settling period
 
-The watcher saw both indexes go `CREATING` at +36s, reach `READY` together at +337s, and nothing
-transition through the remaining 900-second window — so the only interval a state watcher can see,
-first `READY` to last transition, was zero. That is not the interval `DEFAULT_SETTLE_MS` covers: the
-window it guards opens once every index already reports `READY`, so nothing transitioning afterwards
-is what a healthy deploy looks like. The constant was left at 60s: what it guards is a rare transient
-that has never been timed, and a run that does not reproduce a rare event says nothing about how long
-it lasts. What the run did settle is the price. The readiness gate restarts on every invocation, so each
+The watcher polls every five seconds. It first saw both indexes `CREATING` at +36s, first saw both
+`READY` in the same poll at +337s, and saw nothing transition through the remaining 900-second
+window. So the only interval a state watcher can measure, first `READY` to last transition, was zero
+— and "together" means within one poll, not simultaneously.
+
+That is not the interval `DEFAULT_SETTLE_MS` covers. The window it guards opens once every index
+already reports `READY`, so nothing transitioning afterwards is what a healthy deploy looks like, and
+the constant was left at 60s: what it guards is a rare transient that has never been timed, and a run
+that does not reproduce a rare event says nothing about how long it lasts.
+
+What the run did settle is the price. The readiness gate restarts on every invocation, so each
 `check` pays the full period no matter how long the set has been ready — the three timed runs took
 62, 63 and 62 seconds against a two-index database, which is nearly all of it.
 

@@ -650,13 +650,19 @@ comparison. The claim holds.
 The sharpest way it could have been false is **operand arity**, because arity is the one thing the
 corpus discards: an `IN` against ten values is recorded, and replayed, identically to an `IN` against
 one. Had index selection turned on the count, `check` would report a verdict for a query the suite
-never issued. One, three and ten values were served alike, so it does not.
+never issued. One, three and ten values were served alike, so nothing here points that way — though
+three counts are not the range, and 2 and 4 through 9 were never issued.
 
 What this does not establish is the claim's scope. It is one database, eight shapes and one index
 set — evidence that the assumption is sound enough to report on, not a proof that no operand
-anywhere selects differently. A `check` that misreports a shape this section calls value-independent
-is the observation that would overturn it, and it should be read that way rather than as a bug in
-replay.
+anywhere selects differently. Nor does it reach operand *combinations*: a shape's scalar slots are
+filled from one provider, so a two-filter shape was only ever issued with both operands of the same
+type. Selection that turned on the pairing — `a == <string>` with `b > <number>` — would have been
+reported constant. Replay flattens that pairing too, filling every slot from the one sentinel, so a
+captured query whose operands differ in type is the case neither the instrument nor replay separates,
+and it is the shape of a false positive this run cannot rule out. A `check` that misreports a shape
+this section calls value-independent is the observation that would overturn it, and it should be read
+that way rather than as a bug in replay.
 
 ### What is not captured
 

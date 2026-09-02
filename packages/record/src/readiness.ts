@@ -60,10 +60,13 @@ export type Readiness =
  * How long the set must report `READY` before a report is allowed out.
  *
  * **The number is unchanged by measurement, and what the measurement showed is why.** A run against
- * a real database watched a two-index deploy through a 900-second window: both indexes went
- * `CREATING` at +36s, both reached `READY` together at +337s, and nothing transitioned afterwards.
- * The one interval a state watcher can see — first `READY` to last transition — was *zero*. That is
- * not the interval this constant covers: the window guarded here opens once every index already
+ * a real database watched a two-index deploy through a 900-second window, polling every five
+ * seconds: both indexes were first seen `CREATING` at +36s, both were first seen `READY` in the same
+ * poll at +337s, and nothing transitioned afterwards — so "together" is to the poll's resolution,
+ * not simultaneity.
+ *
+ * The one interval a state watcher can measure — first `READY` to last transition — was *zero*. That
+ * is not the interval this constant covers: the window guarded here opens once every index already
  * reports `READY`, so a watcher seeing nothing transition afterwards is what a healthy deploy looks
  * like and says nothing about it.
  *
