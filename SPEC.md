@@ -642,9 +642,10 @@ database repeatedly, varying nothing but the operand, and compares the verdicts 
 falsification is two variants that both reached the backend disagreeing on served versus
 `FAILED_PRECONDITION`; a variant refused as `INVALID_ARGUMENT` never reached the question and is
 excluded from the comparison rather than counted against it. Eight shapes, each carrying the
-synthesised sentinel alongside operands of seven other types, were run twice — against a database
-holding no composite index, and against one holding the candidate set. Every shape was constant
-across every operand both times, and no operand dropped out of a comparison. The claim holds.
+synthesised sentinel alongside operands of seven other types, were run twice against the same
+database — once before the candidate set was deployed, while it held no composite index, and once
+after. Every shape was constant across every operand both times, and no operand dropped out of a
+comparison. The claim holds.
 
 The sharpest way it could have been false is **operand arity**, because arity is the one thing the
 corpus discards: an `IN` against ten values is recorded, and replayed, identically to an `IN` against

@@ -57,14 +57,15 @@ it was done ahead of the run — and it found a bug in shipped code before a sin
 
 ## What the run found
 
-Four shapes were deliberately left out of the `--expect-` flags, because each asks something the run
-existed to *observe* and a wrong guess in a flag stops a correct run. Their readings, recorded rather
-than scored:
+Four shapes were left out of the `--expect-` flags at the step that asked about them — S2, S3 and S5
+before the deploy, S8 after it — because each asks something the run existed to *observe*, and a
+wrong guess in a flag stops a correct run. Their readings, recorded rather than scored:
 
-- **S8 — Firestore does not traverse a declared index in reverse.** `a == …` ordered by `b desc` came
-  back `FAILED_PRECONDITION` with `(a ASC, b ASC)` deployed and `READY`. Direction is part of the
-  index, not a property the planner can invert, so a suite that orders one way and an index that
-  orders the other do not meet.
+- **S8 — a declared `(a ASC, b ASC)` did not serve an order by `b desc`.** The shape came back
+  `FAILED_PRECONDITION` with that index deployed and `READY`. The reading is what one would expect if
+  direction is part of the index rather than something the planner inverts, and it is the reason to
+  expect that a suite ordering one way and an index ordering the other do not meet — but it is one
+  shape against one set, which is not enough to state the planner rule itself.
 - **S3 — `array-contains` with an equality is served with no composite index.** It read `served` on a
   bare target, where S1, S4, S6 and S8 all read `uncovered` and the listing in step 1 showed nothing
   deployed, so this is a merge and not a dirty target. The candidate set declares a
@@ -80,10 +81,12 @@ could have been false.
 ### On the settling period
 
 The watcher saw both indexes go `CREATING` at +36s, reach `READY` together at +337s, and nothing
-transition through the remaining 900-second window — so the interval `DEFAULT_SETTLE_MS` covers was
-observed as zero. The constant was left at 60s anyway: the window it guards is a rare transient that
-has never been timed, and a run that does not reproduce a rare event says nothing about how long it
-lasts. What the run did settle is the price. The readiness gate restarts on every invocation, so each
+transition through the remaining 900-second window — so the only interval a state watcher can see,
+first `READY` to last transition, was zero. That is not the interval `DEFAULT_SETTLE_MS` covers: the
+window it guards opens once every index already reports `READY`, so nothing transitioning afterwards
+is what a healthy deploy looks like. The constant was left at 60s: what it guards is a rare transient
+that has never been timed, and a run that does not reproduce a rare event says nothing about how long
+it lasts. What the run did settle is the price. The readiness gate restarts on every invocation, so each
 `check` pays the full period no matter how long the set has been ready — the three timed runs took
 62, 63 and 62 seconds against a two-index database, which is nearly all of it.
 
