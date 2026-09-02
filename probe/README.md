@@ -107,6 +107,7 @@ What the run did settle is the price. The readiness gate restarts on every invoc
 | `seed.mjs` | Populates the collection, so #43's cost is observed rather than deduced |
 | `watch-readiness.mjs` | Timestamped index states through the same Admin path `check` uses |
 | `firestore.queries.json` | The captured corpus. Committed — it is the input `check` replays |
+| `firestore.covered.json` | The same capture narrowed to the shapes step 5 reported served. Committed, and rewritten by step 6 |
 | `firestore.indexes.json` | The candidate set, deployed to the target |
 | `firestore.indexes.wrong.json` | A set that is *not* the deployed one, for the exit-2 divergence path |
 

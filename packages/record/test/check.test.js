@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  AdminError,
   buildCorpus,
   check,
   DEFAULT_SETTLE_MS,
@@ -415,13 +416,15 @@ test('an incomplete report outranks a clean-looking one, so exit 1 means "these 
 test('both clients are released on every path out, including the ones that fail', async () => {
   // A live gRPC channel refs the event loop, so a client nobody closes turns a completed run into a
   // process that printed its report and then sat there (issue #39).
+  // Two listers on a run that reaches the end: one for the readiness gate, one for the confirmation
+  // that the set was still there when the last query was answered (issue #44).
   const clean = harness();
   assert.equal(await clean.run(), 0);
-  assert.deepEqual(clean.closed, { lister: 1, replayer: 1 });
+  assert.deepEqual(clean.closed, { lister: 2, replayer: 1 });
 
   const stopped = harness({ statuses: [{ kind: 'failed', message: '"gone"' }] });
   assert.equal(await stopped.run(), 2);
-  assert.deepEqual(stopped.closed, { lister: 1, replayer: 1 });
+  assert.deepEqual(stopped.closed, { lister: 2, replayer: 1 });
 
   // A rejection rather than a status: nothing here catches it, and the client still has to be let
   // go of on the way past.
@@ -479,24 +482,189 @@ test('a client that will not close does not replace the answer the run reached',
   assert.match(declining.said(), /could not release the index lister/);
 });
 
+test('a set that changed while the queries were answered withdraws the report, whichever way it read', async () => {
+  // Both gates read the set once, before the first replayed query, so a run vouches for a set at one
+  // moment and reports about a window that starts there (issue #44). The third listing is the one
+  // that looks again: `harness` repeats the last entry, so `[READY, READY, X]` settles on READY and
+  // confirms against X.
+  //
+  // An index removed mid-run is the false positive §2 forbids acting on: the query that needed it
+  // answers `FAILED_PRECONDITION`, which would be reported as a coverage gap in a candidate set that
+  // does not have one.
+  const removed = harness({
+    listings: [READY, READY, []],
+    statuses: [{ kind: 'uncovered', message: '"needs an index"' }],
+  });
+  assert.equal(await removed.run(), 2);
+  assert.match(removed.said(), /the index set changed while the queries were being answered/);
+  assert.match(removed.said(), /declared but not on the target:/);
+
+  // An index added mid-run is the quiet one: the query is served by a declaration the candidate set
+  // does not carry, and the run would otherwise exit 0 having reported coverage the candidate set
+  // alone does not provide.
+  const undeclared = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/indexes/added',
+    fields: [
+      { fieldPath: 'status', order: 'ASCENDING' },
+      { fieldPath: 'placed', order: 'ASCENDING' },
+      { fieldPath: '__name__', order: 'ASCENDING' },
+    ],
+  };
+  const added = harness({ listings: [READY, READY, [...READY, undeclared]] });
+  assert.equal(await added.run(), 2);
+  assert.match(added.said(), /the index set changed while the queries were being answered/);
+  assert.match(added.said(), /on the target but not declared:/);
+});
+
+test('the confirmation withdraws a verdict and never replaces one, so it cannot turn 1 into 0', async () => {
+  // It looks at the index set and not at coverage, so there is no reading of it that improves an
+  // answer. The same uncovered corpus exits 1 when the set held and 2 when it did not — never 0.
+  const held = harness({ statuses: [{ kind: 'uncovered', message: '"needs an index"' }] });
+  assert.equal(await held.run(), 1);
+  assert.match(held.said(), /1 query replayed, 1 not served/);
+
+  const moved = harness({
+    listings: [READY, READY, []],
+    statuses: [{ kind: 'uncovered', message: '"needs an index"' }],
+  });
+  assert.equal(await moved.run(), 2);
+  // The coverage line is not printed at all: there is no report to caveat, which is the distinction
+  // between declining and reporting with a warning.
+  assert.doesNotMatch(moved.said(), /not served by the candidate set/);
+});
+
+test('a confirmation that could not be made is not a confirmation', async () => {
+  // Declining here costs a run that was probably fine. Not declining reports a verdict nothing
+  // stands behind, and §2 ranks those the other way round.
+  let built = 0;
+  const h = harness({
+    lister: async () => {
+      built += 1;
+      if (built > 1) throw new AdminError('the listing call was refused');
+      return {
+        listIndexesAsync: () => (async function* () {
+          for (const index of READY) yield index;
+        })(),
+        close: async () => {},
+      };
+    },
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /could not be listed again after replay: the listing call was refused/);
+  assert.doesNotMatch(h.said(), /1 query replayed/);
+});
+
+test('a withdrawal takes away the verdict and not the entries the run had no answer for', async () => {
+  // The lines naming an unanswered entry are not the report. A credential that dies mid-run halts
+  // the replay *and* moves — or refuses — the second listing, so the case where these lines are the
+  // only explanation of the failure is exactly the case that used to lose them.
+  const halted = harness({
+    listings: [READY, READY, []],
+    statuses: [{ kind: 'failed', message: '"PERMISSION_DENIED"' }],
+  });
+  assert.equal(await halted.run(), 2);
+  assert.match(halted.said(), /stopped: the target answered with a status this run cannot read/);
+  assert.match(halted.said(), /"PERMISSION_DENIED"/);
+  assert.match(halted.said(), /the index set changed while the queries were being answered/);
+
+  // Same for an entry the target refused as invalid: not a verdict about the index set, and so not
+  // something the withdrawal of that verdict should carry off with it.
+  const refused = harness({
+    listings: [READY, READY, []],
+    statuses: [{ kind: 'invalid', message: '"INVALID_ARGUMENT"' }],
+  });
+  assert.equal(await refused.run(), 2);
+  assert.match(refused.said(), /invalid when replayed, which is not a verdict about the index set/);
+});
+
+test('a set that could not be compared again is not reported as a set that changed', async () => {
+  // `reconcile` refuses a live entry it cannot read, and the declaration it leaves unmatched is
+  // reported as `missing` — which reads exactly like a deleted index and is not one. The set may
+  // have held and simply been described in terms this run could not compare, and asserting a change
+  // on that evidence is this confirmation's own failure pointed the other way.
+  const unreadable = harness({ listings: [READY, READY, [{ ...READY[0], fields: null }]] });
+  assert.equal(await unreadable.run(), 2);
+  assert.match(unreadable.said(), /the index set could not be compared again after the queries were answered/);
+  assert.doesNotMatch(unreadable.said(), /the index set changed/);
+  assert.match(unreadable.said(), /could not be read \(fields-missing\)/);
+
+  // An index genuinely gone still says so, so the distinction is a reading of the evidence rather
+  // than a softening of every decline.
+  const gone = harness({ listings: [READY, READY, []] });
+  assert.equal(await gone.run(), 2);
+  assert.match(gone.said(), /the index set changed while the queries were being answered/);
+
+  // And an unreadable entry does not launder a change that is visible beside it. An `extra` was read
+  // well enough to be keyed, so nothing about it is in doubt, and leading with "could not be
+  // compared" over the top of it would understate the line printed underneath.
+  const alsoAdded = harness({
+    listings: [
+      READY,
+      READY,
+      [
+        { ...READY[0], fields: null },
+        {
+          ...READY[0],
+          name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/indexes/added',
+          fields: [
+            { fieldPath: 'status', order: 'ASCENDING' },
+            { fieldPath: 'placed', order: 'ASCENDING' },
+            { fieldPath: '__name__', order: 'ASCENDING' },
+          ],
+        },
+      ],
+    ],
+  });
+  assert.equal(await alsoAdded.run(), 2);
+  assert.match(alsoAdded.said(), /the index set changed while the queries were being answered/);
+  assert.match(alsoAdded.said(), /on the target but not declared:/);
+  assert.match(alsoAdded.said(), /could not be read \(fields-missing\)/);
+});
+
+test('the confirmation lister is released when the second listing is refused, not only when it is built', async () => {
+  // The realistic refusal is PERMISSION_DENIED at list time, which `listLiveIndexes` wraps — and by
+  // then the client exists. Pinned separately because the factory-throws case never reaches the
+  // `finally` at all: with the release moved out of it the whole suite stayed green, and a run that
+  // printed its decline and then sat there holding a ref'd channel is issue #39 exactly.
+  const refused = harness({ listings: [READY, READY, new Error('PERMISSION_DENIED')] });
+  assert.equal(await refused.run(), 2);
+  assert.deepEqual(refused.closed, { lister: 2, replayer: 1 });
+  assert.match(refused.said(), /could not be listed again after replay: .*PERMISSION_DENIED/);
+});
+
 test('the lister is closed before the replay client is built, so one channel is open at a time', async () => {
   const order = [];
   const h = harness({
-    lister: async () => ({
-      listIndexesAsync() {
-        return (async function* () {
-          for (const index of READY) yield index;
-        })();
-      },
-      close: async () => order.push('lister closed'),
-    }),
+    lister: async () => {
+      // Pushed only from the second construction on, so the list reads as the sequence the test is
+      // about rather than opening with a step the original invariant never had.
+      if (order.length > 0) order.push('lister built');
+      return {
+        listIndexesAsync() {
+          return (async function* () {
+            for (const index of READY) yield index;
+          })();
+        },
+        close: async () => order.push('lister closed'),
+      };
+    },
     replayer: async () => {
       order.push('replayer built');
       return { run: async () => ({ kind: 'served' }), close: async () => order.push('replayer closed') };
     },
   });
   assert.equal(await h.run(), 0);
-  assert.deepEqual(order, ['lister closed', 'replayer built', 'replayer closed']);
+  // The confirmation adds a fourth step and does not add a fourth *channel*: the replay client is
+  // released before the second lister is built, so the invariant this test is named for survives the
+  // extra listing rather than being traded for it.
+  assert.deepEqual(order, [
+    'lister closed',
+    'replayer built',
+    'replayer closed',
+    'lister built',
+    'lister closed',
+  ]);
 });
 
 test('the files are read before any client is built, so a typo costs no settling period', async () => {

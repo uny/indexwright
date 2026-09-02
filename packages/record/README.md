@@ -77,8 +77,19 @@ Exit `1` is a finding and exit `2` is the absence of one. Unlike `indexwright li
 even with findings, the oracle here is Firestore itself rather than a rule this tool applies — so a
 `FAILED_PRECONDITION` is worth failing a pipeline on. `2` covers every way the run could not answer:
 a file it could not read, a readiness it could not establish, a target that is not carrying the
-candidate set, an entry it could not replay, a status it cannot interpret. It outranks `1`, because
-a report that is missing entries is not a clean report with a caveat.
+candidate set, an entry it could not replay, a status it cannot interpret, and a set that did not
+hold across the replay. It outranks `1`, because a report that is missing entries is not a clean
+report with a caveat.
+
+**The set is checked again after the last query is answered.** Both gates read it once, before the
+first replayed query, so a run vouches for a set at one moment and reports about a window that
+begins there. `check` lists once more at the end and reconciles again; if the set moved, or could
+not be compared again, the run declines with `2` rather than reporting. That second look is strictly
+a withdrawal — it examines the index set and not coverage, so it can turn either verdict into a
+decline and neither verdict into the other. On that path the coverage lines and the
+`N queries replayed` summary are not printed at all: there is no report to caveat. The lines naming
+an entry the run had no answer for are still printed, because they are not the verdict being
+withdrawn.
 
 **A run takes a minute at the least, and that is the design.** A composite index answers
 `FAILED_PRECONDITION` for a period *after* it can already serve some queries, so one query succeeding

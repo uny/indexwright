@@ -106,6 +106,26 @@ Firestore connection.
   behaviour this whole subsection exists to rule out at the moment it is most likely to occur, which
   is right after a deploy.
 
+  Both halves read the set *once*, before the first replayed query. So a run vouches for a set at one
+  moment and reports about queries answered across a window that begins there, and nothing in
+  check-then-act notices that those are not the same set. **`check` must list once more after the
+  last query is answered, reconcile again, and decline if the set moved.** A set that changes mid-run
+  fails in both directions and neither is visible from the replies alone: an index removed makes the
+  query that needed it answer `FAILED_PRECONDITION`, which would be reported as a coverage gap in a
+  candidate set that does not have one, and an index added has a query served by a declaration the
+  candidate set does not carry, which is the quiet direction and the one the `extra` half of
+  reconciliation exists to catch. The second look is strictly a *withdrawal*: it examines the index
+  set and not coverage, so it can turn either verdict into a decline and neither verdict into the
+  other. A confirmation that cannot be made — the second listing refused — is not a confirmation, and
+  declines the same way.
+
+  This is not an exotic target for it. The database this verb is pointed at is the throwaway one CI
+  deploys to, which is exactly where a second job can be deploying while the first is measuring. The
+  window itself is smaller than the run: measurement puts the settling period *before* the listing
+  that gets vouched for, so only replay is exposed — under a second for a corpus of eight entries
+  against a sixty-second run. It scales with the corpus rather than staying there, which is why the
+  obligation is to look again rather than to argue the window away.
+
   **`check` must refuse to run when the environment redirects the client, and must refuse rather
   than warn.** Two variables do this, and the rule is about the class rather than about either one.
   `FIRESTORE_EMULATOR_HOST` sends the data client to an emulator, which enforces no composite index
