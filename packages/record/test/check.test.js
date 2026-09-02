@@ -555,6 +555,58 @@ test('a confirmation that could not be made is not a confirmation', async () => 
   assert.doesNotMatch(h.said(), /1 query replayed/);
 });
 
+test('a withdrawal takes away the verdict and not the entries the run had no answer for', async () => {
+  // The lines naming an unanswered entry are not the report. A credential that dies mid-run halts
+  // the replay *and* moves — or refuses — the second listing, so the case where these lines are the
+  // only explanation of the failure is exactly the case that used to lose them.
+  const halted = harness({
+    listings: [READY, READY, []],
+    statuses: [{ kind: 'failed', message: '"PERMISSION_DENIED"' }],
+  });
+  assert.equal(await halted.run(), 2);
+  assert.match(halted.said(), /stopped: the target answered with a status this run cannot read/);
+  assert.match(halted.said(), /"PERMISSION_DENIED"/);
+  assert.match(halted.said(), /the index set changed while the queries were being answered/);
+
+  // Same for an entry the target refused as invalid: not a verdict about the index set, and so not
+  // something the withdrawal of that verdict should carry off with it.
+  const refused = harness({
+    listings: [READY, READY, []],
+    statuses: [{ kind: 'invalid', message: '"INVALID_ARGUMENT"' }],
+  });
+  assert.equal(await refused.run(), 2);
+  assert.match(refused.said(), /invalid when replayed, which is not a verdict about the index set/);
+});
+
+test('a set that could not be compared again is not reported as a set that changed', async () => {
+  // `reconcile` refuses a live entry it cannot read, and the declaration it leaves unmatched is
+  // reported as `missing` — which reads exactly like a deleted index and is not one. The set may
+  // have held and simply been described in terms this run could not compare, and asserting a change
+  // on that evidence is this confirmation's own failure pointed the other way.
+  const unreadable = harness({ listings: [READY, READY, [{ ...READY[0], fields: null }]] });
+  assert.equal(await unreadable.run(), 2);
+  assert.match(unreadable.said(), /the index set could not be compared again after the queries were answered/);
+  assert.doesNotMatch(unreadable.said(), /the index set changed/);
+  assert.match(unreadable.said(), /could not be read \(fields-missing\)/);
+
+  // An index genuinely gone still says so, so the distinction is a reading of the evidence rather
+  // than a softening of every decline.
+  const gone = harness({ listings: [READY, READY, []] });
+  assert.equal(await gone.run(), 2);
+  assert.match(gone.said(), /the index set changed while the queries were being answered/);
+});
+
+test('the confirmation lister is released when the second listing is refused, not only when it is built', async () => {
+  // The realistic refusal is PERMISSION_DENIED at list time, which `listLiveIndexes` wraps — and by
+  // then the client exists. Pinned separately because the factory-throws case never reaches the
+  // `finally` at all: with the release moved out of it the whole suite stayed green, and a run that
+  // printed its decline and then sat there holding a ref'd channel is issue #39 exactly.
+  const refused = harness({ listings: [READY, READY, new Error('PERMISSION_DENIED')] });
+  assert.equal(await refused.run(), 2);
+  assert.deepEqual(refused.closed, { lister: 2, replayer: 1 });
+  assert.match(refused.said(), /could not be listed again after replay: .*PERMISSION_DENIED/);
+});
+
 test('the lister is closed before the replay client is built, so one channel is open at a time', async () => {
   const order = [];
   const h = harness({

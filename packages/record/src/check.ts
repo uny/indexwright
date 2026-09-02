@@ -222,6 +222,15 @@ export async function check(
   // Both gates above read the set once, before the first replayed query. Everything since has been
   // a statement about queries answered *after* that reading, so the run has vouched for a set at one
   // moment and reported about a window that starts there (issue #44). Look once more.
+  //
+  // Said before the confirmation rather than after it. What the withdrawal takes away is the
+  // *verdict*, and these lines are not one: they name the entries this run has no answer for, and
+  // they are the likeliest explanation of a confirmation that then also fails — a credential that
+  // died mid-run halts the replay and refuses the second listing alike. Withdrawing them too would
+  // leave an operator reading `the index set changed` about a run whose real problem was named on a
+  // line that was never printed.
+  reportUnanswered(invalid, halted, say);
+
   let held: Reconciliation;
   try {
     held = await confirmSetHeld(target, command.project, candidate, say, {
@@ -236,12 +245,7 @@ export async function check(
     return 2;
   }
   if (!isVouched(held)) {
-    reportDivergence(
-      held,
-      command.indexes,
-      say,
-      'cannot report: the index set changed while the queries were being answered',
-    );
+    reportDivergence(held, command.indexes, say, withdrawal(held));
     return 2;
   }
 
@@ -258,6 +262,15 @@ export async function check(
  * query served by a declaration the candidate set does not carry, which is the quiet one, and
  * exactly what the `extra` half of `reconcile` exists to catch. Caught before replay, missed during
  * it, until here.
+ *
+ * What it does not cover is the *state* half of the same window, and the boundary is worth naming
+ * rather than leaving to be discovered: `reconcile` compares declarations and does not consult
+ * `state` (that is `readiness.ts`'s question), and it keys on fields rather than on the resource
+ * name. So an index deleted and re-created under a new name with the same fields, or one that
+ * regressed to `CREATING` or `NEEDS_REPAIR` while the queries were being answered, reconciles as
+ * `identical` and is vouched for here — and the `FAILED_PRECONDITION` it caused is still reported as
+ * a coverage gap. Closing that would mean running the readiness gate a second time, at the cost of a
+ * second settling period on every run, which is a trade this change does not make.
  *
  * Whatever this finds can only *withdraw* a verdict. It never turns a `1` into a `0` or the reverse,
  * because it does not look at coverage at all — either the report stands or there is no report.
@@ -415,6 +428,40 @@ function reportDivergence(
   }
 }
 
+/**
+ * Name the entries this run has no answer for, ahead of any verdict about them.
+ *
+ * Split out of `reportReplay` because it is not part of the report: the report is the coverage
+ * verdict, and a withdrawal takes that away without taking away what happened during the replay.
+ * These lines say which entry stopped the run and what the target said, and a run that halts on a
+ * dead credential is a run whose second listing is about to be refused for the same reason — so the
+ * one path that must not eat them is exactly the one that used to.
+ */
+function reportUnanswered(
+  invalid: readonly string[],
+  halted: string | undefined,
+  say: (text: string) => void,
+): void {
+  for (const entry of invalid) say(`invalid when replayed, which is not a verdict about the index set: ${entry}`);
+  if (halted !== undefined) say(`stopped: the target answered with a status this run cannot read: ${halted}`);
+}
+
+/**
+ * Say what the confirmation actually established, which is not always that the set changed.
+ *
+ * `reconcile` refuses a live entry it cannot read — a `fields` the service sent as `null`, an
+ * `apiScope` this version cannot compare under — and a declaration left unmatched by one is reported
+ * as `missing`. That reads identically to a deleted index and is not the same thing: the set may
+ * have held perfectly well and simply been described in terms this run could not compare. Claiming a
+ * change on that evidence is the failure this whole confirmation exists to prevent, pointed the
+ * other way — an assertion about a window nobody observed.
+ */
+function withdrawal(held: Reconciliation): string {
+  return held.unreadable.length > 0 || held.incomparable.length > 0
+    ? 'cannot report: the index set could not be compared again after the queries were answered'
+    : 'cannot report: the index set changed while the queries were being answered';
+}
+
 function reportReplay(
   attempted: number,
   uncovered: readonly { key: string; message: string }[],
@@ -427,9 +474,6 @@ function reportReplay(
     say(`not served: ${render(entry.key)}`);
     say(`  ${entry.message}`);
   }
-  for (const entry of invalid) say(`invalid when replayed, which is not a verdict about the index set: ${entry}`);
-  if (halted !== undefined) say(`stopped: the target answered with a status this run cannot read: ${halted}`);
-
   say(
     `${count(attempted, 'query', 'queries')} replayed, ` +
       `${uncovered.length} not served by the candidate set`,
