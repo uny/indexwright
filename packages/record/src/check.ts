@@ -219,7 +219,66 @@ export async function check(
     await release('replay client', replayer, say);
   }
 
+  // Both gates above read the set once, before the first replayed query. Everything since has been
+  // a statement about queries answered *after* that reading, so the run has vouched for a set at one
+  // moment and reported about a window that starts there (issue #44). Look once more.
+  let held: Reconciliation;
+  try {
+    held = await confirmSetHeld(target, command.project, candidate, say, {
+      lister: options.lister ?? adminLister,
+    });
+  } catch (error) {
+    if (!(error instanceof AdminError)) throw error;
+    // A confirmation that could not be made is not a confirmation. Declining here costs a run that
+    // was probably fine; not declining reports a verdict nothing stands behind, and §2 ranks those
+    // the other way round.
+    say(`cannot report: the target could not be listed again after replay: ${error.message}`);
+    return 2;
+  }
+  if (!isVouched(held)) {
+    reportDivergence(
+      held,
+      command.indexes,
+      say,
+      'cannot report: the index set changed while the queries were being answered',
+    );
+    return 2;
+  }
+
   return reportReplay(attempted, uncovered, invalid, cannotReplay, halted, say);
+}
+
+/**
+ * List once more, after the last query has been answered, and reconcile again.
+ *
+ * The verb is check-then-act, and this is the only thing that notices when the act happened against
+ * something else. A set that moved mid-run fails in both directions: an index removed makes the
+ * query that needed it answer `FAILED_PRECONDITION`, which would be reported as a coverage gap the
+ * candidate set does not have — the false positive §2 forbids acting on — and an index added has a
+ * query served by a declaration the candidate set does not carry, which is the quiet one, and
+ * exactly what the `extra` half of `reconcile` exists to catch. Caught before replay, missed during
+ * it, until here.
+ *
+ * Whatever this finds can only *withdraw* a verdict. It never turns a `1` into a `0` or the reverse,
+ * because it does not look at coverage at all — either the report stands or there is no report.
+ *
+ * The lister is built again rather than held open across the replay, which keeps #39's invariant
+ * that at most one channel is open at a time. A second construction is the price, and it is a small
+ * one against a run that has already waited out a settling period.
+ */
+async function confirmSetHeld(
+  target: string,
+  project: string,
+  candidate: readonly AnalysedIndex[],
+  say: (text: string) => void,
+  deps: { lister(project: string): Promise<IndexLister> },
+): Promise<Reconciliation> {
+  const lister = await deps.lister(project);
+  try {
+    return reconcile(candidate, await listLiveIndexes(target, lister));
+  } finally {
+    await release('index lister', lister, say);
+  }
 }
 
 /** A verdict the gate reached that waiting cannot change, carried out of the poll as a message. */
@@ -343,8 +402,9 @@ function reportDivergence(
   reconciliation: Reconciliation,
   indexesPath: string,
   say: (text: string) => void,
+  lead = `cannot report: the target does not hold the candidate index set at ${render(indexesPath)}`,
 ): void {
-  say(`cannot report: the target does not hold the candidate index set at ${render(indexesPath)}`);
+  say(lead);
   for (const index of reconciliation.missing) say(`  declared but not on the target: ${render(index.key)}`);
   for (const index of reconciliation.extra) say(`  on the target but not declared: ${render(index.key)}`);
   for (const index of reconciliation.unreadable) {
