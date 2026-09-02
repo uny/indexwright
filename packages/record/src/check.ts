@@ -455,9 +455,24 @@ function reportUnanswered(
  * have held perfectly well and simply been described in terms this run could not compare. Claiming a
  * change on that evidence is the failure this whole confirmation exists to prevent, pointed the
  * other way — an assertion about a window nobody observed.
+ *
+ * So the softer lead is chosen only where unreadability accounts for the whole disagreement, rather
+ * than wherever an unreadable entry appears at all. An entry that could not be read explains at most
+ * the one declaration it failed to match, and it cannot explain an `extra` at all — a live entry
+ * reported as undeclared was read well enough to be keyed. More `missing` than there are unreadable
+ * entries to absorb, or any `extra`, is evidence of a change that survives the doubt, and saying
+ * only "could not be compared" over the top of it would understate what the lines beneath it show.
+ *
+ * `incomparable` is deliberately not consulted: it is derived from the candidate declarations, which
+ * are the same array both times, so the first reconciliation would have declined on it long before
+ * this is reached.
  */
 function withdrawal(held: Reconciliation): string {
-  return held.unreadable.length > 0 || held.incomparable.length > 0
+  const explained =
+    held.unreadable.length > 0 &&
+    held.extra.length === 0 &&
+    held.missing.length <= held.unreadable.length;
+  return explained
     ? 'cannot report: the index set could not be compared again after the queries were answered'
     : 'cannot report: the index set changed while the queries were being answered';
 }

@@ -594,6 +594,32 @@ test('a set that could not be compared again is not reported as a set that chang
   const gone = harness({ listings: [READY, READY, []] });
   assert.equal(await gone.run(), 2);
   assert.match(gone.said(), /the index set changed while the queries were being answered/);
+
+  // And an unreadable entry does not launder a change that is visible beside it. An `extra` was read
+  // well enough to be keyed, so nothing about it is in doubt, and leading with "could not be
+  // compared" over the top of it would understate the line printed underneath.
+  const alsoAdded = harness({
+    listings: [
+      READY,
+      READY,
+      [
+        { ...READY[0], fields: null },
+        {
+          ...READY[0],
+          name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/indexes/added',
+          fields: [
+            { fieldPath: 'status', order: 'ASCENDING' },
+            { fieldPath: 'placed', order: 'ASCENDING' },
+            { fieldPath: '__name__', order: 'ASCENDING' },
+          ],
+        },
+      ],
+    ],
+  });
+  assert.equal(await alsoAdded.run(), 2);
+  assert.match(alsoAdded.said(), /the index set changed while the queries were being answered/);
+  assert.match(alsoAdded.said(), /on the target but not declared:/);
+  assert.match(alsoAdded.said(), /could not be read \(fields-missing\)/);
 });
 
 test('the confirmation lister is released when the second listing is refused, not only when it is built', async () => {
