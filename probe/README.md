@@ -61,11 +61,11 @@ Four shapes were left out of the `--expect-` flags at the step that asked about 
 before the deploy, S8 after it — because each asks something the run existed to *observe*, and a
 wrong guess in a flag stops a correct run. Their readings, recorded rather than scored:
 
-- **S8 — a declared `(a ASC, b ASC)` did not serve an order by `b desc`.** The shape came back
-  `FAILED_PRECONDITION` with that index deployed and `READY`. The reading is what one would expect if
-  direction is part of the index rather than something the planner inverts, and it is the reason to
-  expect that a suite ordering one way and an index ordering the other do not meet — but it is one
-  shape against one set, which is not enough to state the planner rule itself.
+- **S8 — a declared `(a ASC, b ASC)` did not serve `a == …` ordered by `b desc`.** The shape came
+  back `FAILED_PRECONDITION` with that index deployed and `READY`. The reading is what one would
+  expect if direction is part of the index rather than something the planner inverts, and it is the
+  reason to expect that a suite ordering one way and an index ordering the other do not meet — but it
+  is one shape against one set, which is not enough to state the planner rule itself.
 - **S3 — `array-contains` with an equality is served with no composite index.** It read `served` on a
   bare target, where S1, S4, S6 and S8 all read `uncovered` and the listing in step 1 showed nothing
   deployed, so this is a merge and not a dirty target. The candidate set declares a

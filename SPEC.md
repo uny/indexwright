@@ -655,14 +655,14 @@ three counts are not the range, and 2 and 4 through 9 were never issued.
 
 What this does not establish is the claim's scope. It is one database, eight shapes and one index
 set — evidence that the assumption is sound enough to report on, not a proof that no operand
-anywhere selects differently. Nor does it reach operand *combinations*: a shape's scalar slots are
-filled from one provider, so a two-filter shape was only ever issued with both operands of the same
-type. Selection that turned on the pairing — `a == <string>` with `b > <number>` — would have been
-reported constant. Replay flattens that pairing too, filling every slot from the one sentinel, so a
-captured query whose operands differ in type is the case neither the instrument nor replay separates,
-and it is the shape of a false positive this run cannot rule out. A `check` that misreports a shape
-this section calls value-independent is the observation that would overturn it, and it should be read
-that way rather than as a bug in replay.
+anywhere selects differently. Nor does it reach *combinations* of scalar operands: a shape's scalar
+slots are all filled from one provider, so a shape filtering on two of them was only ever issued with
+both the same type. Selection that turned on the pairing — `a == <string>` with `b > <number>` —
+would have been reported constant. Replay flattens the same pairing, filling every scalar slot from
+the one sentinel, so a captured query whose scalar operands differ in type is the case neither the
+instrument nor replay separates, and it is the shape of a false positive this run cannot rule out.
+A `check` that misreports a shape this section calls value-independent is the observation that would
+overturn it, and it should be read that way rather than as a bug in replay.
 
 ### What is not captured
 
