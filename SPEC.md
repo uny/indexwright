@@ -633,7 +633,36 @@ This rests on the claim above — that index selection does not depend on the co
 type. The claim is consistent with how the field is indexed rather than the value, but it is not
 published, and it is the one assumption in v0.3 that a synthesised replay could get wrong. If it is
 false, replay reports `FAILED_PRECONDITION` where a real query would have succeeded, which is a
-false positive of exactly the kind §2 forbids acting on. v0.3 must test the claim before it reports.
+false positive of exactly the kind §2 forbids acting on. v0.3 had to test the claim before it
+reported, and has.
+
+`check` cannot be the instrument: it sends only the one value this section synthesises, so it agrees
+with itself whether the claim is true or not. `probe/differential.mjs` issues each shape at a real
+database repeatedly, varying nothing but the operand, and compares the verdicts within a shape. A
+falsification is two variants that both reached the backend disagreeing on served versus
+`FAILED_PRECONDITION`; a variant refused as `INVALID_ARGUMENT` never reached the question and is
+excluded from the comparison rather than counted against it. Eight shapes, each carrying the
+synthesised sentinel alongside operands of seven other types, were run twice against the same
+database — once before the candidate set was deployed, while it held no composite index, and once
+after. Every shape was constant across every operand both times, and no operand dropped out of a
+comparison. The claim holds.
+
+The sharpest way it could have been false is **operand arity**, because arity is the one thing the
+corpus discards: an `IN` against ten values is recorded, and replayed, identically to an `IN` against
+one. Had index selection turned on the count, `check` would report a verdict for a query the suite
+never issued. One, three and ten values were served alike, so nothing here points that way — though
+three counts are not the range, and 2 and 4 through 9 were never issued.
+
+What this does not establish is the claim's scope. It is one database, eight shapes and one index
+set — evidence that the assumption is sound enough to report on, not a proof that no operand
+anywhere selects differently. Nor does it reach *combinations* of scalar operands: a shape's scalar
+slots are all filled from one provider, so a shape filtering on two of them was only ever issued with
+both the same type. Selection that turned on the pairing — `a == <string>` with `b > <number>` —
+would have been reported constant. Replay flattens the same pairing, filling every scalar slot from
+the one sentinel, so a captured query whose scalar operands differ in type is the case neither the
+instrument nor replay separates, and it is the shape of a false positive this run cannot rule out.
+A `check` that misreports a shape this section calls value-independent is the observation that would
+overturn it, and it should be read that way rather than as a bug in replay.
 
 ### What is not captured
 

@@ -59,11 +59,30 @@ export type Readiness =
 /**
  * How long the set must report `READY` before a report is allowed out.
  *
- * **This number is provisional and was not measured.** The transient window is documented by
- * observation — a query failing right after a sibling succeeded — but that observation did not
- * record how long the window lasts, so this is a conservative guess rather than a derived bound.
- * It errs long deliberately: waiting too long costs a slower run, and not waiting long enough costs
- * a false report that §2 forbids and that appears too rarely to be disbelieved.
+ * **The number is unchanged by measurement, and what the measurement showed is why.** A run against
+ * a real database watched a two-index deploy through a 900-second window, polling every five
+ * seconds: both indexes were first seen `CREATING` at +36s, both were first seen `READY` in the same
+ * poll at +337s, and nothing transitioned afterwards — so "together" is to the poll's resolution,
+ * not simultaneity.
+ *
+ * The one interval a state watcher can measure — first `READY` to last transition — was *zero*. That
+ * is not the interval this constant covers: the window guarded here opens once every index already
+ * reports `READY`, so a watcher seeing nothing transition afterwards is what a healthy deploy looks
+ * like and says nothing about it.
+ *
+ * That is one observation of one deploy, so it is not grounds for shortening the wait. The window
+ * this guards is a transient one: a query failing right after a sibling succeeded, seen rarely and
+ * never yet timed. A run that does not reproduce a rare event says nothing about its duration, and
+ * the asymmetry that set this number has not moved — waiting too long costs a slower run, and not
+ * waiting long enough costs a false report that §2 forbids and that appears too rarely to be
+ * disbelieved. So 60s stays a conservative guess, now a *documented* one.
+ *
+ * What the same run did make precise is the cost. The gate starts fresh on every invocation, since
+ * `observe` will not answer `ready` until it has seen the set twice `settleMs` apart — so a `check`
+ * against a set that has been `READY` for hours still pays the full period. Three measured runs took
+ * 62, 63 and 62 seconds of wall clock against a two-index database, which is essentially all settle.
+ * Anyone shortening this should know they are trading that cost against a window nobody has timed,
+ * not against the zero this run happened to observe.
  */
 export const DEFAULT_SETTLE_MS = 60_000;
 
