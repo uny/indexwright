@@ -1,6 +1,6 @@
 # Emulator and run output. The corpora are committed — they are what `check` replays, and a diff of
-# one is how a change to capture becomes visible. The README's Files table is where that distinction
-# is stated; this file only lists what it calls byproducts, so the two cannot say different things.
+# one is how a change to capture becomes visible; the README's Files table is where that is written
+# down. Nothing below is one of them: everything here is a byproduct of a single run.
 #
 # The names are the ones the tools actually write, checked by running them from this directory
 # rather than guessed: `firebase emulators:start` writes `firebase-debug.log` and
