@@ -71,14 +71,19 @@ again, by its own `corpusVersion`.
 - `--corpus` and `--indexes` on `check`, defaulting to `firestore.queries.json` (what `record` writes)
   and `firestore.indexes.json`.
 
-- **The verb body** — readiness, then reconciliation, then replay, each one a gate rather than a
-  step. `check` reads the corpus and the candidate declarations first, before it constructs anything,
-  because everything up to the first client is offline and everything after it costs a settling
-  period at the least; a mistyped path is then found on the near side of that minute. It then polls
-  the Admin API until `ReadinessGate` says the set has been quiet long enough, reconciles the listing
-  it settled on against the candidate file, and only then replays. A run that cannot settle one of
-  those questions declines and says which — it does not fall back to replaying against a set it
-  cannot vouch for, which is the quietly-wrong behaviour §3 exists to rule out.
+- **The verb body** — readiness, then reconciliation, then replay, then reconciliation once more,
+  each one a gate rather than a step. `check` reads the corpus and the candidate declarations first,
+  before it constructs anything, because everything up to the first client is offline and everything
+  after it costs a settling period at the least; a mistyped path is then found on the near side of
+  that minute. It then polls the Admin API until `ReadinessGate` says the set has been quiet long
+  enough, reconciles the listing it settled on against the candidate file, and only then replays. A
+  run that cannot settle one of those questions declines and says which — it does not fall back to
+  replaying against a set it cannot vouch for, which is the quietly-wrong behaviour §3 exists to
+  rule out. After the last query is answered it lists once more and reconciles again, because
+  everything the replay established is a statement about a window that opened at the first reading
+  and nothing until now looked at the far end of it. That second look can only *withdraw*: it
+  examines the set and not coverage, so a set that moved — or that could not be compared again —
+  turns either verdict into a decline and neither verdict into the other.
 
   **Exit `1` is the finding and exit `2` is the absence of one.** Unlike `lint`, which defaults to
   exit `0` even with findings because its rules have unmeasured false-positive rates, the oracle here
