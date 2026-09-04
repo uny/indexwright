@@ -1,5 +1,6 @@
-# Emulator and run output. The corpus is committed — it is the input `check` replays, and a diff of
-# it is how a change to capture becomes visible. Everything below is a byproduct of one run.
+# Emulator and run output. The corpora are committed — they are what `check` replays, and a diff of
+# one is how a change to capture becomes visible; the README's Files table is where that is written
+# down. Nothing below is one of them: everything here is a byproduct of a single run.
 #
 # The names are the ones the tools actually write, checked by running them from this directory
 # rather than guessed: `firebase emulators:start` writes `firebase-debug.log` and
@@ -12,7 +13,3 @@ ui-debug.log
 # being ignored by this very change, and `differential-*.json` does not match it.
 differential.json
 differential-*.json
-# Step 6's corpus. Derived, not input: which shapes go into it is a *result* of step 5, so it
-# describes one target's covered set on one day rather than something a diff should track. The
-# committed corpus is `firestore.queries.json`, and this one is rebuilt by re-running step 6.
-firestore.covered.json
