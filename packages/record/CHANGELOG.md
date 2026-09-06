@@ -5,7 +5,14 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## Unreleased
+## [0.5.0] — 2026-09-06
+
+The `check` verb, and with it the half of the v0.3 coverage check that needs a Firestore client.
+0.3.0 shipped the parts that were decidable offline and said to expect them to move once the verb
+landed; in the event they did not — `planReplay` and the readiness gate acquired their first caller
+without a single export changing shape, and both modules grew around them rather than under them.
+`indexwright-record` still captures exactly what it captured in 0.2.0: nothing here touches the
+corpus or the capture proxy.
 
 ### Added
 
@@ -216,6 +223,31 @@ again, by its own `corpusVersion`.
   emulator, which is what the harness in `probe/` was added to do.
 
   The verb is unreleased, so no published version ever carried the reserved spelling.
+
+### Notes
+
+- **What the measured run establishes, and what it does not.** The verb was exercised against a
+  live throwaway database before this release rather than only against the emulator, and
+  [`probe/README.md`](https://github.com/uny/indexwright/blob/main/probe/README.md) records the
+  readings. Two limits on how far they carry. The differential harness fills a shape's *scalar*
+  slots from one provider, so a two-filter shape is only ever issued with operands of the same
+  type; if Firestore's index selection turned on the *combination* of types — `a == <string>`
+  together with `b > <number>` — the harness would report the shape constant and see nothing.
+  Replay collapses the same combinations, so neither side of the check can separate that case.
+  Separately, the run issued filter arities of 1, 3 and 10 only: 2 and 4 through 9 are unobserved.
+  Neither limit is known to matter; both are unmeasured, and SPEC §7 says so in the same terms.
+- **Two false-clean paths remain open, deliberately.**
+  [#50](https://github.com/uny/indexwright/issues/50) is the same class as the second reconciliation
+  described above, and survives it: `reconcile` keys on fields and not on `state`, so an index
+  deleted and recreated under another name during the replay, or dropped to `CREATING` or
+  `NEEDS_REPAIR`, still reconciles as `identical`. Reaching it takes an index changing identity or
+  state *while* `check` runs, which is operator-caused rather than the normal path — and closing it
+  costs a second settling period on every run, which is not a trade this release makes.
+  [#43](https://github.com/uny/indexwright/issues/43) is a cost, not a wrong verdict: a corpus entry
+  recorded from an inequality replays as a read of the matching documents and `check` buffers all of
+  them to learn a status. Measured at 429 documents for one entry against the 500-document probe
+  corpus. Against a populated collection that is the collection, per such entry. Point `check` at a
+  throwaway target, which SPEC §3 requires of it for other reasons anyway.
 
 ## [0.4.0] — 2026-08-15
 
@@ -428,6 +460,7 @@ First release. Query capture, specified in [SPEC.md](https://github.com/uny/inde
   stderr. Snapshot listeners carry their query over `Listen` and are counted, not recorded.
   Capturing `Listen` is the first extension worth making.
 
+[0.5.0]: https://github.com/uny/indexwright/releases/tag/record-v0.5.0
 [0.4.0]: https://github.com/uny/indexwright/releases/tag/record-v0.4.0
 [0.3.0]: https://github.com/uny/indexwright/releases/tag/record-v0.3.0
 [0.2.0]: https://github.com/uny/indexwright/releases/tag/record-v0.2.0
