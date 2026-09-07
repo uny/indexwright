@@ -28,6 +28,16 @@ export interface CheckCommand {
   readonly corpus: string;
   /** The candidate index declarations the target is supposed to be carrying. */
   readonly indexes: string;
+  /**
+   * Gaps this project has already accepted, or `undefined` when none were named.
+   *
+   * The one input to `check` with no default path, and the asymmetry is deliberate. A corpus and an
+   * index file are what the verb is *for*, so defaulting them names the file `record` just wrote; a
+   * baseline changes which findings fail the run, and a default path that happened to exist would
+   * change a verdict because of a file nobody pointed at. That is the ambient-input failure #8 is
+   * about, arriving through the filesystem instead of the environment.
+   */
+  readonly baseline?: string;
 }
 
 export type Command = RecordCommand | CheckCommand | { kind: 'help' } | { kind: 'version' };
@@ -248,6 +258,7 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
   let database: string | undefined;
   let corpus = DEFAULT_CORPUS;
   let indexes = DEFAULT_INDEXES;
+  let baseline: string | undefined;
 
   for (let i = 0; i < options.length; i += 1) {
     const argument = options[i] as string;
@@ -286,6 +297,9 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
       case '--indexes':
         indexes = requirePath(takeValue(), name);
         break;
+      case '--baseline':
+        baseline = requirePath(takeValue(), name);
+        break;
       default:
         throw new UsageError(`unknown option "${name}"`);
     }
@@ -319,7 +333,10 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
     );
   }
 
-  return { kind: 'check', project, database, corpus, indexes };
+  // Spread rather than set to `undefined`, so a command built without a baseline has no member for
+  // one. The two are the same to every reader here; they are not the same to a test that compares
+  // the parsed command against a literal.
+  return { kind: 'check', project, database, corpus, indexes, ...(baseline === undefined ? {} : { baseline }) };
 }
 
 /**
@@ -495,11 +512,18 @@ export function usage(): string {
     'on the target is the candidate set. A run therefore takes a minute at the least, and declines',
     'to report rather than answering for a set it cannot vouch for.',
     '',
+    'A project adopting check on an existing codebase finds all of its existing gaps in one run.',
+    '--baseline is how that run can still be green: the file names accepted keys, each with a',
+    'reason, and a gap in it is reported in the same words as any other and does not fail the run.',
+    'Entries that no longer reproduce are reported too, so the file shrinks as gaps are closed.',
+    '',
     'Options:',
     '  --project <id>          project holding the database to replay against (required)',
     '  --database <name>       database within it (required; the default one is named "(default)")',
     `  --corpus <file>         the corpus to replay (default: ${DEFAULT_CORPUS})`,
     `  --indexes <file>        the candidate index declarations (default: ${DEFAULT_INDEXES})`,
+    '  --baseline <file>       gaps already accepted by this project (no default). An entry in it',
+    '                          is reported and does not fail the run; anything else exits 1',
     '',
     'The target is never inferred. GOOGLE_CLOUD_PROJECT, gcloud config, and the project inside',
     'application default credentials are not consulted for it: a database carrying more indexes',
@@ -514,8 +538,9 @@ export function usage(): string {
     'Exit codes:',
     '  record  the exit code of <command>, so a failing suite still fails',
     '          2  usage error, or the corpus could not be written',
-    '  check   0  every entry in the corpus was served by the candidate set',
-    '          1  at least one was not; that is the finding, and the oracle is Firestore itself',
+    '  check   0  every entry in the corpus was served by the candidate set, or is in the baseline',
+    '          1  at least one was not, and is not in the baseline; that is the finding, and the',
+    '             oracle is Firestore itself',
     '          2  usage error, or the run could not answer: a file it could not read, a readiness',
     '             it could not establish, a set that is not the candidate set, an entry it could',
     '             not replay, or a status it cannot interpret',
