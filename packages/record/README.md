@@ -125,7 +125,10 @@ wrote a sentence — and every run that matches an entry prints it back, where i
 than accumulated. Keys are matched exactly: they are canonical and unique within a corpus, so a new
 gap cannot inherit an old one's acceptance by resembling it. Nothing generates this file; a
 generated one would be a list of keys with no reasons, which is the artefact the rule exists to
-prevent. Copy the keys the report prints.
+prevent. Copy the keys the report prints — with one caveat: a key holding a character outside the
+BMP is printed as `\u{1f600}`, which is how the report keeps two different keys from rendering as
+the same text, and is not an escape JSON has. Write that one character as itself, or as the
+surrogate pair `\ud83d\ude00`; every other escape the report prints is already valid JSON.
 
 **A baselined gap is still a gap.** It is reported in the same words as any other, the summary line
 counts it in both totals, and it is not evidence about an index being unnecessary in either
