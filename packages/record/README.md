@@ -135,8 +135,9 @@ counts it in both totals, and it is not evidence about an index being unnecessar
 direction — the baseline changes the exit code and nothing else. Entries that no longer reproduce
 are reported too, either because the corpus no longer holds the query or because the target now
 serves it, so the file shrinks as gaps are closed. An entry the run never got a verdict for — one it
-could not replay, or one after the entry that stopped the run — is not reported as stale: shrinking
-the file on that evidence would drop a gap nobody measured.
+could not replay, one after the entry that stopped the run, or any of them at all when the corpus
+turned out to hold nothing replayable — is not reported as stale: shrinking the file on that evidence
+would drop a gap nobody measured.
 
 **A corpus with nothing replayable in it is refused, not reported as a pass.** An empty corpus
 replays cleanly by construction, so exiting `0` on one would say the candidate set covers everything
