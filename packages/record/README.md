@@ -71,7 +71,7 @@ Options:
 | Exit | Meaning |
 |-----:|:--------|
 | 0 | Every entry in the corpus was served by the candidate set, or is in the baseline. |
-| 1 | At least one was not. That is the finding. |
+| 1 | At least one was not, and is not in the baseline. That is the finding. |
 | 2 | Usage error, or the run could not answer. |
 
 Exit `1` is a finding and exit `2` is the absence of one. Unlike `indexwright lint`, which exits `0`
