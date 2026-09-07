@@ -101,8 +101,9 @@ What the run did settle is the price. The readiness gate restarts on every invoc
 | `shapes.mjs` | The eight query shapes, defined once and shared by both instruments so they cannot drift apart |
 | `suite.mjs` | The driver `record` captures from. `PROBE_SHAPES=S1,S2` issues a subset |
 | `differential.mjs` | The §7 instrument: issues the shapes, writes a JSON report to stdout |
-| `expectations.mjs` | Its command line — argv in, the expectation map out. Pure, so what an operator types is testable |
-| `summarise.mjs` | Its stop rule — rows in, findings and an exit code out. Pure, so it can be tested without a database |
+| `limit.mjs` | The #43 instrument: issues each shape bare and with `limit(1)`, and reports what each read |
+| `expectations.mjs` | Their command line — argv in, the expectation map out. Pure, so what an operator types is testable |
+| `summarise.mjs` | Their stop rule — rows in, findings and an exit code out. Pure, so it can be tested without a database |
 | `expectations.test.mjs`, `summarise.test.mjs` | Tests for the two halves of the stop rule. Run in `npm test` alongside the packages' suites |
 | `seed.mjs` | Populates the collection, so #43's cost is observed rather than deduced |
 | `watch-readiness.mjs` | Timestamped index states through the same Admin path `check` uses |
@@ -323,6 +324,39 @@ that a healthy collection cannot report 0 here.
 The other S4 rows are expected to report 0: they vary the operand, and the operand is the value the
 equality is matched against, so `a == 42` matches nothing in a collection seeded to the sentinel.
 That is a statement about the variant, not about the seed.
+
+### 5b. The limit probe, on the same deployed set
+
+Issue #43 asks whether `check` can read a status without reading the whole result. Its own proposal
+— `stream()`, destroyed after the first document — turned out not to be available: destroying the
+stream `stream()` returns only unpipes it, the RPC behind it is never cancelled, and the GAPIC
+client lifetime that `terminate()` waits on never settles, so `check`'s `close()` blocks before it
+has reported anything. What is left is `limit(1)`, and `replay.ts` declines to send one on an
+argument that is explicitly unmeasured: *if* a limit narrowed index selection, a query would be
+served that should have failed, which is the false clean verdict §2 forbids most strictly.
+
+This step measures that "if". It costs no index build — it runs against the set step 4 deployed —
+and it is the only thing standing between #43 and a fix.
+
+```bash
+node probe/limit.mjs indexwright-probe '(default)' \
+  --expect-served S1,S2,S3,S4,S5,S7 --expect-uncovered S6 \
+  > probe/limit-after.json
+```
+
+The expectations are step 5's, for the same reasons, S8 included in neither. The stop rule is the
+same rule from the same module: **for one shape, the bare query and the same query with `limit(1)`
+both reached the backend and disagreed.** One disagreement is enough, and it means `limit(1)` is not
+available as a fix at any price — a shape that answers served only with the limit is `check`
+reporting coverage for a query the suite never issued.
+
+Then read the `documents read` lines at the end, which are the other half of the question. A limit
+that is selection-neutral is only worth adopting if it also bounds the read: **S4 should report 429
+documents bare and 1 with `limit(1)`**, the same 429 step 5 observes. A `limit-1` row reporting more
+than 1 would mean the limit is not doing what it is being adopted for, whatever the verdicts say.
+
+The two readings are independent, and both are needed. The verdicts say whether the fix is
+*allowed*; the counts say whether it is worth making.
 
 ### 6. Capture the corpus of shapes the target actually covers
 
