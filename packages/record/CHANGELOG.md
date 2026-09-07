@@ -40,10 +40,10 @@ again, by its own `corpusVersion`.
   accumulating into a list nobody can justify — either because the corpus no longer holds the query,
   which is answered before any client is built, or because the target now serves it, which is part of
   the report and is withdrawn with it. An entry the run got no verdict for is deliberately not
-  reported as stale: an unreplayable entry, or one after the entry that stopped the run, was never
-  measured, and shrinking the file on that evidence would drop a gap that comes back as a finding the
-  next time it is reached. Whether a stale entry should itself fail the run is left open; #57 names it
-  a separate decision.
+  reported as stale: an unreplayable entry, one after the entry that stopped the run, or any entry at
+  all when the corpus itself replayed nothing, was never measured, and shrinking the file on that
+  evidence would drop a gap that comes back as a finding the next time it is reached. Whether a stale
+  entry should itself fail the run is left open; #57 names it a separate decision.
 
 ## [0.5.0] — 2026-09-06
 

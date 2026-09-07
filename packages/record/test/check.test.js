@@ -857,3 +857,83 @@ test('the baseline does not survive a withdrawal, because the verdict it changed
   assert.match(h.said(), /the index set changed while the queries were being answered/);
   assert.doesNotMatch(h.said(), /in the baseline, but served/);
 });
+
+test('a corpus that measured nothing does not ask for the baseline to be shrunk', async () => {
+  // The refusal above it is the whole reason: a suite driven through the Firebase Web SDK issues no
+  // gRPC, so `record` writes a corpus with no queries. A run that then named every accepted gap as
+  // one the corpus no longer holds would be asking an operator to delete gaps on the strength of a
+  // run that replayed nothing — §2's false clean arriving through the corpus rather than the target,
+  // and every deleted entry comes back as a finding the next time a corpus is really recorded.
+  const h = harness({
+    corpus: JSON.stringify({ corpusVersion: 1, queries: [], skipped: ['listen-query'] }),
+    baseline: baselineOf(keyOf('status')),
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /the corpus at .* holds no queries/);
+  assert.doesNotMatch(h.said(), /the corpus no longer holds it/);
+});
+
+test('a baselined entry the corpus holds but cannot plan is not called stale either', async () => {
+  // `keys` is filled before the plan is attempted, and this is the case that says why: the corpus
+  // holds the query, so it has not stopped reproducing — the run simply has no replayable form for
+  // it. Reporting it as stale would shrink the file by an entry that was never measured.
+  const unplannable = toQueryShape({
+    collectionGroup: 'orders',
+    queryScope: 'COLLECTION',
+    where: { op: 'AND', filters: [equals('a..b')] },
+    orderBy: [],
+  });
+  // Paired with a replayable entry on purpose: a corpus that plans nothing at all is refused
+  // before any of this is reached, so the entry has to sit in a run that really does replay.
+  const plannable = toQueryShape({
+    collectionGroup: 'orders',
+    queryScope: 'COLLECTION',
+    where: { op: 'AND', filters: [equals('status')] },
+    orderBy: [],
+  });
+  const h = harness({
+    corpus: serialiseCorpus(buildCorpus([unplannable, plannable], [])),
+    baseline: baselineOf(unplannable.key),
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /cannot replay: .*has an empty segment/);
+  assert.doesNotMatch(h.said(), /in the baseline, but/);
+});
+
+test('a stale corpus entry is named even by a run whose verdict is withdrawn', async () => {
+  // It is answered by the corpus alone, so unlike `in the baseline, but served` it is not part of
+  // the report and does not go with it. `[READY, READY, []]` settles on READY and then confirms
+  // against a target that no longer holds the index, which withdraws the verdict.
+  const h = harness({
+    baseline: baselineOf('orders::COLLECTION::AND(gone:EQUAL)::'),
+    listings: [READY, READY, []],
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /the index set changed while the queries were being answered/);
+  assert.match(h.said(), /in the baseline, but the corpus no longer holds it: "orders::COLLECTION::AND\(gone:EQUAL\)::"/);
+});
+
+test('a gap that is still a gap is never also reported as one that stopped reproducing', async () => {
+  // `served` is populated by the `served` branch alone. Adding a key to it from any other branch
+  // would print both "in the baseline, so this does not fail the run" and "in the baseline, but
+  // served" for one key — a report that tells the operator to delete an entry for a live gap.
+  const h = harness({
+    baseline: baselineOf(keyOf('status')),
+    statuses: [{ kind: 'uncovered', message: '"needs an index"' }],
+  });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /in the baseline, so this does not fail the run/);
+  assert.doesNotMatch(h.said(), /in the baseline, but served/);
+});
+
+test('the summary tells a baseline that absorbed nothing from no baseline at all', async () => {
+  // Two different things for an operator to read, and the only place the difference is visible. The
+  // suffix is anchored to the end of the line, so a summary that always carried it would fail here.
+  const named = harness({ baseline: JSON.stringify({ baselineVersion: 1, accepted: [] }) });
+  assert.equal(await named.run(), 0);
+  assert.match(named.said(), /1 query replayed, 0 not served by the candidate set, 0 of them in the baseline\n/);
+
+  const none = harness({});
+  assert.equal(await none.run(), 0);
+  assert.match(none.said(), /1 query replayed, 0 not served by the candidate set\n/);
+});

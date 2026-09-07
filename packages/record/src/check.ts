@@ -139,16 +139,6 @@ export async function check(
       say(`could not read the baseline at ${render(command.baseline)}: ${detail(error)}`);
       return 2;
     }
-    // Said before anything is dialled, because nothing that follows bears on it. A key the corpus
-    // does not hold is accounted for by the corpus alone — no listing, no replay, and no verdict
-    // this run might later withdraw can change the answer. It is one of the two ways an entry stops
-    // reproducing (the other is being served, which only the target can say), and reporting it is
-    // what keeps the file shrinking as gaps close rather than accumulating.
-    for (const [key, reason] of accepted) {
-      if (!corpusKeys.has(key)) {
-        say(`in the baseline, but the corpus no longer holds it: ${render(key)} (${render(reason)})`);
-      }
-    }
   }
 
   if (entries.length === 0) {
@@ -167,6 +157,24 @@ export async function check(
         : `there is nothing to replay: no entry in the corpus at ${render(command.corpus)} has a replayable form`,
     );
     return 2;
+  }
+
+  // Said before anything is dialled, because nothing that follows bears on it. A key the corpus
+  // does not hold is accounted for by the corpus alone — no listing, no replay, and no verdict this
+  // run might later withdraw can change the answer. It is one of the two ways an entry stops
+  // reproducing (the other is being served, which only the target can say), and reporting it is what
+  // keeps the file shrinking as gaps close rather than accumulating.
+  //
+  // Said after the refusal above rather than beside the read, because a corpus with nothing
+  // replayable in it has not accounted for anything. A suite driven through the Firebase Web SDK
+  // records no queries at all (SPEC §7), and a run that then named every accepted gap as one the
+  // corpus no longer holds would be asking an operator to shrink the file on the strength of a run
+  // that measured nothing — the same false clean the `served` half is careful not to claim, arriving
+  // through the corpus instead of the target.
+  for (const [key, reason] of accepted ?? []) {
+    if (!corpusKeys.has(key)) {
+      say(`in the baseline, but the corpus no longer holds it: ${render(key)} (${render(reason)})`);
+    }
   }
 
   let live: readonly LiveCompositeIndex[];
