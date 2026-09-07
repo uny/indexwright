@@ -5,7 +5,7 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## [Unreleased]
+## Unreleased
 
 ### Added
 

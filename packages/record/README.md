@@ -70,7 +70,7 @@ Options:
 
 | Exit | Meaning |
 |-----:|:--------|
-| 0 | Every entry in the corpus was served by the candidate set. |
+| 0 | Every entry in the corpus was served by the candidate set, or is in the baseline. |
 | 1 | At least one was not. That is the finding. |
 | 2 | Usage error, or the run could not answer. |
 
@@ -112,7 +112,7 @@ a finding and exits `1`.
   "baselineVersion": 1,
   "accepted": [
     {
-      "key": "orders::COLLECTION::AND(status:EQUAL,total:LESS_THAN)::",
+      "key": "orders::COLLECTION::AND(status:EQUAL|total:LESS_THAN)::",
       "reason": "admin export, unindexed since 2024; tracked in #101"
     }
   ]

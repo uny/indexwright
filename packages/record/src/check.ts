@@ -3,9 +3,9 @@
  *
  * Every question this verb answers is answered somewhere else. `readiness.ts` decides whether the
  * index set may be reported on, `reconcile.ts` decides whether it is the *candidate* set,
- * `synthesise.ts` decides what a corpus entry replays as, and `replay.ts` asks Firestore — the
- * oracle — whether the set covers it. What is left here is the order they are asked in, the two
- * client lifetimes, and the report.
+ * `synthesise.ts` decides what a corpus entry replays as, `replay.ts` asks Firestore — the oracle —
+ * whether the set covers it, and `baseline.ts` says which gaps this project has already accepted.
+ * What is left here is the order they are asked in, the two client lifetimes, and the report.
  *
  * The order is a gate rather than a sequence, and the gating is the point. A report that goes out
  * before readiness is established, or before the observed set is known to be the candidate set, is
@@ -77,9 +77,10 @@ interface Entry {
 /**
  * Run the verb, and return the process exit code.
  *
- * - `0` — every entry in the corpus was served by the candidate set.
- * - `1` — at least one was not. That is the finding, and the oracle is Firestore rather than a rule
- *   this package applies, so unlike `lint` it is worth failing a pipeline on by default.
+ * - `0` — every entry in the corpus was served by the candidate set, or is named by the baseline.
+ * - `1` — at least one was not, and is not named by the baseline. That is the finding, and the
+ *   oracle is Firestore rather than a rule this package applies, so unlike `lint` it is worth
+ *   failing a pipeline on by default.
  * - `2` — the run could not answer: a file it could not read, a readiness it could not establish, a
  *   set that is not the candidate set, an entry it could not replay, a status it cannot interpret.
  *   It takes precedence over `1`, because a report that is missing entries is not a clean report
@@ -127,7 +128,10 @@ export async function check(
 
   // Read here rather than where it is used, on the same principle as the two files above: an
   // unreadable baseline is worth finding on the near side of the settling period.
-  let accepted = new Map<string, string>();
+  // Left `undefined` when no baseline was named, rather than collapsed to an empty map: the summary
+  // line says how many findings the baseline absorbed, and "none, because there is no baseline" and
+  // "none, out of a baseline that named some" are different things for an operator to read.
+  let accepted: Map<string, string> | undefined;
   if (command.baseline !== undefined) {
     try {
       accepted = new Map(parseBaseline(readFile(command.baseline)).accepted.map((e) => [e.key, e.reason]));
@@ -527,7 +531,7 @@ function withdrawal(held: Reconciliation): string {
 function reportReplay(
   attempted: number,
   uncovered: readonly { key: string; message: string }[],
-  accepted: ReadonlyMap<string, string>,
+  accepted: ReadonlyMap<string, string> | undefined,
   served: ReadonlySet<string>,
   invalid: readonly string[],
   unreplayable: readonly string[],
@@ -536,7 +540,7 @@ function reportReplay(
 ): number {
   let baselined = 0;
   for (const entry of uncovered) {
-    const reason = accepted.get(entry.key);
+    const reason = accepted?.get(entry.key);
     say(`not served: ${render(entry.key)}`);
     say(`  ${entry.message}`);
     if (reason !== undefined) {
@@ -552,7 +556,7 @@ function reportReplay(
   //
   // Whether an entry that no longer reproduces should itself fail the run is left open on purpose;
   // issue #57 names it a separate decision, and reporting it is not that decision.
-  for (const [key, reason] of accepted) {
+  for (const [key, reason] of accepted ?? []) {
     if (served.has(key)) say(`in the baseline, but served: ${render(key)} (${render(reason)})`);
   }
 
@@ -560,7 +564,7 @@ function reportReplay(
   say(
     `${count(attempted, 'query', 'queries')} replayed, ` +
       `${uncovered.length} not served by the candidate set` +
-      (accepted.size === 0 ? '' : `, ${baselined} of them in the baseline`),
+      (accepted === undefined ? '' : `, ${baselined} of them in the baseline`),
   );
   if (halted !== undefined || invalid.length > 0 || unreplayable.length > 0) {
     // Said out loud rather than left to the exit code. A report that is missing entries is the one
