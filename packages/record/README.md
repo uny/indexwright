@@ -65,6 +65,7 @@ Options:
   --database <name>       database within it (required; the default one is named "(default)")
   --corpus <file>         the corpus to replay (default: firestore.queries.json)
   --indexes <file>        the candidate index declarations (default: firestore.indexes.json)
+  --baseline <file>       gaps already accepted by this project (no default)
 ```
 
 | Exit | Meaning |
@@ -97,6 +98,42 @@ is not evidence that the set is ready. `check` establishes readiness twice over 
 reporting `READY` through the Admin API, *and* the set unchanged for a settling period — before it
 replays anything. A `check` that answered in two seconds would be a `check` that reported inside that
 window.
+
+**A project adopting `check` can hold the line where it is, with `--baseline`.** A codebase of any
+age discovers all of its existing gaps in one run — the queries no index has ever served, sitting
+behind conditions no user reaches often enough for anyone to have noticed — and fixing every one of
+them before the first green run is not something a pipeline can wait for. Without a way to say a gap
+is already known, the check goes in non-blocking or behind `|| true`, and stops being read. A
+baseline names accepted keys; a gap in it is reported and does not fail the run, and anything else is
+a finding and exits `1`.
+
+```json
+{
+  "baselineVersion": 1,
+  "accepted": [
+    {
+      "key": "orders::COLLECTION::AND(status:EQUAL,total:LESS_THAN)::",
+      "reason": "admin export, unindexed since 2024; tracked in #101"
+    }
+  ]
+}
+```
+
+The `reason` is required and may not be blank. There is no mechanical way to tell an accepted gap
+from one added to make a build green, so the only thing the reader can insist on is that somebody
+wrote a sentence — and every run that matches an entry prints it back, where it is re-read rather
+than accumulated. Keys are matched exactly: they are canonical and unique within a corpus, so a new
+gap cannot inherit an old one's acceptance by resembling it. Nothing generates this file; a
+generated one would be a list of keys with no reasons, which is the artefact the rule exists to
+prevent. Copy the keys the report prints.
+
+**A baselined gap is still a gap.** It is reported in the same words as any other, the summary line
+counts it in both totals, and it is not evidence about an index being unnecessary in either
+direction — the baseline changes the exit code and nothing else. Entries that no longer reproduce
+are reported too, either because the corpus no longer holds the query or because the target now
+serves it, so the file shrinks as gaps are closed. An entry the run never got a verdict for — one it
+could not replay, or one after the entry that stopped the run — is not reported as stale: shrinking
+the file on that evidence would drop a gap nobody measured.
 
 **A corpus with nothing replayable in it is refused, not reported as a pass.** An empty corpus
 replays cleanly by construction, so exiting `0` on one would say the candidate set covers everything

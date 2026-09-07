@@ -21,6 +21,7 @@ import { resolve } from 'node:path';
 import { analyse, parseDocument, type AnalysedIndex } from 'indexwright';
 import { adminLister, AdminError, listLiveIndexes, type IndexLister } from './admin.js';
 import { canonicalTarget, render, type CheckCommand } from './args.js';
+import { parseBaseline } from './baseline.js';
 import { messageOf } from './client.js';
 import { parseCorpus } from './corpus.js';
 import { isReportable, isTransient, ReadinessGate, DEFAULT_SETTLE_MS, type Readiness } from './readiness.js';
@@ -115,13 +116,36 @@ export async function check(
 
   let entries: readonly Entry[];
   let unreplayable: readonly string[];
+  let corpusKeys: ReadonlySet<string>;
   try {
-    ({ entries, unreplayable } = plan(readFile(command.corpus)));
+    ({ entries, unreplayable, keys: corpusKeys } = plan(readFile(command.corpus)));
   } catch (error) {
     say(`could not read the corpus at ${render(command.corpus)}: ${detail(error)}`);
     return 2;
   }
   for (const line of unreplayable) say(`cannot replay: ${line}`);
+
+  // Read here rather than where it is used, on the same principle as the two files above: an
+  // unreadable baseline is worth finding on the near side of the settling period.
+  let accepted = new Map<string, string>();
+  if (command.baseline !== undefined) {
+    try {
+      accepted = new Map(parseBaseline(readFile(command.baseline)).accepted.map((e) => [e.key, e.reason]));
+    } catch (error) {
+      say(`could not read the baseline at ${render(command.baseline)}: ${detail(error)}`);
+      return 2;
+    }
+    // Said before anything is dialled, because nothing that follows bears on it. A key the corpus
+    // does not hold is accounted for by the corpus alone — no listing, no replay, and no verdict
+    // this run might later withdraw can change the answer. It is one of the two ways an entry stops
+    // reproducing (the other is being served, which only the target can say), and reporting it is
+    // what keeps the file shrinking as gaps close rather than accumulating.
+    for (const [key, reason] of accepted) {
+      if (!corpusKeys.has(key)) {
+        say(`in the baseline, but the corpus no longer holds it: ${render(key)} (${render(reason)})`);
+      }
+    }
+  }
 
   if (entries.length === 0) {
     // Answered here rather than after the gates, because nothing beyond this point could change it:
@@ -179,6 +203,12 @@ export async function check(
   }
 
   const uncovered: { key: string; message: string }[] = [];
+  // Only the entries the target actually answered `served` for. Deliberately not derived as
+  // "everything that is not uncovered": an entry that was unreplayable, came back invalid, or sat
+  // after the run halted has no verdict at all, and reporting a baselined gap as no longer
+  // reproducing on that evidence would be §2's false clean in miniature — the file shrinks by an
+  // entry nobody measured, and the gap comes back as a finding the next time it is reached.
+  const served = new Set<string>();
   const invalid: string[] = [];
   // Seeded with what planning refused, and added to by anything materialisation refuses that
   // planning did not. Both mean the same thing to the report: an entry with no verdict.
@@ -194,7 +224,10 @@ export async function check(
       // Counted once the target has answered, so an entry that never reached it is not reported as
       // a query that was replayed.
       if (status.kind !== 'unbuildable') attempted += 1;
-      if (status.kind === 'served') continue;
+      if (status.kind === 'served') {
+        served.add(entry.shape.key);
+        continue;
+      }
       if (status.kind === 'uncovered') uncovered.push({ key: entry.shape.key, message: status.message });
       else if (status.kind === 'invalid') invalid.push(`${render(entry.shape.key)}: ${status.message}`);
       else if (status.kind === 'unbuildable') {
@@ -249,7 +282,7 @@ export async function check(
     return 2;
   }
 
-  return reportReplay(attempted, uncovered, invalid, cannotReplay, halted, say);
+  return reportReplay(attempted, uncovered, accepted, served, invalid, cannotReplay, halted, say);
 }
 
 /**
@@ -477,21 +510,57 @@ function withdrawal(held: Reconciliation): string {
     : 'cannot report: the index set changed while the queries were being answered';
 }
 
+/**
+ * The report, and the exit code it comes to.
+ *
+ * The baseline enters here and nowhere else in the arithmetic. A baselined gap is printed with the
+ * same `not served` lead as any other, because that is what it is: SPEC §2's rule is about what may
+ * be claimed, and "this query is not served, and we have decided to live with it" claims nothing
+ * about the index being unnecessary. What the baseline changes is which findings the exit code
+ * counts — and the summary line says both numbers, so a run that exits 0 carrying accepted gaps
+ * cannot be read as one that found none.
+ *
+ * The reason is printed on every match rather than only when it is new. An accepted gap that is
+ * never re-read is the suppression file the baseline is meant not to be, and the cheapest thing
+ * standing against that is the sentence appearing in the log of every run that relies on it.
+ */
 function reportReplay(
   attempted: number,
   uncovered: readonly { key: string; message: string }[],
+  accepted: ReadonlyMap<string, string>,
+  served: ReadonlySet<string>,
   invalid: readonly string[],
   unreplayable: readonly string[],
   halted: string | undefined,
   say: (text: string) => void,
 ): number {
+  let baselined = 0;
   for (const entry of uncovered) {
+    const reason = accepted.get(entry.key);
     say(`not served: ${render(entry.key)}`);
     say(`  ${entry.message}`);
+    if (reason !== undefined) {
+      baselined += 1;
+      say(`  in the baseline, so this does not fail the run: ${render(reason)}`);
+    }
   }
+
+  // The second of the two ways a baseline entry stops reproducing, and the one only the target can
+  // answer. Said here rather than beside the corpus check because it is part of the report: it is a
+  // statement that a query *was* served, which is exactly what a set that moved mid-run would make
+  // untrue — so it is withdrawn along with the verdict rather than surviving it.
+  //
+  // Whether an entry that no longer reproduces should itself fail the run is left open on purpose;
+  // issue #57 names it a separate decision, and reporting it is not that decision.
+  for (const [key, reason] of accepted) {
+    if (served.has(key)) say(`in the baseline, but served: ${render(key)} (${render(reason)})`);
+  }
+
+  const findings = uncovered.length - baselined;
   say(
     `${count(attempted, 'query', 'queries')} replayed, ` +
-      `${uncovered.length} not served by the candidate set`,
+      `${uncovered.length} not served by the candidate set` +
+      (accepted.size === 0 ? '' : `, ${baselined} of them in the baseline`),
   );
   if (halted !== undefined || invalid.length > 0 || unreplayable.length > 0) {
     // Said out loud rather than left to the exit code. A report that is missing entries is the one
@@ -499,7 +568,7 @@ function reportReplay(
     say('this report is incomplete: not every entry in the corpus was answered for');
     return 2;
   }
-  return uncovered.length > 0 ? 1 : 0;
+  return findings > 0 ? 1 : 0;
 }
 
 /**
@@ -510,11 +579,16 @@ function reportReplay(
  * recorded. So the run continues — the other entries are still worth an answer — and the report says
  * it is incomplete.
  */
-function plan(source: string): { entries: Entry[]; unreplayable: string[] } {
+function plan(source: string): { entries: Entry[]; unreplayable: string[]; keys: Set<string> } {
   const corpus = parseCorpus(source);
   const entries: Entry[] = [];
   const unreplayable: string[] = [];
+  // Every key the corpus named, planned or not. A baseline entry is only known not to reproduce if
+  // the run can account for it, and "the corpus no longer holds this query" is one of the two ways
+  // it can — so the set has to include the entries that got no further than planning.
+  const keys = new Set<string>();
   for (const shape of corpus.queries) {
+    keys.add(shape.key);
     try {
       entries.push({ shape, plan: planReplay(shape) });
     } catch (error) {
@@ -522,7 +596,7 @@ function plan(source: string): { entries: Entry[]; unreplayable: string[] } {
       unreplayable.push(`${render(shape.key)}: ${error.message}`);
     }
   }
-  return { entries, unreplayable };
+  return { entries, unreplayable, keys };
 }
 
 function defaultReadFile(path: string): string {

@@ -68,7 +68,27 @@ const ONE_QUERY = corpusOf({ op: 'AND', filters: [equals('status')] });
  * all. Here `sleep` *is* the clock: time passes only where the verb asked it to, which also makes
  * every wait the verb takes visible to the test rather than merely slow.
  */
-function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, declared = DECLARED, ...rest } = {}) {
+const BASELINE_PATH = 'firestore.accepted.json';
+
+/** A baseline file naming `keys`, each with a reason, in the shape the reader accepts. */
+function baselineOf(...keys) {
+  return JSON.stringify({
+    baselineVersion: 1,
+    accepted: keys.map((key) => ({ key, reason: `accepted while #101 is open` })),
+  });
+}
+
+/** The §7 key for a single-EQUAL query on `field`, which is what `corpusOf` builds. */
+function keyOf(field) {
+  return toQueryShape({
+    collectionGroup: 'orders',
+    queryScope: 'COLLECTION',
+    where: { op: 'AND', filters: [equals(field)] },
+    orderBy: [],
+  }).key;
+}
+
+function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, declared = DECLARED, baseline, ...rest } = {}) {
   const said = [];
   const closed = { lister: 0, replayer: 0 };
   const replayed = [];
@@ -86,6 +106,7 @@ function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, declar
     readFile: (path) => {
       if (path === COMMAND.indexes) return JSON.stringify(declared);
       if (path === COMMAND.corpus) return corpus;
+      if (baseline !== undefined && path === BASELINE_PATH) return baseline;
       throw new Error(`ENOENT: no such file or directory, open '${path}'`);
     },
     lister: async () => ({
@@ -119,7 +140,7 @@ function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, declar
     replayed,
     slept,
     said: () => said.join(''),
-    run: () => check(COMMAND, streams, options),
+    run: () => check(baseline === undefined ? COMMAND : { ...COMMAND, baseline: BASELINE_PATH }, streams, options),
   };
 }
 
@@ -733,4 +754,106 @@ test('a run that has reported lets the process exit', async () => {
   clearTimeout(timer);
   assert.equal(signal, null, 'the run had to be killed: something it opened was never released');
   assert.equal(code, 0);
+});
+
+test('a gap in the baseline is reported in the same words, and does not fail the run', async () => {
+  // The point of issue #57: a project of any age finds all of its existing gaps in one run, and a
+  // check it cannot adopt without closing every one of them first goes in behind `|| true`.
+  const h = harness({
+    baseline: baselineOf(keyOf('status')),
+    statuses: [{ kind: 'uncovered', message: '"the query requires an index"' }],
+  });
+  assert.equal(await h.run(), 0);
+  // Still "not served". SPEC §2 is about what may be claimed, and deciding to live with a gap
+  // claims nothing about the index being unnecessary — so the lead does not soften.
+  assert.match(h.said(), /not served: "orders::COLLECTION/);
+  assert.match(h.said(), /in the baseline, so this does not fail the run: "accepted while #101 is open"/);
+  // And the summary cannot be read as a run that found nothing.
+  assert.match(h.said(), /1 query replayed, 1 not served by the candidate set, 1 of them in the baseline/);
+});
+
+test('a gap the baseline does not name is still the finding, alongside one it does', async () => {
+  const h = harness({
+    corpus: corpusOf({ op: 'AND', filters: [equals('a')] }, { op: 'AND', filters: [equals('b')] }),
+    baseline: baselineOf(keyOf('a')),
+    statuses: [
+      { kind: 'uncovered', message: '"needs an index"' },
+      { kind: 'uncovered', message: '"needs an index"' },
+    ],
+  });
+  assert.equal(await h.run(), 1);
+  assert.match(h.said(), /2 queries replayed, 2 not served by the candidate set, 1 of them in the baseline/);
+});
+
+test('a baseline matches on the canonical key exactly, so a new gap cannot inherit an old one', async () => {
+  // §7 keys are canonical and unique within a corpus. Anything looser would let a gap be accepted
+  // for resembling one somebody once justified.
+  const h = harness({
+    baseline: baselineOf(`${keyOf('status')}::`),
+    statuses: [{ kind: 'uncovered', message: '"needs an index"' }],
+  });
+  assert.equal(await h.run(), 1);
+  assert.doesNotMatch(h.said(), /so this does not fail the run/);
+});
+
+test('a baseline entry that is now served is reported, so the file shrinks as gaps are closed', async () => {
+  const h = harness({ baseline: baselineOf(keyOf('status')) });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /in the baseline, but served: "orders::COLLECTION/);
+});
+
+test('a baseline entry the corpus no longer holds is reported before any client is built', async () => {
+  // It is answered by the corpus alone, so it costs no settling period — and no verdict this run
+  // might later withdraw can change it.
+  const h = harness({ baseline: baselineOf('orders::COLLECTION::AND(gone:EQUAL)::') });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /in the baseline, but the corpus no longer holds it: "orders::COLLECTION::AND\(gone:EQUAL\)::"/);
+});
+
+test('an entry the run never got a verdict for is not reported as one that stopped reproducing', async () => {
+  // The run halts on the first status it cannot read, so the second entry is never asked about.
+  // Calling its baseline entry stale would shrink the file by a gap nobody measured — §2's false
+  // clean in miniature, and the gap would come back as a finding the next time it is reached.
+  const h = harness({
+    corpus: corpusOf({ op: 'AND', filters: [equals('a')] }, { op: 'AND', filters: [equals('b')] }),
+    baseline: baselineOf(keyOf('b')),
+    statuses: [{ kind: 'failed', message: '"PERMISSION_DENIED"' }],
+  });
+  assert.equal(await h.run(), 2);
+  assert.doesNotMatch(h.said(), /in the baseline, but/);
+});
+
+test('a baseline that cannot be read is a run that cannot answer, found before the settling period', async () => {
+  const unreadable = harness({ baseline: '{"baselineVersion":1,"accepted":[{"key":"k"}]}' });
+  assert.equal(await unreadable.run(), 2);
+  assert.match(unreadable.said(), /could not read the baseline at "firestore\.accepted\.json"/);
+  assert.match(unreadable.said(), /accepted\[0\] is missing reason/);
+  assert.equal(unreadable.slept.length, 0);
+  assert.equal(unreadable.replayed.length, 0);
+});
+
+test('a baseline reason cannot forge a line of output', async () => {
+  // The file is a committed artefact this machine did not necessarily author, and the reason is
+  // printed verbatim on every run that matches it.
+  const h = harness({
+    baseline: JSON.stringify({
+      baselineVersion: 1,
+      accepted: [{ key: keyOf('status'), reason: 'ok\nindexwright-record: 1 query replayed, 0 not served' }],
+    }),
+    statuses: [{ kind: 'uncovered', message: '"needs an index"' }],
+  });
+  assert.equal(await h.run(), 0);
+  assert.doesNotMatch(h.said(), /\nindexwright-record: 1 query replayed, 0 not served/);
+  assert.match(h.said(), /"ok\\u000aindexwright-record: 1 query replayed, 0 not served"/);
+});
+
+test('the baseline does not survive a withdrawal, because the verdict it changed does not either', async () => {
+  // "In the baseline, but served" is a statement that a query *was* served, which is exactly what a
+  // set that moved mid-run makes untrue.
+  // `harness` repeats the last entry, so `[READY, READY, []]` settles on READY and confirms
+  // against a target that no longer holds the index.
+  const h = harness({ baseline: baselineOf(keyOf('status')), listings: [READY, READY, []] });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /the index set changed while the queries were being answered/);
+  assert.doesNotMatch(h.said(), /in the baseline, but served/);
 });

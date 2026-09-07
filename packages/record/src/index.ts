@@ -17,6 +17,13 @@ export {
 // to write `Parameters<typeof check>[0]`.
 export type { CheckCommand } from './args.js';
 export {
+  BASELINE_VERSION,
+  BaselineError,
+  parseBaseline,
+  type AcceptedGap,
+  type Baseline,
+} from './baseline.js';
+export {
   check,
   DEFAULT_DEADLINE_MS,
   DEFAULT_POLL_MS,

@@ -50,6 +50,26 @@ test('check names its target in full, and defaults only the file paths', () => {
   assert.equal(command.corpus, 'firestore.queries.json');
   assert.equal(command.indexes, 'firestore.indexes.json');
   assert.equal(canonicalTarget(command), 'projects/p-1/databases/(default)');
+  // The one input with no default. A baseline decides which findings fail the run, so a default
+  // path that happened to exist would change a verdict because of a file nobody pointed at.
+  assert.equal('baseline' in command, false);
+});
+
+test('check takes a baseline where it is named, and refuses one written without a value', () => {
+  const named = parseArgs(['check', '--project', 'p', '--database', 'd', '--baseline', 'accepted.json']);
+  assert.equal(named.baseline, 'accepted.json');
+  assert.equal(parseArgs(['check', '--project', 'p', '--database', 'd', '--baseline=a.json']).baseline, 'a.json');
+
+  // `--baseline --indexes` is a missing value rather than a file called `--indexes`: read as a
+  // filename it fails much later, somewhere that can no longer say which option was written bare.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--baseline', '--indexes']),
+    (error) => /--baseline needs a value, got the option/.test(error.message),
+  );
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--baseline']),
+    (error) => /--baseline needs a value/.test(error.message),
+  );
 });
 
 test('check refuses a half-named target, and says which half', () => {

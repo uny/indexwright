@@ -5,6 +5,46 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## [Unreleased]
+
+### Added
+
+- **`--baseline <file>` on `check`**, so the verb can be adopted by a project that already has gaps.
+  `check` exits `1` on any entry the candidate set does not serve, which is the right answer for a
+  gap a run just found — the oracle is Firestore rather than a heuristic. It left a codebase of any
+  age with two options and both ended with the check switched off: every existing gap arrives in one
+  run, and fixing all of them before the first green run is not something a pipeline waits for. So
+  it goes in non-blocking, or behind `|| true`, and [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md)
+  §8's failure arrives by a different door — not a tool teaching suppression through false positives,
+  but one whose true positives can only be silenced wholesale. A baseline names accepted keys, each
+  with a `reason`; an entry in it is reported and does not fail the run, and anything else exits `1`.
+  Issue #57.
+
+  **The `reason` is required, and a blank one is refused.** Nothing here can tell a justified entry
+  from one added to make a build green, so the only enforceable thing is that somebody wrote a
+  sentence — printed back by every run that matches the entry, so it is re-read rather than
+  accumulated. For the same reason nothing generates the file: a generated baseline is a list of keys
+  with no reasons, which is exactly the artefact the rule exists to prevent.
+
+  **Keys match exactly.** They are canonical and unique within a corpus (§7), so a new gap cannot
+  inherit an old one's acceptance by resembling it. The file has its own `baselineVersion`, separate
+  from `corpusVersion`: the two are edited by different hands on different schedules, and a corpus
+  bump that forced every baseline to be rewritten would be one nobody could afford to make.
+
+  **A baselined gap is still a gap.** It is reported with the same `not served` lead as any other,
+  and the summary line names both totals, so a run that exits `0` carrying accepted gaps cannot read
+  as one that found none. §2 is about what may be claimed, and deciding to live with a gap claims
+  nothing about the index being unnecessary.
+
+  **Entries that no longer reproduce are reported**, so the file shrinks as gaps close rather than
+  accumulating into a list nobody can justify — either because the corpus no longer holds the query,
+  which is answered before any client is built, or because the target now serves it, which is part of
+  the report and is withdrawn with it. An entry the run got no verdict for is deliberately not
+  reported as stale: an unreplayable entry, or one after the entry that stopped the run, was never
+  measured, and shrinking the file on that evidence would drop a gap that comes back as a finding the
+  next time it is reached. Whether a stale entry should itself fail the run is left open; #57 names it
+  a separate decision.
+
 ## [0.5.0] — 2026-09-06
 
 The `check` verb, and with it the half of the v0.3 coverage check that needs a Firestore client.
