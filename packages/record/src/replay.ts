@@ -187,22 +187,26 @@ function nodeFilter(
  * expected query by hand and compare. That is the only offline way to pin the mapping, and the
  * mapping is where a replayed query stops being the recorded one.
  *
- * Two things are deliberately absent. There is no `limit`: SPEC §7 records no limit, so adding one
- * is an unmeasured deviation, and if a limit did narrow index selection the cost would be a query
- * served that should have failed — a false clean verdict, which §2 forbids more strictly than a
- * false alarm. And there is no `select`: a projection can be served by a covering index the full
- * query would need more of, which is the same mistake in the other clothes.
+ * **The query carries `limit(1)`, and the limit is measured rather than argued.** What replay asks is
+ * answered by the RPC's status; the rows are read and discarded. Without a limit they are still
+ * read: the synthesised sentinel matches nothing for an equality, but `!=`, `not-in`, and the
+ * negated unary operators match every document that merely *has* the field, so an entry recorded
+ * from `status != x` replays as a read of the whole collection and `get()` buffers all of it — the
+ * collection billed and held in memory, per such entry, with a `DEADLINE_EXCEEDED` from it
+ * classifying as `failed` and stopping the run.
  *
- * **What that costs is not bounded, and this version does not bound it.** The argument above is
- * about index selection only; it says nothing about how much comes back. The synthesised sentinel
- * matches nothing for an equality, but `!=`, `not-in`, and the negated unary operators match every
- * document that merely *has* the field — so an entry recorded from `status != x` replays as a read
- * of the whole collection, and `get()` buffers all of it. Against a throwaway target that is free;
- * against a populated one it is the whole collection billed and held in memory, per such entry, and
- * a `DEADLINE_EXCEEDED` from it classifies as `failed` and stops the run. Reading the status without
- * reading the result — a stream closed after the first document, which leaves the request on the
- * wire unchanged — would fix it, and is not attempted here because it is unmeasured against the
- * channel lifetime issue #39 is about.
+ * The reason a limit needed measuring is that it might have narrowed index selection, and a query
+ * served that should have failed is a false clean verdict — which §2 forbids more strictly than a
+ * false alarm. It was measured against a deployed candidate set over the probe's eight shapes
+ * (`probe/limit-after.json`, and `probe/README.md` step 5b for how to re-run it): no shape changed
+ * its answer, the two uncovered shapes stayed `FAILED_PRECONDITION` with the limit on — so the limit
+ * acquired no index — and the reads collapsed, 429 documents to 1 on the `!=` shape. That is eight
+ * shapes, one operand, one collection and one index set observed at one moment; it is not a claim
+ * about the planner in general, and a limit is applied here on that evidence and no more.
+ *
+ * There is still no `select`, and that argument is untouched: a projection can be served by a
+ * covering index the full query would need more of, which is the index-selection mistake the limit
+ * was measured not to make.
  *
  * A `COLLECTION`-scope plan replays against the *root* collection of that id, because the corpus
  * records a collection id and never the parent path (SPEC §7). Index selection is by collection id
@@ -228,7 +232,9 @@ export function buildReplayQuery(
       order.direction === 'DESCENDING' ? 'desc' : 'asc',
     );
   }
-  return query;
+  // Last, so that it is the one thing added to the plan rather than something the plan is built
+  // around: see the note above on what it costs and what it was measured not to change.
+  return query.limit(1);
 }
 
 /** Which of the three answers a rejection is. */

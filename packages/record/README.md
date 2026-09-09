@@ -55,7 +55,8 @@ Options:
 ## `check`
 
 `check` replays a corpus against a database that already has the candidate index set applied, and
-reports the queries it cannot serve. It applies nothing and reads only.
+reports the queries it cannot serve. It applies nothing and reads only — one document per entry,
+because the answer it is after is the query's status and not its rows.
 
 ```text
 indexwright-record check --project <id> --database <name> [options]
