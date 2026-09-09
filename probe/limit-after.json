@@ -1,0 +1,178 @@
+{
+  "project": "indexwright-probe",
+  "database": "(default)",
+  "expected": {
+    "S1": "served",
+    "S2": "served",
+    "S3": "served",
+    "S4": "served",
+    "S5": "served",
+    "S7": "served",
+    "S6": "uncovered"
+  },
+  "results": [
+    {
+      "shape": "S1",
+      "variant": "no-limit",
+      "verdict": "served",
+      "read": 0
+    },
+    {
+      "shape": "S1",
+      "variant": "limit-1",
+      "verdict": "served",
+      "read": 0
+    },
+    {
+      "shape": "S2",
+      "variant": "no-limit",
+      "verdict": "served",
+      "read": 0
+    },
+    {
+      "shape": "S2",
+      "variant": "limit-1",
+      "verdict": "served",
+      "read": 0
+    },
+    {
+      "shape": "S3",
+      "variant": "no-limit",
+      "verdict": "served",
+      "read": 500
+    },
+    {
+      "shape": "S3",
+      "variant": "limit-1",
+      "verdict": "served",
+      "read": 1
+    },
+    {
+      "shape": "S4",
+      "variant": "no-limit",
+      "verdict": "served",
+      "read": 429
+    },
+    {
+      "shape": "S4",
+      "variant": "limit-1",
+      "verdict": "served",
+      "read": 1
+    },
+    {
+      "shape": "S5",
+      "variant": "no-limit",
+      "verdict": "served",
+      "read": 71
+    },
+    {
+      "shape": "S5",
+      "variant": "limit-1",
+      "verdict": "served",
+      "read": 1
+    },
+    {
+      "shape": "S6",
+      "variant": "no-limit",
+      "verdict": "uncovered",
+      "message": "9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/indexwright-probe/firestore/indexes?create_composite=Ck9wcm9qZWN0cy9pbmRleHdyaWdodC1wcm9iZS9kYXRhYmFzZXMvKGRlZmF1bHQpL2NvbGxlY3Rpb25Hcm91cHMvcHJvYmUvaW5kZXhlcy9fEAEaBQoBYRABGgUKAW4QARoMCghfX25hbWVfXxAB"
+    },
+    {
+      "shape": "S6",
+      "variant": "limit-1",
+      "verdict": "uncovered",
+      "message": "9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/indexwright-probe/firestore/indexes?create_composite=Ck9wcm9qZWN0cy9pbmRleHdyaWdodC1wcm9iZS9kYXRhYmFzZXMvKGRlZmF1bHQpL2NvbGxlY3Rpb25Hcm91cHMvcHJvYmUvaW5kZXhlcy9fEAEaBQoBYRABGgUKAW4QARoMCghfX25hbWVfXxAB"
+    },
+    {
+      "shape": "S7",
+      "variant": "no-limit",
+      "verdict": "served",
+      "read": 0
+    },
+    {
+      "shape": "S7",
+      "variant": "limit-1",
+      "verdict": "served",
+      "read": 0
+    },
+    {
+      "shape": "S8",
+      "variant": "no-limit",
+      "verdict": "uncovered",
+      "message": "9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/indexwright-probe/firestore/indexes?create_composite=Ck9wcm9qZWN0cy9pbmRleHdyaWdodC1wcm9iZS9kYXRhYmFzZXMvKGRlZmF1bHQpL2NvbGxlY3Rpb25Hcm91cHMvcHJvYmUvaW5kZXhlcy9fEAEaBQoBYRABGgUKAWIQAhoMCghfX25hbWVfXxAC"
+    },
+    {
+      "shape": "S8",
+      "variant": "limit-1",
+      "verdict": "uncovered",
+      "message": "9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/indexwright-probe/firestore/indexes?create_composite=Ck9wcm9qZWN0cy9pbmRleHdyaWdodC1wcm9iZS9kYXRhYmFzZXMvKGRlZmF1bHQpL2NvbGxlY3Rpb25Hcm91cHMvcHJvYmUvaW5kZXhlcy9fEAEaBQoBYRABGgUKAWIQAhoMCghfX25hbWVfXxAC"
+    }
+  ],
+  "findings": [
+    {
+      "shape": "S1",
+      "kind": "constant",
+      "verdict": "served",
+      "variants": 2,
+      "issued": 2,
+      "expected": "served"
+    },
+    {
+      "shape": "S2",
+      "kind": "constant",
+      "verdict": "served",
+      "variants": 2,
+      "issued": 2,
+      "expected": "served"
+    },
+    {
+      "shape": "S3",
+      "kind": "constant",
+      "verdict": "served",
+      "variants": 2,
+      "issued": 2,
+      "expected": "served"
+    },
+    {
+      "shape": "S4",
+      "kind": "constant",
+      "verdict": "served",
+      "variants": 2,
+      "issued": 2,
+      "expected": "served"
+    },
+    {
+      "shape": "S5",
+      "kind": "constant",
+      "verdict": "served",
+      "variants": 2,
+      "issued": 2,
+      "expected": "served"
+    },
+    {
+      "shape": "S6",
+      "kind": "constant",
+      "verdict": "uncovered",
+      "variants": 2,
+      "issued": 2,
+      "expected": "uncovered"
+    },
+    {
+      "shape": "S7",
+      "kind": "constant",
+      "verdict": "served",
+      "variants": 2,
+      "issued": 2,
+      "expected": "served"
+    },
+    {
+      "shape": "S8",
+      "kind": "constant",
+      "verdict": "uncovered",
+      "variants": 2,
+      "issued": 2
+    }
+  ],
+  "unreliable": [],
+  "unexpected": []
+}

@@ -11,6 +11,7 @@ It answered four things at once, which is why it was worth doing before anything
 |:--|:--|:--|:--|
 | SPEC §7's claim: index selection does not depend on the compared value | `differential.mjs`, run either side of the deploy | Unverified, and §7 itself asks that it be tested | **Holds on the axes tested.** Every shape constant across every operand, both sides, arity included — see §7 for what it does not reach |
 | Issue #43: a negated operator reads the whole collection | `differential.mjs`, on a seeded collection | Deduced, never observed | **429 documents**, the predicted count |
+| Issue #43: does `limit(1)` change which index serves a query | `limit.mjs`, on the deployed set | Unmeasured, and the whole of the argument for sending no limit | **No shape changed verdict**, and three shapes fell from 500/429/71 documents to 1 |
 | Issue #39: the process exits once the report is written | `check`, timed | Untestable with a fake client | **It exits.** Three runs, none hung |
 | `DEFAULT_SETTLE_MS` = 60s | `watch-readiness.mjs` | A guess | Still a guess, now a documented one — see below |
 
@@ -73,6 +74,23 @@ wrong guess in a flag stops a correct run. Their readings, recorded rather than 
   deleting an index, but it is the reading on record.
 - **S2 and S5 — equality-only shapes are merged.** Both served on a bare target: an `IN` expands into
   equality branches and `b == null` is an equality, and single-field indexes cover that class.
+
+**The limit reading (step 5b), which is what issue #43 now turns on.** Every one of the eight shapes
+answered the same way bare and with `limit(1)`, and both directions matter. On the five served
+shapes the limit did not lose an index; on **S6 and S8 the limit did not *gain* one** — both stayed
+`FAILED_PRECONDITION` — and that is the direction §2 cares about, because a limit that rescued an
+unserved query into `served` is the false clean verdict `replay.ts` declines to risk.
+
+Beside it, what the limit costs nothing to buy: **S3 fell from 500 documents to 1, S4 from 429 to 1,
+S5 from 71 to 1.** S4 is the entry #43 names and it reproduced the earlier run's count exactly, which
+is also the two instruments agreeing about the same collection.
+
+Two things that reading does not say. The 500 on S3 is the seed's doing rather than a new class of
+expensive operator — `seed.mjs` writes the sentinel into `a` and into `tags` for every document, so
+an `array-contains` plus an equality against the sentinel matches all of them. And this is eight
+shapes, one operand, one collection, one index set: it observes that `limit(1)` is selection-neutral
+on the axes tested, which is the same kind of statement the §7 result is, and not a claim about the
+planner in general.
 
 The arity result belongs with them, though it was never in question in a flag: S2 at one, three and
 ten values was served identically. That is the axis the corpus discards, and the sharpest way SPEC §7
