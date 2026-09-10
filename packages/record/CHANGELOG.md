@@ -68,6 +68,12 @@ again, by its own `corpusVersion`.
   `!=` shape the issue names. That is eight shapes, one operand, one collection and one index set at
   one moment, and the docstring records it as such rather than as a claim about the planner.
 
+  **What it does not reach is named there too.** All eight shapes are conjunctions against a single
+  collection, while the limit goes on every query replay emits — disjunctions, `COLLECTION_GROUP`
+  scope, `not-in`, `array-contains-any`, the negated unary forms. Those carry it on the argument
+  that a limit is one field on the wire, not on a reading. Closing that needs an `or` shape and a
+  `COLLECTION_GROUP` shape in the probe and another run of step 5b.
+
   Reading the status without reading the result — the stream closed after the first document that
   the issue proposes — was implemented and abandoned. `stream()` returns the tail of a `.pipe()`
   chain, so destroying it unpipes the upstream without cancelling the RPC: `close()` never returns,

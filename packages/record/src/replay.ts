@@ -204,9 +204,22 @@ function nodeFilter(
  * shapes, one operand, one collection and one index set observed at one moment; it is not a claim
  * about the planner in general, and a limit is applied here on that evidence and no more.
  *
+ * **Which classes that evidence does not reach, named rather than left to the word "eight".** All
+ * eight shapes are conjunctions of `EQUAL` and the ordering operators against a single collection.
+ * This function emits more than that — a disjunction, a `COLLECTION_GROUP` scope, `not-in`,
+ * `array-contains-any`, and the negated unary forms — and the limit goes on all of it. A
+ * disjunction's index requirement is per-disjunct and a collection group's is a distinct index
+ * kind, so neither is a shape the run generalises over; nothing here is evidence about them, and
+ * they carry the limit on the argument that it is one field on the wire rather than on a reading.
+ * Extending `probe/shapes.mjs` with an `or` shape and a `COLLECTION_GROUP` shape and re-running
+ * step 5b is what would close it.
+ *
  * There is still no `select`, and that argument is untouched: a projection can be served by a
  * covering index the full query would need more of, which is the index-selection mistake the limit
- * was measured not to make.
+ * was measured not to make. **SPEC §7 states the opposite** — that `select` changes no selection,
+ * "a projection is served by the index the underlying query already needs" — and the disagreement
+ * is left standing rather than resolved here, because neither side has been measured the way the
+ * limit now has. The conservative reading is the one that governs the code: no `select` is sent.
  *
  * A `COLLECTION`-scope plan replays against the *root* collection of that id, because the corpus
  * records a collection id and never the parent path (SPEC §7). Index selection is by collection id
