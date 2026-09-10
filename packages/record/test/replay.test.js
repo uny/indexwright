@@ -18,9 +18,10 @@ const { FieldPath, Filter, Firestore } = firestore;
  * A client, constructed rather than faked.
  *
  * Constructing opens no channel — the gRPC stub is lazy, which is the whole of issue #39 — so the
- * materialisation can be compared against the SDK's own `isEqual` offline. That comparison is the
- * only way to pin the mapping without a database, and the mapping is where a replayed query would
- * stop being the recorded one.
+ * materialisation can be pinned offline, and the mapping is where a replayed query would stop being
+ * the recorded one. Two comparisons reach it. The SDK's own `isEqual` is the readable one and is
+ * what most of this file uses; the proto `toProto` builds is the one to fall to for anything
+ * `isEqual` does not look at, and `limitType` is that.
  */
 const db = new Firestore({ projectId: 'indexwright-probe', databaseId: '(default)' });
 
@@ -73,15 +74,19 @@ test('a replayed query carries limit(1), because the answer is the status and no
 test('the limit is the one the SDK sends first, not the one it sends last', () => {
   // `isEqual` compares `limit` and stops there: `limitType` is not among the options it looks at,
   // so it reads `limitToLast(1)` as equal to `limit(1)` and every assertion above holds for both.
-  // That is the one other spelling the SDK offers and the one a plausible edit reaches for, and it
-  // is not a cosmetic difference. A plan carrying no `orderBy` — most of them, since SPEC §7 records
-  // none unless the query sorted — is refused outright at `get()`, which arrives with no gRPC code
-  // and so classifies as `failed`: a covered entry reported unanswerable, and the run stopped at it.
-  // A plan that does carry one is worse for being quiet, and is what this pins. `limitToLast`
-  // reverses the sort on the wire, so a `DESCENDING` the corpus recorded is sent `ASCENDING` and the
-  // index set is asked about a query nobody issued — the reading §2 forbids most, arriving through
-  // the option meant to bound the read. Pinned on the proto, because the wire is where the two stop
-  // being equal.
+  // That is the one other spelling the SDK offers, and the one a plausible edit reaches for.
+  //
+  // What it would cost is certain in one direction and unmeasured in the other, and only the first
+  // is claimed here. A plan the query never sorted carries no `orderBy`, and `limitToLast` refuses
+  // that outright at `get()` — a plain `Error` with no gRPC code, so `classifyRejection` answers
+  // `failed`, the one kind that halts the run, on an entry the candidate set covers. A plan that
+  // does carry one is sent with every direction flipped, which is not the query the corpus
+  // recorded. Whether the index set then answers it differently is a selection claim, and a
+  // composite index does serve its own exact reverse, so the reading is not obviously wrong — it is
+  // the sort of thing this package declines to assert without measuring, and it is not asserted.
+  //
+  // Pinned on the proto either way, because the wire is where the two stop being equal. `toProto`
+  // is the SDK's own internal, so an upgrade breaks this loudly rather than quietly.
   const plan = planOf({
     collectionGroup: 'orders',
     where: { op: 'AND', filters: [{ fieldPath: 'a', op: 'EQUAL' }] },
