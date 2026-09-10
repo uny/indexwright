@@ -198,7 +198,7 @@ function nodeFilter(
  * The reason a limit needed measuring is that it might have narrowed index selection, and a query
  * served that should have failed is a false clean verdict — which §2 forbids more strictly than a
  * false alarm. It was measured against a deployed candidate set over the probe's eight shapes
- * (`probe/limit-after.json`, and `probe/README.md` step 5b for how to re-run it): no shape changed
+ * (`probe/README.md`, which quotes the readings and carries the runbook as step 5b): no shape changed
  * its answer, the two uncovered shapes stayed `FAILED_PRECONDITION` with the limit on — so the limit
  * acquired no index — and the reads collapsed, 429 documents to 1 on the `!=` shape. That is eight
  * shapes, one operand, one collection and one index set observed at one moment; it is not a claim
