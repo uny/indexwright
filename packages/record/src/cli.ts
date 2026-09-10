@@ -100,7 +100,13 @@ export async function run(
     // interrupted run reaches here for the same reason — see `runChild`.
     const out = resolve(command.out);
     try {
-      writeCorpus(out, buildCorpus(capture.recorder.shapes, capture.recorder.skips.keys()));
+      // One producer, or none. The caller names it; nothing here derives it from the machine, the
+      // repository, or the clock — see `Producer`.
+      const producers =
+        command.producer === undefined
+          ? []
+          : [{ name: command.producer, revision: command.revision ?? null }];
+      writeCorpus(out, buildCorpus(capture.recorder.shapes, capture.recorder.skips.keys(), producers));
     } catch (error) {
       streams.err(`indexwright-record: could not write ${out}: ${(error as Error).message}\n`);
       return 2;

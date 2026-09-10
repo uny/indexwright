@@ -542,7 +542,10 @@ collapsing it to one disjunct would describe a query that was never issued.
 
 ```jsonc
 {
-  "corpusVersion": 1,
+  "corpusVersion": 2,
+  "producers": [
+    { "name": "orders-service", "revision": "9c1f2ab" }
+  ],
   "queries": [
     {
       "key": "orders::COLLECTION::AND(status:EQUAL)::createdAt:DESCENDING",
@@ -588,6 +591,36 @@ written by one version can no longer be read correctly by another, and it does n
 `@indexwright/record` is released. A reader handed a `corpusVersion` it does not know refuses the
 file and says so. It does not fall back to reading what it recognises, which would silently mis-read
 exactly the change the integer exists to announce.
+
+A reader may know more than one version, and knowing two is not that fallback. The rule is about an
+*unknown* version, whose members a reader can only guess at; a version whose shape is written down
+here is one it reads correctly and whole. What it may not do is read a corpus of one version as
+though it were another — the member set is part of what the integer names, so a reader checks the
+version first and then holds the file to the members that version defines.
+
+### Producer identity
+
+A corpus records what produced it, so that one describing a suite as it was can be told from one
+describing the suite as it runs. `producers` holds `{ "name", "revision" }` objects: `name` is what
+produced the corpus — a suite, a package, a service — and `revision` is the revision of that source,
+or `null` when none was named. Both are supplied by whatever invoked the recorder. Neither is
+discovered.
+
+That they are supplied is a consequence of the diff stability above, not a convenience. A wall-clock
+timestamp would rewrite the file on every run whether or not the queries changed, and a file that
+churns is a file whose diffs stop being read. For the same reason the recorder puts nothing about
+the machine into the file — a hostname, a username, an absolute path — which is the leak this
+specification already refuses when it declines to interpolate text decoded from the wire into
+`skipped`, arriving from the other side.
+
+`producers` is a list rather than one producer because a corpus may be assembled from several: it is
+sorted by `name` and then by `revision`, with an absent revision before any present one, and it is a
+set on the pair. Two revisions of one producer are two entries, not one — a corpus assembled from a
+current part and a stale part of the same suite is exactly what the identity is for. It is `[]` on a
+corpus that named none, as `skipped` is `[]` on a run that discarded nothing.
+
+A corpus at version 1 carries no `producers` member. It is read as naming none, which is what the
+member being optional means; it is not refused, and nothing is guessed for it.
 
 ### Implicit fields are not materialised
 

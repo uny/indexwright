@@ -803,3 +803,128 @@ test('the child is told where the proxy is, not where the emulator is', async ()
     upstream.close();
   }
 });
+
+test('--producer and --revision are carried through to the command', () => {
+  const command = parseArgs(['--producer', 'orders-service', '--revision', '9c1f2ab', '--', 'true']);
+  assert.equal(command.producer, 'orders-service');
+  assert.equal(command.revision, '9c1f2ab');
+});
+
+test('a producer may be named without a revision', () => {
+  const command = parseArgs(['--producer', 'suite', '--', 'true']);
+  assert.equal(command.producer, 'suite');
+  assert.equal(command.revision, undefined);
+});
+
+test('a command naming neither has no member for either', () => {
+  // Spread rather than set to `undefined`, as `check`'s baseline is: the two are the same to every
+  // reader here and are not the same to a test comparing against a literal.
+  const command = parseArgs(['--', 'true']);
+  assert.equal('producer' in command, false);
+  assert.equal('revision' in command, false);
+});
+
+test('--revision without --producer is refused rather than silently dropped', () => {
+  // Dropping the one flag that was given is how a pipeline comes to believe it records provenance
+  // that it does not.
+  assert.throws(
+    () => parseArgs(['--revision', '9c1f2ab', '--', 'true']),
+    (error) => error instanceof UsageError && /--producer is what names the producer/.test(error.message),
+  );
+});
+
+test('a producer name carrying a line break is refused where it enters', () => {
+  // It would be written into a committed file and echoed onto the stream the target is announced
+  // on, forging a line in both. Unlike a corpus read from disk, this one can simply be refused.
+  assert.throws(
+    () => parseArgs(['--producer', 'a\nindexwright-record: target elsewhere', '--', 'true']),
+    (error) => error instanceof UsageError && /control character, a line break/.test(error.message),
+  );
+});
+
+test('a producer name that reorders itself under a bidi override is refused too', () => {
+  // The same harm the target segments refuse: a name that reads as one thing in a review and is
+  // another thing in the file, with no character altered.
+  assert.throws(
+    () => parseArgs(['--producer', 'a\u202eb', '--', 'true']),
+    (error) => error instanceof UsageError && /bidirectional override/.test(error.message),
+  );
+});
+
+test('a producer name in the team\'s own language is accepted', () => {
+  // A denylist, not an allowlist: what is refused is what stops a name from being read as written,
+  // and a non-ASCII name is not that.
+  assert.equal(parseArgs(['--producer', '受注スイート', '--', 'true']).producer, '受注スイート');
+});
+
+test('--require-identity is off unless asked for, and takes no value', () => {
+  assert.equal(parseArgs(['check', '--project', 'p', '--database', 'd']).requireIdentity, false);
+  assert.equal(
+    parseArgs(['check', '--project', 'p', '--database', 'd', '--require-identity']).requireIdentity,
+    true,
+  );
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--require-identity=false']),
+    (error) => error instanceof UsageError && /takes no value/.test(error.message),
+  );
+});
+
+test('the corpus a run writes records the producer the run was given', async () => {
+  const upstream = createServer();
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-record-'));
+
+  try {
+    const out = join(directory, 'firestore.queries.json');
+    const streams = collect();
+    const status = await run(
+      [
+        '--emulator',
+        `127.0.0.1:${upstream.address().port}`,
+        '--out',
+        out,
+        '--producer',
+        'orders-service',
+        '--revision',
+        '9c1f2ab',
+        '--',
+        process.execPath,
+        '-e',
+        '',
+      ],
+      streams,
+      {},
+    );
+
+    assert.equal(status, 0);
+    const corpus = parseCorpus(readFileSync(out, 'utf8'));
+    assert.deepEqual(corpus.producers, [{ name: 'orders-service', revision: '9c1f2ab' }]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    upstream.close();
+  }
+});
+
+test('a run given no producer writes a corpus that names none', async () => {
+  // Nothing is discovered to fill the gap: not the clock, and not this machine.
+  const upstream = createServer();
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-record-'));
+
+  try {
+    const out = join(directory, 'firestore.queries.json');
+    const status = await run(
+      ['--emulator', `127.0.0.1:${upstream.address().port}`, '--out', out, '--', process.execPath, '-e', ''],
+      collect(),
+      {},
+    );
+
+    assert.equal(status, 0);
+    const text = readFileSync(out, 'utf8');
+    assert.deepEqual(parseCorpus(text).producers, []);
+    assert.doesNotMatch(text, /hostname|username|capturedAt/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    upstream.close();
+  }
+});

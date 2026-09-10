@@ -31,7 +31,7 @@ test('skip reasons are a sorted set', () => {
 
 test('every member is present even when there is nothing to say', () => {
   const document = JSON.parse(serialiseCorpus(buildCorpus([], [])));
-  assert.deepEqual(document, { corpusVersion: CORPUS_VERSION, queries: [], skipped: [] });
+  assert.deepEqual(document, { corpusVersion: CORPUS_VERSION, producers: [], queries: [], skipped: [] });
 });
 
 test('the serialised members are in the documented order', () => {
@@ -79,7 +79,7 @@ test('a corpus round-trips', () => {
 });
 
 test('an unknown corpusVersion is refused rather than read as far as it goes', () => {
-  const text = serialiseCorpus(buildCorpus([], [])).replace('"corpusVersion": 1', '"corpusVersion": 2');
+  const text = serialiseCorpus(buildCorpus([], [])).replace('"corpusVersion": 2', '"corpusVersion": 3');
   assert.throws(() => parseCorpus(text), (error) => error instanceof CorpusError && /corpusVersion/.test(error.message));
 });
 
@@ -156,7 +156,7 @@ test('a corpus that cannot be serialised leaves the previous one intact', () => 
 
     // A corpus that cannot be serialised: the write must fail before the rename, not halfway
     // through the destination.
-    const unserialisable = { corpusVersion: CORPUS_VERSION, queries: [], skipped: [] };
+    const unserialisable = { corpusVersion: CORPUS_VERSION, producers: [], queries: [], skipped: [] };
     Object.defineProperty(unserialisable, 'queries', {
       get() {
         throw new Error('serialisation exploded');
@@ -192,7 +192,7 @@ test('a corpus nested past what the reader descends is refused as a corpus error
   const where =
     '{"op":"AND","filters":['.repeat(depth) + '{"fieldPath":"a","op":"EQUAL"}' + ']}'.repeat(depth);
   const source =
-    '{"corpusVersion":1,"queries":[{"key":"x","collectionGroup":"c","queryScope":"COLLECTION",' +
+    '{"corpusVersion":2,"producers":[],"queries":[{"key":"x","collectionGroup":"c","queryScope":"COLLECTION",' +
     `"where":${where},"orderBy":[]}],"skipped":[]}`;
   assert.throws(
     () => parseCorpus(source),
@@ -204,8 +204,8 @@ test('a corpus from a later format is refused by version, not by its members', (
   // Adding a top-level member is the normal reason to bump the version, so a reader that checked
   // the member set first would blame a stray field instead of naming the version it cannot read.
   assert.throws(
-    () => parseCorpus('{"corpusVersion":2,"queries":[],"skipped":[],"capturedAt":"2026-08-11"}'),
-    (error) => error instanceof CorpusError && /corpusVersion 2 is not readable/.test(error.message),
+    () => parseCorpus('{"corpusVersion":3,"producers":[],"queries":[],"skipped":[],"capturedAt":"2026-08-11"}'),
+    (error) => error instanceof CorpusError && /corpusVersion 3 is not readable/.test(error.message),
   );
 });
 
@@ -248,4 +248,127 @@ test('the write does not follow a symlink planted at a guessable temp name', () 
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('a producer named by the caller is written into the file, in the documented order', () => {
+  const document = JSON.parse(
+    serialiseCorpus(buildCorpus([], [], [{ name: 'orders-service', revision: '9c1f2ab' }])),
+  );
+  assert.deepEqual(Object.keys(document), ['corpusVersion', 'producers', 'queries', 'skipped']);
+  assert.deepEqual(document.producers, [{ name: 'orders-service', revision: '9c1f2ab' }]);
+  assert.deepEqual(Object.keys(document.producers[0]), ['name', 'revision']);
+});
+
+test('a corpus that named no producer says so with an empty list, not by omitting the member', () => {
+  // The same rule as `skipped`: every member is always present, so "none" is a reading a file
+  // states rather than one a reader infers from silence.
+  assert.deepEqual(JSON.parse(serialiseCorpus(buildCorpus([], []))).producers, []);
+});
+
+test('a producer with no revision records null rather than an empty string', () => {
+  const document = JSON.parse(serialiseCorpus(buildCorpus([], [], [{ name: 'suite', revision: null }])));
+  assert.deepEqual(document.producers, [{ name: 'suite', revision: null }]);
+});
+
+test('producers are a sorted set on the pair, so two revisions of one producer are two entries', () => {
+  // Two revisions of one suite is exactly what a merged corpus (SPEC §7) has to be able to show:
+  // de-duplicating on the name would collapse a current part and a stale part into one line.
+  const corpus = buildCorpus([], [], [
+    { name: 'b', revision: '2' },
+    { name: 'a', revision: '9c1f' },
+    { name: 'a', revision: null },
+    { name: 'b', revision: '2' },
+    { name: 'a', revision: '1a0b' },
+  ]);
+  assert.deepEqual(corpus.producers, [
+    { name: 'a', revision: null },
+    { name: 'a', revision: '1a0b' },
+    { name: 'a', revision: '9c1f' },
+    { name: 'b', revision: '2' },
+  ]);
+});
+
+test('a corpus carrying producers round-trips to the bytes it was read from', () => {
+  const text = serialiseCorpus(
+    buildCorpus([shape('orders')], ['listen-query'], [{ name: 'a', revision: null }, { name: 'b', revision: 'r' }]),
+  );
+  assert.equal(serialiseCorpus(parseCorpus(text)), text);
+});
+
+test('a version-1 corpus is read as one naming no producer, not refused', () => {
+  // The member is optional by construction, so every corpus committed before this format version
+  // stays readable. Refusing them was the outcome the version bump existed to avoid.
+  const corpus = parseCorpus('{"corpusVersion":1,"queries":[],"skipped":[]}');
+  assert.equal(corpus.corpusVersion, 1);
+  assert.deepEqual(corpus.producers, []);
+});
+
+test('a version-1 corpus round-trips to version 1, without a producers member', () => {
+  // A reader that knows two versions must not rewrite a file into the other one: the corpus is a
+  // committed artefact, and a read that changed its version would show up as a diff nobody made.
+  const text = '{\n  "corpusVersion": 1,\n  "queries": [],\n  "skipped": []\n}\n';
+  assert.equal(serialiseCorpus(parseCorpus(text)), text);
+});
+
+test('a version-1 corpus carrying a producers member is refused', () => {
+  // The member set is part of what the version names. Reading it anyway would accept a file no
+  // writer produces and give the integer nothing to announce.
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":1,"producers":[],"queries":[],"skipped":[]}'),
+    (error) => error instanceof CorpusError && /producers/.test(error.message),
+  );
+});
+
+test('a version-2 corpus with no producers member is refused', () => {
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":2,"queries":[],"skipped":[]}'),
+    (error) => error instanceof CorpusError && /producers/.test(error.message),
+  );
+});
+
+test('an empty producer name is refused, since the way to name no producer is to have no entry', () => {
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":2,"producers":[{"name":"","revision":null}],"queries":[],"skipped":[]}'),
+    (error) => error instanceof CorpusError && /name is empty/.test(error.message),
+  );
+});
+
+test('an empty revision is refused, because an unnamed revision is null', () => {
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":2,"producers":[{"name":"a","revision":""}],"queries":[],"skipped":[]}'),
+    (error) => error instanceof CorpusError && /revision is empty/.test(error.message),
+  );
+});
+
+test('a producers list out of order is refused, as queries and skipped are', () => {
+  assert.throws(
+    () =>
+      parseCorpus(
+        '{"corpusVersion":2,"producers":[{"name":"b","revision":null},{"name":"a","revision":null}],' +
+          '"queries":[],"skipped":[]}',
+      ),
+    (error) => error instanceof CorpusError && /not sorted/.test(error.message),
+  );
+});
+
+test('a producers list repeating a pair is refused', () => {
+  assert.throws(
+    () =>
+      parseCorpus(
+        '{"corpusVersion":2,"producers":[{"name":"a","revision":"1"},{"name":"a","revision":"1"}],' +
+          '"queries":[],"skipped":[]}',
+      ),
+    (error) => error instanceof CorpusError && /repeats/.test(error.message),
+  );
+});
+
+test('a producer carrying a member the format does not define is refused', () => {
+  assert.throws(
+    () =>
+      parseCorpus(
+        '{"corpusVersion":2,"producers":[{"name":"a","revision":null,"host":"laptop.local"}],' +
+          '"queries":[],"skipped":[]}',
+      ),
+    CorpusError,
+  );
 });

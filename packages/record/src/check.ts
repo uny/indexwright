@@ -20,7 +20,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { analyse, parseDocument, type AnalysedIndex } from 'indexwright';
 import { adminLister, AdminError, listLiveIndexes, type IndexLister } from './admin.js';
-import { canonicalTarget, render, type CheckCommand } from './args.js';
+import { canonicalTarget, REQUIRE_IDENTITY, render, type CheckCommand } from './args.js';
 import { parseBaseline } from './baseline.js';
 import { messageOf } from './client.js';
 import { parseCorpus } from './corpus.js';
@@ -28,7 +28,7 @@ import { isReportable, isTransient, ReadinessGate, DEFAULT_SETTLE_MS, type Readi
 import { isVouched, reconcile, type LiveCompositeIndex, type Reconciliation } from './reconcile.js';
 import { planReplay, ReplayError, type ReplayPlan } from './synthesise.js';
 import { replayClient, TargetError, type Replayer } from './replay.js';
-import type { QueryShape } from './types.js';
+import type { Producer, QueryShape } from './types.js';
 
 export interface Streams {
   out(text: string): void;
@@ -118,12 +118,36 @@ export async function check(
   let entries: readonly Entry[];
   let unreplayable: readonly string[];
   let corpusKeys: ReadonlySet<string>;
+  let producers: readonly Producer[];
   try {
-    ({ entries, unreplayable, keys: corpusKeys } = plan(readFile(command.corpus)));
+    ({ entries, unreplayable, keys: corpusKeys, producers } = plan(readFile(command.corpus)));
   } catch (error) {
     say(`could not read the corpus at ${render(command.corpus)}: ${detail(error)}`);
     return 2;
   }
+
+  // Said on every run, beside the target, and for the same reason the target is said: it is the
+  // other input that cannot be recovered from the output afterwards, and the mistake it guards
+  // against — a corpus describing a suite as it was, replayed against a set as it is — is silent by
+  // construction. A corpus naming no producer says so out loud rather than printing nothing;
+  // silence is the reading this line exists to take away.
+  say(
+    producers.length === 0
+      ? `corpus ${render(command.corpus)} records no producer`
+      : `corpus ${render(command.corpus)} produced by ${producers.map(describeProducer).join(', ')}`,
+  );
+
+  // Refused here, before the settling period and before anything is dialled: nothing beyond this
+  // point could change the answer, and the fix is on the command line or in the pipeline that wrote
+  // the corpus. Exit 2 rather than 1 — this is a run that cannot report, not a run reporting a gap.
+  if (command.requireIdentity && producers.length === 0) {
+    say(
+      `cannot report: ${REQUIRE_IDENTITY} was given and the corpus at ${render(command.corpus)} ` +
+        'names no producer, so there is nothing to say whether it describes the suite as it runs today',
+    );
+    return 2;
+  }
+
   for (const line of unreplayable) say(`cannot replay: ${line}`);
 
   // Read here rather than where it is used, on the same principle as the two files above: an
@@ -591,7 +615,12 @@ function reportReplay(
  * recorded. So the run continues — the other entries are still worth an answer — and the report says
  * it is incomplete.
  */
-function plan(source: string): { entries: Entry[]; unreplayable: string[]; keys: Set<string> } {
+function plan(source: string): {
+  entries: Entry[];
+  unreplayable: string[];
+  keys: Set<string>;
+  producers: readonly Producer[];
+} {
   const corpus = parseCorpus(source);
   const entries: Entry[] = [];
   const unreplayable: string[] = [];
@@ -608,7 +637,7 @@ function plan(source: string): { entries: Entry[]; unreplayable: string[]; keys:
       unreplayable.push(`${render(shape.key)}: ${error.message}`);
     }
   }
-  return { entries, unreplayable, keys };
+  return { entries, unreplayable, keys, producers: corpus.producers };
 }
 
 function defaultReadFile(path: string): string {
@@ -625,6 +654,19 @@ function defaultReadFile(path: string): string {
  */
 function detail(error: unknown): string {
   return render(messageOf(error));
+}
+
+/**
+ * One producer as a line an operator reads, rendered.
+ *
+ * Rendered for the same reason `detail` is: a corpus is a committed artefact this machine did not
+ * necessarily author, and this text goes onto the stream the target is announced on. The recorder
+ * refuses a control character where it enters, but a corpus can arrive by any route.
+ */
+function describeProducer(producer: Producer): string {
+  return producer.revision === null
+    ? `${render(producer.name)} at an unnamed revision`
+    : `${render(producer.name)} at ${render(producer.revision)}`;
 }
 
 function names(list: readonly string[]): string {

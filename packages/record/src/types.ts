@@ -7,7 +7,36 @@
  */
 
 /** The format version written into every corpus. Bumped only when an old reader would mis-read. */
-export const CORPUS_VERSION = 1;
+export const CORPUS_VERSION = 2;
+
+/**
+ * The format versions this package can read. Writing is always `CORPUS_VERSION`.
+ *
+ * Two versions rather than one, and this is not the fallback SPEC §7 forbids. That rule is about an
+ * *unknown* version: a reader handed one refuses rather than reading the members it recognises,
+ * because the integer exists to announce exactly the change reading on would mis-read. Version 1 is
+ * not unknown. Its shape is written down, and a reader that knows it reads it correctly and whole.
+ *
+ * The alternative was refusing every corpus committed before this release, which is the outcome the
+ * bump was supposed to avoid — `producers` is optional by construction, so a version-1 corpus is a
+ * corpus that names no producer, not one this reader has to guess at.
+ */
+export const READABLE_CORPUS_VERSIONS: readonly number[] = [1, 2];
+
+/**
+ * Who produced a corpus, and from what revision of their source (SPEC §7, *Producer identity*).
+ *
+ * Supplied by the caller, never discovered. A discovered identity is either a wall-clock timestamp,
+ * which rewrites the file on every run and so defeats the diff stability §7 has the sort for, or it
+ * is the machine — a hostname, a username, an absolute path — which is the same kind of leak into a
+ * committed file that §7 refuses when it declines to interpolate wire-decoded text into `skipped`.
+ */
+export interface Producer {
+  /** What produced the corpus: a suite, a package, a service. Never empty. */
+  readonly name: string;
+  /** The revision of that source, or `null` when the caller named none. */
+  readonly revision: string | null;
+}
 
 /**
  * Why a query the proxy observed is not in the corpus (SPEC §7, *What is not captured*).
@@ -85,6 +114,13 @@ export interface QueryShape {
 
 export interface Corpus {
   readonly corpusVersion: number;
+  /**
+   * The producers this corpus is the work of, sorted and de-duplicated, `[]` when none were named.
+   *
+   * A list rather than one producer, because §7's merge is a union and a merged corpus has to
+   * record which part came from where. A single recorder writes one element.
+   */
+  readonly producers: readonly Producer[];
   readonly queries: readonly QueryShape[];
   readonly skipped: readonly SkipReason[];
 }

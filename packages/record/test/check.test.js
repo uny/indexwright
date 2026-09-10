@@ -21,6 +21,7 @@ const COMMAND = {
   database: '(default)',
   corpus: 'firestore.queries.json',
   indexes: 'firestore.indexes.json',
+  requireIdentity: false,
 };
 
 const DECLARED = {
@@ -59,6 +60,17 @@ function corpusOf(...wheres) {
   return serialiseCorpus(buildCorpus(shapes, []));
 }
 
+/** `ONE_QUERY`, but produced by `producers`. */
+function producedBy(...producers) {
+  return serialiseCorpus(
+    buildCorpus(
+      [toQueryShape({ collectionGroup: 'orders', queryScope: 'COLLECTION', where: { op: 'AND', filters: [equals('status')] }, orderBy: [] })],
+      [],
+      producers,
+    ),
+  );
+}
+
 const ONE_QUERY = corpusOf({ op: 'AND', filters: [equals('status')] });
 
 /**
@@ -88,7 +100,7 @@ function keyOf(field) {
   }).key;
 }
 
-function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, declared = DECLARED, baseline, ...rest } = {}) {
+function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, declared = DECLARED, baseline, requireIdentity = false, ...rest } = {}) {
   const said = [];
   const closed = { lister: 0, replayer: 0 };
   const replayed = [];
@@ -140,7 +152,16 @@ function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, declar
     replayed,
     slept,
     said: () => said.join(''),
-    run: () => check(baseline === undefined ? COMMAND : { ...COMMAND, baseline: BASELINE_PATH }, streams, options),
+    run: () =>
+      check(
+        {
+          ...COMMAND,
+          requireIdentity,
+          ...(baseline === undefined ? {} : { baseline: BASELINE_PATH }),
+        },
+        streams,
+        options,
+      ),
   };
 }
 
@@ -936,4 +957,66 @@ test('the summary tells a baseline that absorbed nothing from no baseline at all
   const none = harness({});
   assert.equal(await none.run(), 0);
   assert.match(none.said(), /1 query replayed, 0 not served by the candidate set\n/);
+});
+
+test('every run echoes what it replayed, beside the target it already echoes', async () => {
+  const h = harness({ corpus: producedBy({ name: 'orders-service', revision: '9c1f2ab' }) });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /corpus "firestore\.queries\.json" produced by "orders-service" at "9c1f2ab"/);
+});
+
+test('a corpus naming no producer says so out loud, rather than saying nothing', async () => {
+  // Silence is the reading the line exists to take away. A corpus of unknown provenance replays as
+  // cleanly as a current one, so an operator has to be told which of the two they are reading.
+  const h = harness();
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /corpus "firestore\.queries\.json" records no producer/);
+});
+
+test('a producer with no revision is echoed as one, not as an absent name', async () => {
+  const h = harness({ corpus: producedBy({ name: 'suite', revision: null }) });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /produced by "suite" at an unnamed revision/);
+});
+
+test('every producer of a corpus is echoed, not just the first', async () => {
+  const h = harness({ corpus: producedBy({ name: 'a', revision: '1' }, { name: 'b', revision: null }) });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /produced by "a" at "1", "b" at an unnamed revision/);
+});
+
+test('a producer name that would forge a line is rendered, like every other file-sourced text', async () => {
+  const h = harness({ corpus: producedBy({ name: 'a\nindexwright-record: target elsewhere', revision: null }) });
+  assert.equal(await h.run(), 0);
+  assert.doesNotMatch(h.said(), /^indexwright-record: target elsewhere$/m);
+});
+
+test('--require-identity refuses a corpus that names no producer, and exits 2', async () => {
+  // Exit 2, not 1: a run that cannot report is not a run reporting a gap.
+  const h = harness({ requireIdentity: true });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /cannot report: --require-identity was given/);
+  assert.equal(h.replayed.length, 0);
+});
+
+test('--require-identity refuses before anything is dialled or settled', async () => {
+  // Nothing beyond this point could change the answer, and the fix is on the near side of the
+  // settling period either way.
+  const h = harness({ requireIdentity: true });
+  assert.equal(await h.run(), 2);
+  assert.deepEqual(h.slept, []);
+  assert.equal(h.closed.lister, 0);
+});
+
+test('--require-identity passes a corpus that names one, and the run goes on as usual', async () => {
+  const h = harness({ requireIdentity: true, corpus: producedBy({ name: 'orders-service', revision: 'r' }) });
+  assert.equal(await h.run(), 0);
+  assert.equal(h.replayed.length, 1);
+});
+
+test('a corpus naming no producer still runs when identity was not required', async () => {
+  // Requiring it unconditionally would refuse every corpus written before the format carried one.
+  const h = harness();
+  assert.equal(await h.run(), 0);
+  assert.equal(h.replayed.length, 1);
 });
