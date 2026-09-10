@@ -5,7 +5,7 @@ is offline and none of them opens a channel, so the verb's network path — and 
 verdicts rest on — went unobserved. This directory is the harness for the run that observed them, and
 the runbook below is the one that was followed.
 
-It answered four things at once, which is why it was worth doing before anything else:
+It answered five things at once, which is why it was worth doing before anything else:
 
 | Question | Instrument | Status before the run | What the run observed |
 |:--|:--|:--|:--|
@@ -76,7 +76,7 @@ wrong guess in a flag stops a correct run. Their readings, recorded rather than 
   equality branches and `b == null` is an equality, and single-field indexes cover that class.
 
 **The limit reading (step 5b), which is what issue #43 now turns on.** Every one of the eight shapes
-answered the same way bare and with `limit(1)`, and both directions matter. On the five served
+answered the same way bare and with `limit(1)`, and both directions matter. On the six served
 shapes the limit did not lose an index; on **S6 and S8 the limit did not *gain* one** — both stayed
 `FAILED_PRECONDITION` — and that is the direction §2 cares about, because a limit that rescued an
 unserved query into `served` is the false clean verdict `replay.ts` declines to risk.
@@ -84,6 +84,24 @@ unserved query into `served` is the false clean verdict `replay.ts` declines to 
 Beside it, what the limit costs nothing to buy: **S3 fell from 500 documents to 1, S4 from 429 to 1,
 S5 from 71 to 1.** S4 is the entry #43 names and it reproduced the earlier run's count exactly, which
 is also the two instruments agreeing about the same collection.
+
+Three of the six, and not the other three: S1, S2 and S7 are recorded reading 0 either way, so they
+say nothing about the read bound in either direction. Only a shape that read more than one document
+bare can, which is why `readProblems` in `summarise.mjs` requires at least one and exits 2 when no
+shape supplies it — a run against an unseeded collection otherwise agrees with itself perfectly while
+measuring nothing.
+
+> **S1's 0 is not consistent with this same file and should not be relied on until it is re-run.**
+> S1 is `a == <sentinel> AND b > <sentinel>`. `seed.mjs` cycles `b` over
+> `['alpha','beta',42,true,null,{k:1},[1,2]]`, and a map and an array both sort *above* every string
+> in Firestore's value-type ordering, so for a 500-document seed 142 documents satisfy `b > <sentinel>`
+> — 71 if an array in an ASC slot is indexed per element rather than whole, but never 0. The same
+> file's S4 confirms it arithmetically: `b != <sentinel>` read 429, which decomposes exactly as 287
+> below the sentinel plus 142 above it, and those 142 are S1's filter. Whichever indexing model holds,
+> S1 cannot read 0 on the collection S3=500, S4=429 and S5=71 prove was seeded. The verdict half of
+> the run is unaffected — S1 answered `served` both ways — and so is the `limit(1)` conclusion; what
+> is in doubt is only S1's document count, and with it whether the sentence above should read *four*
+> shapes falling to 1 rather than three.
 
 Two things that reading does not say. The 500 on S3 is the seed's doing rather than a new class of
 expensive operator — `seed.mjs` writes the sentinel into `a` and into `tags` for every document, so
@@ -116,12 +134,12 @@ What the run did settle is the price. The readiness gate restarts on every invoc
 
 | File | What it is |
 |:--|:--|
-| `shapes.mjs` | The eight query shapes, defined once and shared by both instruments so they cannot drift apart |
+| `shapes.mjs` | The eight query shapes, defined once and shared by all three instruments so they cannot drift apart |
 | `suite.mjs` | The driver `record` captures from. `PROBE_SHAPES=S1,S2` issues a subset |
 | `differential.mjs` | The §7 instrument: issues the shapes, writes a JSON report to stdout |
 | `limit.mjs` | The #43 instrument: issues each shape bare and with `limit(1)`, and reports what each read |
 | `expectations.mjs` | Their command line — argv in, the expectation map out. Pure, so what an operator types is testable |
-| `summarise.mjs` | Their stop rule — rows in, findings and an exit code out. Pure, so it can be tested without a database |
+| `summarise.mjs` | Their stop rule — rows in, findings and an exit code out, for the verdicts and for the read counts alike. Pure, so it can be tested without a database |
 | `expectations.test.mjs`, `summarise.test.mjs` | Tests for the two halves of the stop rule. Run in `npm test` alongside the packages' suites |
 | `seed.mjs` | Populates the collection, so #43's cost is observed rather than deduced |
 | `watch-readiness.mjs` | Timestamped index states through the same Admin path `check` uses |
@@ -370,8 +388,23 @@ reporting coverage for a query the suite never issued.
 
 Then read the `documents read` lines at the end, which are the other half of the question. A limit
 that is selection-neutral is only worth adopting if it also bounds the read: **S4 should report 429
-documents bare and 1 with `limit(1)`**, the same 429 step 5 observes. A `limit-1` row reporting more
-than 1 would mean the limit is not doing what it is being adopted for, whatever the verdicts say.
+documents bare and 1 with `limit(1)`**, the same 429 step 5 observes.
+
+That half is carried by the exit status too, and it has to be, because the reading it replaced could
+not fail: `read` is `snapshot.size` and the limited issuing is `.limit(1)`, so "a `limit-1` row
+reporting more than 1" is unreachable by construction — it was a stop condition with no failing
+branch. What is enforced instead is reachable from both sides: **a shape that read more than one
+document bare must read exactly one with the limit**, and **at least one shape must have read more
+than one document bare.** The first catches a limit that stopped applying; the second catches a run
+against a collection that was never seeded, where every shape reads 0 both ways and the counts agree
+while measuring nothing. Either prints `READ HALF UNMEASURED` and exits 2.
+
+**The exit codes for this step**, which are not step 3's even though the verdict rule is shared:
+`0` nothing to report; `1` a shape disagreed bare versus limited, so `limit(1)` is not available as a
+fix; `2` the run could not answer — an expectation was violated, an operand did not reach the
+backend, or the read half measured nothing. As everywhere else, 2 outranks 1. The falsification line
+names **the limit-neutrality claim (issue #43)**, not SPEC §7: this run holds the operand at the
+sentinel and varies only the limit, so it has nothing to say about §7.
 
 The two readings are independent, and both are needed. The verdicts say whether the fix is
 *allowed*; the counts say whether it is worth making.
