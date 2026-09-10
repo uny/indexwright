@@ -45,7 +45,7 @@
 import { Firestore } from '@google-cloud/firestore';
 import { COLLECTION, SENTINEL, SHAPES } from './shapes.mjs';
 import { UsageError, parseExpectations } from './expectations.mjs';
-import { summarise, summaryLines } from './summarise.mjs';
+import { readProblems, summarise, summaryLines } from './summarise.mjs';
 
 // The guard `check` applies, for the reason `check` applies it. An emulator enforces no composite
 // indexes at all, so every shape would answer served whatever the limit did.
@@ -103,6 +103,9 @@ const ISSUINGS = [
   { name: 'limit-1', apply: (query) => query.limit(1) },
 ];
 
+/** The two names, read from the table rather than respelled, so the report cannot drift from it. */
+const [BARE, LIMITED] = ISSUINGS.map((issuing) => issuing.name);
+
 /** Every slot filled from the sentinel, which is the one operand `replay.ts` ever sends. */
 const values = {
   scalar: () => SENTINEL,
@@ -133,35 +136,51 @@ for (const shape of SHAPES) {
 const { findings, unreliable, unexpected, exitCode } = summarise(results, SHAPES, expected);
 
 process.stderr.write('\n');
-for (const line of summaryLines({ findings, unreliable, unexpected })) {
+for (const line of summaryLines({
+  findings,
+  unreliable,
+  unexpected,
+  // Not `differential.mjs`'s two words. This run holds the operand at the sentinel and varies
+  // the limit, so `FALSIFIES SPEC §7 … (2 of 2 operands)` would name a claim it never tested and
+  // count a limit as an operand — the very thing this file's header argues it is not.
+  claim: 'the limit-neutrality claim (issue #43)',
+  unit: 'issuings',
+})) {
   process.stderr.write(`probe-limit: ${line}\n`);
 }
 
-// Said separately from the verdict, because it is the other half of what this run is for. A
-// selection-neutral limit is only worth adopting if it also bounds the read, and the two are
-// independent observations: the verdict says whether the fix is *allowed*, this says whether it is
-// worth making.
+// The other half of what this run is for, and an independent observation from the verdict: the
+// verdict says whether the fix is *allowed*, this says whether it is worth making. It carries its own
+// stop rule because the one the runbook used to carry could not fail — `read` is `snapshot.size` and
+// the limited issuing is `.limit(1)`, so "a limit-1 row reporting more than 1" is unreachable by
+// construction. `readProblems` is the reachable replacement; it lives in `summarise.mjs` so that a
+// gate this run exits 2 on is executed by a test rather than asserted here.
 process.stderr.write('\n');
+const { problems } = readProblems(results, SHAPES, BARE, LIMITED);
 for (const shape of SHAPES) {
-  const bare = results.find((r) => r.shape === shape.id && r.variant === 'no-limit');
-  const limited = results.find((r) => r.shape === shape.id && r.variant === 'limit-1');
+  const bare = results.find((r) => r.shape === shape.id && r.variant === BARE);
+  const limited = results.find((r) => r.shape === shape.id && r.variant === LIMITED);
   if (bare?.read === undefined || limited?.read === undefined) continue;
   process.stderr.write(
     `probe-limit: ${shape.id} read ${bare.read} documents bare and ${limited.read} with limit(1)\n`,
   );
 }
+for (const problem of problems) process.stderr.write(`probe-limit: READ HALF UNMEASURED — ${problem}\n`);
 
 process.stdout.write(
-  `${JSON.stringify({ project, database, expected: Object.fromEntries(expected), results, findings, unreliable, unexpected }, null, 2)}\n`,
+  `${JSON.stringify({ project, database, expected: Object.fromEntries(expected), results, findings, unreliable, unexpected, readProblems: problems }, null, 2)}\n`,
 );
 // Set before the teardown, for the reason `differential.mjs` sets it before its own: `terminate()`
 // can reject on a network drop after the last query, and a rejected top-level await in an entry
 // module exits 1 without reaching anything after it — discarding the stop rule by way of the event
 // most likely to accompany the failures it exits 2 on.
-process.exitCode = exitCode;
+// 2 rather than 1, and it outranks a falsification, for the reason `summarise.mjs` gives: 2 is
+// "could not answer", and a run whose read half measured nothing has not answered the second of the
+// two questions step 5b exists to ask.
+process.exitCode = problems.length > 0 ? 2 : exitCode;
 try {
   await db.terminate();
 } catch (error) {
   process.stderr.write(`probe-limit: closing the client failed: ${error?.message ?? String(error)}\n`);
-  process.stdout.write('', () => process.exit(exitCode));
+  process.stdout.write('', () => process.exit(process.exitCode));
 }

@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SHAPES as REAL_SHAPES } from './shapes.mjs';
-import { summarise, summaryLines } from './summarise.mjs';
+import { readProblems, summarise, summaryLines } from './summarise.mjs';
 
 const SHAPES = [{ id: 'S1' }, { id: 'S2' }];
 const row = (shape, variant, verdict, extra = {}) => ({ shape, variant, verdict, ...extra });
@@ -240,4 +240,67 @@ test('the real shape set takes part in the comparison, all eight of it', () => {
     [],
     'a real shape excluded from the §7 comparison is a hole in the experiment, not a clean run',
   );
+});
+
+// The read half's stop rule. It exists because the condition the runbook carried before it could not
+// fail: `read` is `snapshot.size` and the limited issuing is `.limit(1)`, so "a limit-1 row reporting
+// more than 1" is unreachable. These assert that both of its conditions are reachable from both sides.
+
+const READ_SHAPES = [{ id: 'S3' }, { id: 'S4' }, { id: 'S6' }];
+
+/** Rows in the shape `limit.mjs` collects them, for a run that behaved. */
+function readRows({ s3 = [500, 1], s4 = [429, 1] } = {}) {
+  return [
+    { shape: 'S3', variant: 'no-limit', verdict: 'served', read: s3[0] },
+    { shape: 'S3', variant: 'limit-1', verdict: 'served', read: s3[1] },
+    { shape: 'S4', variant: 'no-limit', verdict: 'served', read: s4[0] },
+    { shape: 'S4', variant: 'limit-1', verdict: 'served', read: s4[1] },
+    // uncovered on both sides: no `read` at all, and must not be mistaken for a bounded read
+    { shape: 'S6', variant: 'no-limit', verdict: 'uncovered' },
+    { shape: 'S6', variant: 'limit-1', verdict: 'uncovered' },
+  ];
+}
+
+test('a run where the limit bounded every multi-document read has nothing to report', () => {
+  const { problems, measured } = readProblems(readRows(), READ_SHAPES, 'no-limit', 'limit-1');
+  assert.equal(measured, true);
+  assert.deepEqual(problems, []);
+});
+
+test('a limit that stopped bounding the read is caught, which the old condition could not be', () => {
+  // The plausible edit: `limit-1` silently becomes `(query) => query`, as `no-limit` above it is.
+  const { problems } = readProblems(readRows({ s3: [500, 500], s4: [429, 429] }), READ_SHAPES, 'no-limit', 'limit-1');
+  assert.equal(problems.length, 2, 'every shape that read more than one document bare reports');
+  assert.match(problems[0], /^S3 read 500 documents bare but 500 with limit\(1\)/);
+});
+
+test('a collection that was never seeded does not pass as a clean read half', () => {
+  // Every served shape matches nothing — an unseeded collection, or one whose `a` is not the
+  // sentinel. The counts agree perfectly and measure nothing, which used to exit 0.
+  const { problems, measured } = readProblems(readRows({ s3: [0, 0], s4: [0, 0] }), READ_SHAPES, 'no-limit', 'limit-1');
+  assert.equal(measured, false);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /no shape read more than one document bare/);
+});
+
+test('a shape matching exactly one document bare cannot vouch for the limit either way', () => {
+  const { problems, measured } = readProblems(readRows({ s3: [1, 1], s4: [1, 1] }), READ_SHAPES, 'no-limit', 'limit-1');
+  assert.equal(measured, false, '1 -> 1 is what an unbounded query does too, so it proves nothing');
+  assert.match(problems[0], /no shape read more than one document bare/);
+});
+
+test('the summary lines name the caller\'s own claim, not the other instrument\'s', () => {
+  const rows = [
+    { shape: 'S6', variant: 'no-limit', verdict: 'uncovered' },
+    { shape: 'S6', variant: 'limit-1', verdict: 'served' },
+  ];
+  const summary = summarise(rows, [{ id: 'S6' }], new Map());
+  const [dflt] = summaryLines(summary);
+  assert.match(dflt, /FALSIFIES SPEC §7:/, 'the default is differential.mjs\'s, and must not move');
+  assert.match(dflt, /2 of 2 operands/);
+  const [labelled] = summaryLines({ ...summary, claim: 'the limit-neutrality claim (issue #43)', unit: 'issuings' });
+  assert.match(labelled, /FALSIFIES the limit-neutrality claim \(issue #43\):/);
+  assert.match(labelled, /2 of 2 issuings/);
+  assert.doesNotMatch(labelled, /SPEC §7/, 'a limit run must never attribute its finding to §7');
+  assert.doesNotMatch(labelled, /operands/, 'a limit is not an operand');
 });
