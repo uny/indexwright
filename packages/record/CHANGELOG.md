@@ -86,8 +86,9 @@ again, by its own `corpusVersion`.
   reader can only guess at — and §7 now says so. What a reader still may not do is read a corpus of
   one version as though it were another: the member set is part of what the integer names.
 
-- **`buildCorpus` takes a third argument**, the producers, defaulting to none. `Corpus` gains a
-  `producers` member. The JS API is provisional before 1.0 (§10), and this is named here because a
+- **`buildCorpus` takes a third argument**, the producers, defaulting to none, and throws
+  `CorpusError` on an empty name or an empty revision — nothing this package writes may fail to read
+  back, and the reader refuses both. `Corpus` gains a `producers` member. The JS API is provisional before 1.0 (§10), and this is named here because a
   caller greps the changelog for the symbol it calls.
 
 ### Fixed

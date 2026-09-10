@@ -73,6 +73,11 @@ export function buildCorpus(
 function sortProducers(producers: Iterable<Producer>): Producer[] {
   const byPair = new Map<string, Producer>();
   for (const producer of producers) {
+    // Refused here for the same reason the filter depth is bounded where it is written: nothing
+    // this package writes may fail to read back. The CLI has already refused an empty value, but
+    // the JS API reaches this directly, and a corpus its own reader declines is not one.
+    if (producer.name === '') throw new CorpusError('a producer name is empty');
+    if (producer.revision === '') throw new CorpusError('a producer revision is empty; an unnamed revision is null');
     byPair.set(`${producer.name}\u0000${producer.revision ?? ''}`, {
       name: producer.name,
       revision: producer.revision,

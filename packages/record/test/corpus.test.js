@@ -372,3 +372,10 @@ test('a producer carrying a member the format does not define is refused', () =>
     CorpusError,
   );
 });
+
+test('a corpus this package writes is one it can read back, producers included', () => {
+  // The invariant the filter-depth ceiling exists for, held on the other side too: the CLI refuses
+  // an empty value before it gets here, but the JS API reaches `buildCorpus` directly.
+  assert.throws(() => buildCorpus([], [], [{ name: '', revision: null }]), CorpusError);
+  assert.throws(() => buildCorpus([], [], [{ name: 'a', revision: '' }]), CorpusError);
+});
