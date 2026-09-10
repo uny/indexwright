@@ -397,12 +397,14 @@ branch. What is enforced instead is reachable from both sides: **a shape that re
 document bare must read exactly one with the limit**, and **at least one shape must have read more
 than one document bare.** The first catches a limit that stopped applying; the second catches a run
 against a collection that was never seeded, where every shape reads 0 both ways and the counts agree
-while measuring nothing. Either prints `READ HALF UNMEASURED` and exits 2.
+while measuring nothing. Either prints `READ BOUND NOT ESTABLISHED` and exits 2 — one label for both,
+because both leave the same conclusion unavailable: the first falsifies it, the second never tested it.
 
 **The exit codes for this step**, which are not step 3's even though the verdict rule is shared:
 `0` nothing to report; `1` a shape disagreed bare versus limited, so `limit(1)` is not available as a
-fix; `2` the run could not answer — an expectation was violated, an operand did not reach the
-backend, or the read half measured nothing. As everywhere else, 2 outranks 1. The falsification line
+fix; `2` the run could not answer — an expectation was violated, an issuing did not reach the
+backend, the limit did not bound a read it should have, or no shape read enough for the question to
+arise. As everywhere else, 2 outranks 1. The falsification line
 names **the limit-neutrality claim (issue #43)**, not SPEC §7: this run holds the operand at the
 sentinel and varies only the limit, so it has nothing to say about §7.
 

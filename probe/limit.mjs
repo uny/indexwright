@@ -165,7 +165,10 @@ for (const shape of SHAPES) {
     `probe-limit: ${shape.id} read ${bare.read} documents bare and ${limited.read} with limit(1)\n`,
   );
 }
-for (const problem of problems) process.stderr.write(`probe-limit: READ HALF UNMEASURED — ${problem}\n`);
+// One label for both conditions, because both mean the same thing about the conclusion: a limit
+// that did not bound the read falsifies it, and a run with nothing to bound leaves it unsupported.
+// `UNMEASURED` was wrong for the first — there the measurement succeeded and showed the limit off.
+for (const problem of problems) process.stderr.write(`probe-limit: READ BOUND NOT ESTABLISHED — ${problem}\n`);
 
 process.stdout.write(
   `${JSON.stringify({ project, database, expected: Object.fromEntries(expected), results, findings, unreliable, unexpected, readProblems: problems }, null, 2)}\n`,
