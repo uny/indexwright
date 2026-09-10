@@ -55,6 +55,11 @@ again, by its own `corpusVersion`.
   liable to end in a `DEADLINE_EXCEEDED` that classifies as `failed` and stops the run. The query
   now carries `limit(1)`.
 
+  The query is the one `buildReplayQuery` returns, which is exported (§10 calls the JS API
+  provisional before 1.0), so a caller reaching it directly gets one document where it used to get
+  the result set. Named here rather than left to `check`'s description, because a caller greps the
+  changelog for the symbol it calls.
+
   **The limit was measured before it was applied, in the direction §2 cares about.** A limit that
   narrowed index selection would turn a query that should have failed into a clean verdict, which is
   worse than a false alarm. Measured against a deployed candidate set over the probe's eight shapes:
