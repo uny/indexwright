@@ -70,6 +70,29 @@ test('a replayed query carries limit(1), because the answer is the status and no
   assert.ok(!query.isEqual(db.collection('orders').where(filter)));
 });
 
+test('the limit is the one the SDK sends first, not the one it sends last', () => {
+  // `isEqual` compares `limit` and stops there: `limitType` is not among the options it looks at,
+  // so it reads `limitToLast(1)` as equal to `limit(1)` and every assertion above holds for both.
+  // That is the one other spelling the SDK offers and the one a plausible edit reaches for, and it
+  // is not a cosmetic difference. A plan carrying no `orderBy` — most of them, since SPEC §7 records
+  // none unless the query sorted — is refused outright at `get()`, which arrives with no gRPC code
+  // and so classifies as `failed`: a covered entry reported unanswerable, and the run stopped at it.
+  // A plan that does carry one is worse for being quiet, and is what this pins. `limitToLast`
+  // reverses the sort on the wire, so a `DESCENDING` the corpus recorded is sent `ASCENDING` and the
+  // index set is asked about a query nobody issued — the reading §2 forbids most, arriving through
+  // the option meant to bound the read. Pinned on the proto, because the wire is where the two stop
+  // being equal.
+  const plan = planOf({
+    collectionGroup: 'orders',
+    where: { op: 'AND', filters: [{ fieldPath: 'a', op: 'EQUAL' }] },
+    orderBy: [{ fieldPath: 'b', direction: 'DESCENDING' }],
+  });
+  const sent = buildReplayQuery(firestore, db, plan).toProto().structuredQuery;
+
+  assert.deepEqual(sent.limit, { value: 1 });
+  assert.deepEqual(sent.orderBy, [{ field: { fieldPath: 'b' }, direction: 'DESCENDING' }]);
+});
+
 test('the scope decides which of the two collections is queried', () => {
   const shape = { collectionGroup: 'orders', where: { op: 'AND', filters: [{ fieldPath: 'a', op: 'EQUAL' }] } };
   const filter = Filter.where(new FieldPath('a'), '==', REPLAY_SENTINEL);
