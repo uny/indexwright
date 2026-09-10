@@ -13,3 +13,9 @@ ui-debug.log
 # being ignored by this very change, and `differential-*.json` does not match it.
 differential.json
 differential-*.json
+# Step 5b's report, ignored for the same reason and on the same terms as step 5's. It was committed
+# once, at 323188c, and this is the entry that stops the next run of the runbook from dirtying a
+# tracked file — the redirect in step 5b writes here, and a shell truncates the target before the
+# script's own guard can refuse the run. The readings it carried are quoted in the README's prose,
+# which is where step 5's 429 lives too.
+limit-*.json

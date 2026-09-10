@@ -119,8 +119,16 @@ export function summarise(results, shapes, expected = new Map()) {
   return { findings, unreliable, unexpected, falsified, untested, exitCode };
 }
 
-/** The summary lines, in report order. Returned rather than written, so a test can read them. */
-export function summaryLines({ findings, unreliable, unexpected }) {
+/**
+ * The summary lines, in report order. Returned rather than written, so a test can read them.
+ *
+ * `claim` and `unit` are the two words that are *not* shared between the instruments, and they
+ * default to `differential.mjs`'s so that its output is unchanged. `limit.mjs` compares the same
+ * shape issued two ways rather than one shape over two operands, so a line reading `FALSIFIES SPEC
+ * §7 … (2 of 2 operands)` would name a claim that run never tested and count a limit as an operand
+ * — which `limit.mjs`'s own header argues at length it is not.
+ */
+export function summaryLines({ findings, unreliable, unexpected, claim = 'SPEC §7', unit = 'operands' }) {
   const lines = [];
   for (const finding of findings) {
     // The shortfall marker, on every kind that has a comparison to fall short of. Attached here
@@ -142,20 +150,20 @@ export function summaryLines({ findings, unreliable, unexpected }) {
       // `N of M`, always, even when equal. A bare `constant across 2 operands` gives a reader
       // nothing to compare 2 against, and the comparison is the point.
       lines.push(
-        `${finding.shape} constant across ${finding.variants} of ${finding.issued} operands: ` +
+        `${finding.shape} constant across ${finding.variants} of ${finding.issued} ${unit}: ` +
           `${finding.verdict}${short}`,
       );
     } else if (finding.kind === 'not-applicable') {
       lines.push(`${finding.shape} has no operand to vary; answered ${finding.verdict}${unevaluated}`);
     } else if (finding.kind === 'untested') {
       lines.push(
-        `${finding.shape} UNTESTED — only ${finding.reached} of ${finding.issued} operands ` +
+        `${finding.shape} UNTESTED — only ${finding.reached} of ${finding.issued} ${unit} ` +
           `entered the comparison${unevaluated}`,
       );
     } else {
       lines.push(
-        `${finding.shape} FALSIFIES SPEC §7: ${JSON.stringify(finding.byVariant)} ` +
-          `(${finding.variants} of ${finding.issued} operands)${short}${unevaluated}`,
+        `${finding.shape} FALSIFIES ${claim}: ${JSON.stringify(finding.byVariant)} ` +
+          `(${finding.variants} of ${finding.issued} ${unit})${short}${unevaluated}`,
       );
     }
   }
@@ -169,4 +177,47 @@ export function summaryLines({ findings, unreliable, unexpected }) {
     lines.push(`${row.shape} AGAINST EXPECTATION — expected ${row.expected}, answered ${row.actual}`);
   }
   return lines;
+}
+
+/**
+ * The stop rule for the *read* half of the limit probe, which the verdict rule above does not carry.
+ *
+ * Here, pure and tested, for the reason `parseExpectations` is here: the runbook's original count-side
+ * condition — "a `limit-1` row reporting more than 1 would mean the limit is not doing what it is
+ * being adopted for" — could never fail. `read` is `snapshot.size` and the limited issuing is
+ * `.limit(1)`, so that branch is unreachable by construction, and a stop condition with no failing
+ * branch is a claim rather than a mechanism. These two conditions are reachable from both sides.
+ *
+ * @param results rows as `limit.mjs` collected them: `{shape, variant, read?}`
+ * @param shapes the shape definitions, in report order
+ * @param bare the variant name of the unbounded issuing
+ * @param limited the variant name of the `limit(1)` issuing
+ * @returns `{ problems, measured }` — `problems` empty means the read half actually measured something
+ */
+export function readProblems(results, shapes, bare, limited) {
+  const problems = [];
+  let measured = false;
+  for (const shape of shapes) {
+    const before = results.find((r) => r.shape === shape.id && r.variant === bare);
+    const after = results.find((r) => r.shape === shape.id && r.variant === limited);
+    if (before?.read === undefined || after?.read === undefined) continue;
+    // Only a shape that read more than one document bare can say anything about bounding a read; a
+    // shape matching zero or one document reads the same either way whether the limit applied or not.
+    if (before.read > 1) {
+      measured = true;
+      if (after.read !== 1) {
+        problems.push(
+          `${shape.id} read ${before.read} documents bare but ${after.read} with limit(1), ` +
+            'so the limit did not bound the read',
+        );
+      }
+    }
+  }
+  if (!measured) {
+    problems.push(
+      'no shape read more than one document bare, so nothing here measures whether limit(1) bounds ' +
+        'a read — seed the collection (probe/seed.mjs) and run this against the seeded set',
+    );
+  }
+  return { problems, measured };
 }
