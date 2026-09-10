@@ -18,9 +18,10 @@ const { FieldPath, Filter, Firestore } = firestore;
  * A client, constructed rather than faked.
  *
  * Constructing opens no channel — the gRPC stub is lazy, which is the whole of issue #39 — so the
- * materialisation can be compared against the SDK's own `isEqual` offline. That comparison is the
- * only way to pin the mapping without a database, and the mapping is where a replayed query would
- * stop being the recorded one.
+ * materialisation can be pinned offline, and the mapping is where a replayed query would stop being
+ * the recorded one. Two comparisons reach it. The SDK's own `isEqual` is the readable one and is
+ * what most of this file uses; the proto `toProto` builds is the one to fall to for anything
+ * `isEqual` does not look at, and `limitType` is that.
  */
 const db = new Firestore({ projectId: 'indexwright-probe', databaseId: '(default)' });
 
@@ -49,9 +50,52 @@ test('a filtered query materialises as the query the SDK would have been asked f
         Filter.where(new FieldPath('total'), '>', REPLAY_SENTINEL),
       ),
     )
-    .orderBy(new FieldPath('total'), 'desc');
+    .orderBy(new FieldPath('total'), 'desc')
+    .limit(1);
 
   assert.ok(buildReplayQuery(firestore, db, plan).isEqual(expected));
+});
+
+test('a replayed query carries limit(1), because the answer is the status and not the rows', () => {
+  const plan = planOf({
+    collectionGroup: 'orders',
+    where: { op: 'AND', filters: [{ fieldPath: 'status', op: 'NOT_EQUAL' }] },
+  });
+  const filter = Filter.where(new FieldPath('status'), '!=', REPLAY_SENTINEL);
+  const query = buildReplayQuery(firestore, db, plan);
+
+  assert.ok(query.isEqual(db.collection('orders').where(filter).limit(1)));
+  // Asserted the other way round as well: `isEqual` compares the query options, and were the limit
+  // not among the ones it compares, every positive assertion in this file would hold whether or not
+  // the limit was ever applied. This is the one that fails if the limit goes missing.
+  assert.ok(!query.isEqual(db.collection('orders').where(filter)));
+});
+
+test('the limit is the one the SDK sends first, not the one it sends last', () => {
+  // `isEqual` compares `limit` and stops there: `limitType` is not among the options it looks at,
+  // so it reads `limitToLast(1)` as equal to `limit(1)` and every assertion above holds for both.
+  // That is the one other spelling the SDK offers, and the one a plausible edit reaches for.
+  //
+  // What it would cost is certain in one direction and unmeasured in the other, and only the first
+  // is claimed here. A plan the query never sorted carries no `orderBy`, and `limitToLast` refuses
+  // that outright at `get()` — a plain `Error` with no gRPC code, so `classifyRejection` answers
+  // `failed`, the one kind that halts the run, on an entry the candidate set covers. A plan that
+  // does carry one is sent with every direction flipped, which is not the query the corpus
+  // recorded. Whether the index set then answers it differently is a selection claim, and a
+  // composite index does serve its own exact reverse, so the reading is not obviously wrong — it is
+  // the sort of thing this package declines to assert without measuring, and it is not asserted.
+  //
+  // Pinned on the proto either way, because the wire is where the two stop being equal. `toProto`
+  // is the SDK's own internal, so an upgrade breaks this loudly rather than quietly.
+  const plan = planOf({
+    collectionGroup: 'orders',
+    where: { op: 'AND', filters: [{ fieldPath: 'a', op: 'EQUAL' }] },
+    orderBy: [{ fieldPath: 'b', direction: 'DESCENDING' }],
+  });
+  const sent = buildReplayQuery(firestore, db, plan).toProto().structuredQuery;
+
+  assert.deepEqual(sent.limit, { value: 1 });
+  assert.deepEqual(sent.orderBy, [{ field: { fieldPath: 'b' }, direction: 'DESCENDING' }]);
 });
 
 test('the scope decides which of the two collections is queried', () => {
@@ -59,13 +103,13 @@ test('the scope decides which of the two collections is queried', () => {
   const filter = Filter.where(new FieldPath('a'), '==', REPLAY_SENTINEL);
 
   const group = buildReplayQuery(firestore, db, planOf({ ...shape, queryScope: 'COLLECTION_GROUP' }));
-  assert.ok(group.isEqual(db.collectionGroup('orders').where(filter)));
+  assert.ok(group.isEqual(db.collectionGroup('orders').where(filter).limit(1)));
   // A `COLLECTION`-scope entry replays against the *root* collection of that id: the corpus records
   // a collection id and never the parent path, and index selection is by id and scope, so the root
   // collection asks the same question of the same index.
   const collection = buildReplayQuery(firestore, db, planOf(shape));
-  assert.ok(collection.isEqual(db.collection('orders').where(filter)));
-  assert.ok(!collection.isEqual(db.collectionGroup('orders').where(filter)));
+  assert.ok(collection.isEqual(db.collection('orders').where(filter).limit(1)));
+  assert.ok(!collection.isEqual(db.collectionGroup('orders').where(filter).limit(1)));
 });
 
 test('a query that carried no where replays without one, rather than with an empty AND', () => {
@@ -73,7 +117,7 @@ test('a query that carried no where replays without one, rather than with an emp
   // `CompositeFilter` must carry at least one filter on the wire. Sent as one it is an
   // INVALID_ARGUMENT, which is not a statement about the index set.
   const query = buildReplayQuery(firestore, db, planOf({ collectionGroup: 'orders' }));
-  assert.ok(query.isEqual(db.collection('orders')));
+  assert.ok(query.isEqual(db.collection('orders').limit(1)));
 });
 
 test('a disjunction keeps its shape, and nests', () => {
@@ -95,7 +139,7 @@ test('a disjunction keeps its shape, and nests', () => {
         Filter.where(new FieldPath('c'), '<', REPLAY_SENTINEL),
       ),
     ),
-  );
+  ).limit(1);
   assert.ok(buildReplayQuery(firestore, db, plan).isEqual(expected));
 });
 
@@ -121,7 +165,7 @@ test('the operand shapes SPEC §7 singles out are the ones the SDK is handed', (
       Filter.where(FieldPath.documentId(), '==', reference),
       Filter.where(FieldPath.documentId(), 'in', [reference]),
     ),
-  );
+  ).limit(1);
   assert.ok(buildReplayQuery(firestore, db, plan).isEqual(expected));
 });
 
@@ -145,7 +189,7 @@ test('a unary filter is replayed as the comparison the client turns back into on
       Filter.where(new FieldPath('c'), '==', Number.NaN),
       Filter.where(new FieldPath('d'), '!=', Number.NaN),
     ),
-  );
+  ).limit(1);
   assert.ok(buildReplayQuery(firestore, db, plan).isEqual(expected));
 });
 

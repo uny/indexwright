@@ -45,6 +45,41 @@ again, by its own `corpusVersion`.
   evidence would drop a gap that comes back as a finding the next time it is reached. Whether a stale
   entry should itself fail the run is left open; #57 names it a separate decision.
 
+### Fixed
+
+- **A replayed query reads one document rather than the collection** (issue #43). What `check` asks
+  is answered by the RPC's status; the rows come back and are discarded. Until now they came back in
+  full — the synthesised sentinel matches nothing for an equality, but `!=`, `not-in`, and the
+  negated unary operators match every document that merely *has* the field, so an entry recorded
+  from `status != x` replayed as a read of the whole collection, buffered in memory, billed, and
+  liable to end in a `DEADLINE_EXCEEDED` that classifies as `failed` and stops the run. The query
+  now carries `limit(1)`.
+
+  The query is the one `buildReplayQuery` returns, which is exported (§10 calls the JS API
+  provisional before 1.0), so a caller reaching it directly gets one document where it used to get
+  the result set. Named here rather than left to `check`'s description, because a caller greps the
+  changelog for the symbol it calls.
+
+  **The limit was measured before it was applied, in the direction §2 cares about.** A limit that
+  narrowed index selection would turn a query that should have failed into a clean verdict, which is
+  worse than a false alarm. Measured against a deployed candidate set over the probe's eight shapes:
+  no shape changed its answer, the two uncovered ones still answered `FAILED_PRECONDITION` with the
+  limit on — so the limit acquired no index — and the reads collapsed, 429 documents to 1 on the
+  `!=` shape the issue names. That is eight shapes, one operand, one collection and one index set at
+  one moment, and the docstring records it as such rather than as a claim about the planner.
+
+  **What it does not reach is named there too.** All eight shapes are conjunctions against a single
+  collection, while the limit goes on every query replay emits — disjunctions, `COLLECTION_GROUP`
+  scope, `not-in`, `array-contains-any`, the negated unary forms. Those carry it on the argument
+  that a limit is one field on the wire, not on a reading. Closing that needs an `or` shape and a
+  `COLLECTION_GROUP` shape in the probe and another run of step 5b.
+
+  Reading the status without reading the result — the stream closed after the first document that
+  the issue proposes — was implemented and abandoned. `stream()` returns the tail of a `.pipe()`
+  chain, so destroying it unpipes the upstream without cancelling the RPC: `close()` never returns,
+  and the stalled `RunQuery` reissues from its cursor once its deadline passes. It blocks the
+  verdict and reads more than `get()` does.
+
 ## [0.5.0] — 2026-09-06
 
 The `check` verb, and with it the half of the v0.3 coverage check that needs a Firestore client.
