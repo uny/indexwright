@@ -16,6 +16,16 @@ export interface RecordCommand {
   readonly allowRemoteUpstream: boolean;
   /** The command to run with `FIRESTORE_EMULATOR_HOST` pointed at the proxy. */
   readonly argv: readonly string[];
+  /**
+   * What to record as the producer of the corpus, or `undefined` when the caller named none.
+   *
+   * Supplied, never discovered — see `Producer`. Nothing here consults the environment, the
+   * filesystem, or the clock for it: a discovered identity either churns the file on every run or
+   * puts the machine into a committed one.
+   */
+  readonly producer?: string;
+  /** The revision the producer's source was at, or `undefined`. Meaningless without `producer`. */
+  readonly revision?: string;
 }
 
 export interface CheckCommand {
@@ -38,6 +48,15 @@ export interface CheckCommand {
    * about, arriving through the filesystem instead of the environment.
    */
   readonly baseline?: string;
+  /**
+   * Whether the run refuses a corpus that names no producer.
+   *
+   * Off by default, and it has to be: every corpus written before this format version names none,
+   * so requiring identity unconditionally would refuse them all. On, it is a pipeline saying that a
+   * corpus of unknown provenance is not evidence — which is the point of #55, since a stale corpus
+   * replays as cleanly as a current one and exits 0.
+   */
+  readonly requireIdentity: boolean;
 }
 
 export type Command = RecordCommand | CheckCommand | { kind: 'help' } | { kind: 'version' };
@@ -45,6 +64,7 @@ export type Command = RecordCommand | CheckCommand | { kind: 'help' } | { kind: 
 export const DEFAULT_OUT = 'firestore.queries.json';
 export const DEFAULT_EMULATOR = '127.0.0.1:8080';
 export const ALLOW_REMOTE_EMULATOR = '--allow-remote-emulator';
+export const REQUIRE_IDENTITY = '--require-identity';
 export const DEFAULT_CORPUS = DEFAULT_OUT;
 export const DEFAULT_INDEXES = 'firestore.indexes.json';
 
@@ -164,6 +184,8 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
   let out = DEFAULT_OUT;
   let port = 0;
   let allowRemoteUpstream = false;
+  let producer: string | undefined;
+  let revision: string | undefined;
 
   for (let i = 0; i < options.length; i += 1) {
     const argument = options[i] as string;
@@ -202,9 +224,23 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
       case '--port':
         port = parsePort(takeValue(), name);
         break;
+      case '--producer':
+        producer = requireIdentityValue(takeValue(), name);
+        break;
+      case '--revision':
+        revision = requireIdentityValue(takeValue(), name);
+        break;
       default:
         throw new UsageError(`unknown option "${name}"`);
     }
+  }
+
+  // A revision with nothing to attach it to identifies nothing, and writing it alone would put a
+  // bare commit id into a committed file with no statement of what was at it. Refused rather than
+  // ignored: silently dropping the one flag that was given is how a pipeline comes to believe it is
+  // recording provenance that it is not.
+  if (revision !== undefined && producer === undefined) {
+    throw new UsageError('--revision names the revision of a producer; --producer is what names the producer');
   }
 
   if (rest.length === 0) {
@@ -233,7 +269,18 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
     throw new UsageError(error instanceof Error ? error.message : String(error));
   }
 
-  return { kind: 'record', emulator, out, port, allowRemoteUpstream, argv: rest };
+  // Spread rather than set to `undefined`, as `check` does with its baseline: a command built
+  // without an identity has no member for one.
+  return {
+    kind: 'record',
+    emulator,
+    out,
+    port,
+    allowRemoteUpstream,
+    argv: rest,
+    ...(producer === undefined ? {} : { producer }),
+    ...(revision === undefined ? {} : { revision }),
+  };
 }
 
 /**
@@ -259,6 +306,7 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
   let corpus = DEFAULT_CORPUS;
   let indexes = DEFAULT_INDEXES;
   let baseline: string | undefined;
+  let requireIdentity = false;
 
   for (let i = 0; i < options.length; i += 1) {
     const argument = options[i] as string;
@@ -300,6 +348,12 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
       case '--baseline':
         baseline = requirePath(takeValue(), name);
         break;
+      case REQUIRE_IDENTITY:
+        // Takes no value, for the reason `--allow-remote-emulator` does not: with the `=value`
+        // already split off, `--require-identity=false` would read as "off" and turn the guard on.
+        if (inline !== null) throw new UsageError(`${name} takes no value, got "${inline}"`);
+        requireIdentity = true;
+        break;
       default:
         throw new UsageError(`unknown option "${name}"`);
     }
@@ -336,7 +390,15 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
   // Spread rather than set to `undefined`, so a command built without a baseline has no member for
   // one. The two are the same to every reader here; they are not the same to a test that compares
   // the parsed command against a literal.
-  return { kind: 'check', project, database, corpus, indexes, ...(baseline === undefined ? {} : { baseline }) };
+  return {
+    kind: 'check',
+    project,
+    database,
+    corpus,
+    indexes,
+    requireIdentity,
+    ...(baseline === undefined ? {} : { baseline }),
+  };
 }
 
 /**
@@ -426,6 +488,43 @@ export function render(value: string): string {
 }
 
 /**
+ * A producer name or a revision that will still mean itself in a committed file.
+ *
+ * A denylist rather than the allowlist a target segment gets, and the difference is what the value
+ * is for. A target segment names a resource, so anything outside the rules addresses the wrong one;
+ * a producer names a suite or a service to a human reading a diff, and there is no reason a team
+ * cannot write that name in their own language.
+ *
+ * What is refused is what stops the written name from being the name that is read. The corpus is a
+ * committed artefact that arrives through review, and `check` echoes this text onto the same stream
+ * the target is announced on — so a control character or a line terminator forges a line in both
+ * places, and a bidi override reorders the name without altering a character of it. `render` makes
+ * the echo safe on the way out, as it does for a corpus read from disk; a value arriving on this
+ * command line can simply be refused where it enters, and the file gets the same protection.
+ *
+ * The zero-width and invisible formatting characters are refused on the same ground rather than a
+ * different one. They forge nothing on the stream — `render` escapes them there — but the file is
+ * the other place this text is read, and `JSON.stringify` writes them out raw: a name carrying one
+ * is byte-different from the real producer's and pixel-identical to it in the diff a reviewer
+ * reads, which is the whole of what this guard is for.
+ */
+const UNRENDERABLE =
+  /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060\u2066-\u2069\ufeff]|[\u{e0000}-\u{e007f}]/u;
+
+function requireIdentityValue(value: string, option: string): string {
+  if (value === '') throw new UsageError(`${option} needs a value`);
+  if (value.startsWith('-')) {
+    throw new UsageError(`${option} needs a value, got the option ${render(value)}`);
+  }
+  if (UNRENDERABLE.test(value)) {
+    throw new UsageError(
+      `${option} may not hold a control character, a line break, an invisible character, or a bidirectional override, got ${render(value)}`,
+    );
+  }
+  return value;
+}
+
+/**
  * A file path, checked only for having been written at all.
  *
  * Unlike a target segment, what is *in* it is the filesystem's business rather than this parser's —
@@ -495,6 +594,11 @@ export function usage(): string {
     `  --emulator <host:port>  the emulator to forward to (default: $FIRESTORE_EMULATOR_HOST, else ${DEFAULT_EMULATOR})`,
     `  --out <file>            where to write the corpus (default: ${DEFAULT_OUT})`,
     '  --port <n>              port for the proxy to listen on (default: chosen by the OS)',
+    '  --producer <name>       what to record as the producer of this corpus: a suite, a package,',
+    '                          a service. Written into the file so that a stale corpus can be told',
+    '                          from a current one. Nothing is discovered — no timestamp, and no',
+    '                          hostname, username, or path from this machine',
+    '  --revision <rev>        the revision the producer\'s source was at (requires --producer)',
     `  ${ALLOW_REMOTE_EMULATOR}`,
     '                          forward to an emulator that is not on this host. Refused by default:',
     '                          the proxy authenticates nothing and forwards verbatim, so a wrong',
@@ -525,6 +629,9 @@ export function usage(): string {
     `  --indexes <file>        the candidate index declarations (default: ${DEFAULT_INDEXES})`,
     '  --baseline <file>       gaps already accepted by this project (no default). An entry in it',
     '                          is reported and does not fail the run; anything else exits 1',
+    `  ${REQUIRE_IDENTITY}      refuse a corpus that names no producer, rather than replaying it.`,
+    '                          Off by default: a corpus written before the format carried an',
+    '                          identity names none, and requiring it always would refuse them all',
     '',
     'The target is never inferred. GOOGLE_CLOUD_PROJECT, gcloud config, and the project inside',
     'application default credentials are not consulted for it: a database carrying more indexes',

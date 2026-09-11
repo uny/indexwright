@@ -15,6 +15,7 @@ import type {
   FilterNode,
   FilterOperator,
   Order,
+  Producer,
   QueryScope,
   QueryShape,
   SkipReason,
@@ -23,6 +24,7 @@ import {
   CORPUS_VERSION,
   FIELD_OPERATORS,
   isComposite,
+  READABLE_CORPUS_VERSIONS,
   SKIP_REASONS,
   UNARY_OPERATORS,
 } from './types.js';
@@ -49,12 +51,50 @@ const MAX_FILTER_DEPTH = 100;
  * Collect observed shapes into a corpus: de-duplicated by key, sorted by key, with the skip
  * reasons as a sorted set. Occurrence counts do not survive this — they go to stderr (SPEC §7).
  */
-export function buildCorpus(shapes: Iterable<QueryShape>, skipped: Iterable<SkipReason>): Corpus {
+export function buildCorpus(
+  shapes: Iterable<QueryShape>,
+  skipped: Iterable<SkipReason>,
+  producers: Iterable<Producer> = [],
+): Corpus {
   const byKey = new Map<string, QueryShape>();
   for (const shape of shapes) byKey.set(shape.key, shape);
   const queries = [...byKey.values()].sort((a, b) => compareByCodePoint(a.key, b.key));
   const reasons = [...new Set(skipped)].sort((a, b) => compareByCodePoint(a, b));
-  return { corpusVersion: CORPUS_VERSION, queries, skipped: reasons };
+  return { corpusVersion: CORPUS_VERSION, producers: sortProducers(producers), queries, skipped: reasons };
+}
+
+/**
+ * Producers as a sorted set, on the pair rather than on the name.
+ *
+ * Two revisions of one producer are two things a reviewer has reason to see — a merge (§7) of a
+ * current corpus and a stale one from the same suite is exactly the case the identity exists to
+ * make visible, and de-duplicating on the name alone would collapse it back into one line.
+ */
+function sortProducers(producers: Iterable<Producer>): Producer[] {
+  const byPair = new Map<string, Producer>();
+  for (const producer of producers) {
+    // Refused here for the same reason the filter depth is bounded where it is written: nothing
+    // this package writes may fail to read back. The CLI has already refused an empty value, but
+    // the JS API reaches this directly, and a corpus its own reader declines is not one. So the
+    // checks are the reader's, member for member: an absent revision arrives as `undefined` from
+    // an untyped caller, and `JSON.stringify` drops the member rather than writing `null`.
+    if (typeof producer.name !== 'string') throw new CorpusError('a producer name is not a string');
+    if (producer.name === '') throw new CorpusError('a producer name is empty');
+    if (producer.revision !== null && typeof producer.revision !== 'string') {
+      throw new CorpusError('a producer revision is not a string or null');
+    }
+    if (producer.revision === '') throw new CorpusError('a producer revision is empty; an unnamed revision is null');
+    // Keyed as a tuple rather than by joining the pair on a separator. A separator has to be a
+    // character neither member may hold, and `Producer` reserves none: a name ending in it and a
+    // revision beginning with it key the same, and one of two distinct identities is dropped
+    // without a word — the silent loss this member exists to make impossible.
+    byPair.set(JSON.stringify([producer.name, producer.revision]), {
+      name: producer.name,
+      revision: producer.revision,
+    });
+  }
+  // The same order the reader holds a file to, so that what this writes is what that accepts.
+  return [...byPair.values()].sort(compareProducers);
 }
 
 /**
@@ -64,8 +104,29 @@ export function buildCorpus(shapes: Iterable<QueryShape>, skipped: Iterable<Skip
  * of what makes two recorders that saw the same queries write the same bytes.
  */
 export function serialiseCorpus(corpus: Corpus): string {
+  // Checked rather than dereferenced. An untyped caller carried over from before this format
+  // version builds the corpus object itself and names no `producers` — which reached `.map` below
+  // as a bare `TypeError` naming neither the member nor the version that added it.
+  if (!Array.isArray(corpus.producers)) {
+    throw new CorpusError('the corpus has no producers member; a corpus naming no producer has an empty one');
+  }
+  // A corpus at version 1 has no member to write the producers into, so writing it as one would
+  // drop them — silently, which is what `--revision` without `--producer` is refused to avoid.
+  // Refused rather than promoted to version 2: a corpus read at 1 serialises back to 1, and
+  // rewriting the version here would change a file the caller only meant to add to.
+  if (corpus.corpusVersion < 2 && corpus.producers.length > 0) {
+    throw new CorpusError(
+      `a corpus at version ${corpus.corpusVersion} has no producers member, but this one names ${corpus.producers.length}`,
+    );
+  }
+
   const value = {
     corpusVersion: corpus.corpusVersion,
+    // Omitted at version 1, which has no such member: this package still reads that version, and a
+    // corpus read at 1 has to serialise back to the bytes it was read from. Near the top rather
+    // than after `queries`, so that the first thing a review of a regenerated corpus sees is who
+    // says it is theirs.
+    ...(corpus.corpusVersion >= 2 ? { producers: corpus.producers.map(producerToJson) } : {}),
     queries: corpus.queries.map((query) => ({
       key: query.key,
       collectionGroup: query.collectionGroup,
@@ -79,6 +140,10 @@ export function serialiseCorpus(corpus: Corpus): string {
     skipped: [...corpus.skipped],
   };
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function producerToJson(producer: Producer): unknown {
+  return { name: producer.name, revision: producer.revision };
 }
 
 function filterToJson(node: FilterNode): unknown {
@@ -125,15 +190,27 @@ export function parseCorpus(source: string): Corpus {
   // reason to bump the version, so testing membership first would answer a future corpus with a
   // complaint about a stray field instead of the version mismatch that explains it.
   const version = root['corpusVersion'];
-  if (version !== CORPUS_VERSION) {
+  if (typeof version !== 'number' || !READABLE_CORPUS_VERSIONS.includes(version)) {
     // Not a fallback to what this version recognises: the integer exists to announce exactly the
-    // change that reading on regardless would mis-read.
+    // change that reading on regardless would mis-read. The versions listed are the ones whose
+    // shape is written down here, not the ones whose members happen to overlap.
     throw new CorpusError(
       `corpusVersion ${JSON.stringify(version)} is not readable by this version, which writes ${CORPUS_VERSION}`,
     );
   }
 
-  expectExactMembers(root, ['corpusVersion', 'queries', 'skipped'], 'the corpus');
+  // Version-dependent, and checked after the version for the reason above: the member set *is* what
+  // the version names, so one list for both would refuse a corpus of the other version by
+  // complaining about the member that distinguishes them.
+  expectExactMembers(
+    root,
+    version >= 2 ? ['corpusVersion', 'producers', 'queries', 'skipped'] : ['corpusVersion', 'queries', 'skipped'],
+    'the corpus',
+  );
+
+  // A version-1 corpus names no producer. Read as `[]` rather than refused: that is what the member
+  // being optional means, and it is the reading `check --require-identity` then acts on.
+  const producers = version >= 2 ? parseProducers(root['producers']) : [];
 
   const queries = expectArray(root['queries'], 'queries').map((entry, index) =>
     parseQuery(entry, `queries[${index}]`),
@@ -166,7 +243,69 @@ export function parseCorpus(source: string): Corpus {
     }
   }
 
-  return { corpusVersion: CORPUS_VERSION, queries, skipped };
+  return { corpusVersion: version, producers, queries, skipped };
+}
+
+/**
+ * The producers, sorted and de-duplicated as written, or a refusal.
+ *
+ * Held to the same standard as `queries` and `skipped`: a set in one order. A reader that took any
+ * order would round-trip a corpus to different bytes than the ones it read, and §7 asks the file be
+ * diff-stable so that its diffs stay worth reading.
+ */
+function parseProducers(value: unknown): Producer[] {
+  const producers = expectArray(value, 'producers').map((entry, index) => {
+    const at = `producers[${index}]`;
+    const object = expectObject(entry, at);
+    expectExactMembers(object, ['name', 'revision'], at);
+    const name = expectString(object['name'], `${at}.name`);
+    // Empty is refused rather than read as absent. A producer that names nothing identifies nothing,
+    // and the way to say "no producer" is to have no entry.
+    if (name === '') throw new CorpusError(`${at}.name is empty`);
+    const raw = object['revision'];
+    if (raw !== null && typeof raw !== 'string') {
+      throw new CorpusError(`${at}.revision is not a string or null`);
+    }
+    if (raw === '') throw new CorpusError(`${at}.revision is empty; an unnamed revision is null`);
+    return { name, revision: raw };
+  });
+
+  let previous: Producer | null = null;
+  for (const producer of producers) {
+    if (previous !== null) {
+      const order = compareProducers(previous, producer);
+      // Named by the pair, because the order is on the pair: two revisions of one producer out of
+      // order would otherwise refuse with the same name on both sides of "follows".
+      if (order > 0) {
+        throw new CorpusError(`producers are not sorted: ${describePair(producer)} follows ${describePair(previous)}`);
+      }
+      if (order === 0) throw new CorpusError(`producers repeats ${describePair(producer)}`);
+    }
+    previous = producer;
+  }
+  return producers;
+}
+
+/** One producer as a refusal names it: the pair, since the pair is what the order and the set are on. */
+function describePair(producer: Producer): string {
+  return producer.revision === null
+    ? `${JSON.stringify(producer.name)} at no revision`
+    : `${JSON.stringify(producer.name)} at ${JSON.stringify(producer.revision)}`;
+}
+
+/**
+ * Name first, then revision, with an absent revision before any present one.
+ *
+ * Absent is not `''` — the reader refuses an empty revision — so it is ordered rather than
+ * compared: a producer that named no revision sorts before the same producer that named one.
+ */
+function compareProducers(a: Producer, b: Producer): number {
+  const byName = compareByCodePoint(a.name, b.name);
+  if (byName !== 0) return byName;
+  if (a.revision === b.revision) return 0;
+  if (a.revision === null) return -1;
+  if (b.revision === null) return 1;
+  return compareByCodePoint(a.revision, b.revision);
 }
 
 function parseQuery(value: unknown, at: string): QueryShape {

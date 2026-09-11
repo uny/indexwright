@@ -47,6 +47,8 @@ Options:
                           else 127.0.0.1:8080)
   --out <file>            where to write the corpus (default: firestore.queries.json)
   --port <n>              port for the proxy to listen on (default: chosen by the OS)
+  --producer <name>       what to record as the producer of this corpus (no default)
+  --revision <rev>        the revision the producer's source was at (requires --producer)
   --allow-remote-emulator forward to an emulator that is not on this host (refused by default)
   -h, --help              show the usage
       --version           show the version
@@ -67,6 +69,7 @@ Options:
   --corpus <file>         the corpus to replay (default: firestore.queries.json)
   --indexes <file>        the candidate index declarations (default: firestore.indexes.json)
   --baseline <file>       gaps already accepted by this project (no default)
+  --require-identity      refuse a corpus that names no producer (off by default)
 ```
 
 | Exit | Meaning |
@@ -99,6 +102,29 @@ is not evidence that the set is ready. `check` establishes readiness twice over 
 reporting `READY` through the Admin API, *and* the set unchanged for a settling period — before it
 replays anything. A `check` that answered in two seconds would be a `check` that reported inside that
 window.
+
+**A corpus says who produced it, so a stale one can be told from a current one.** `check` refuses an
+empty corpus, because one replays cleanly by construction and a pass would report coverage having
+measured nothing. A corpus that is merely *old* fails the same way and is harder to see: its entries
+describe a suite as it was, they are replayed against a set as it is, and the run exits `0`. A suite
+that stopped running, a capture step dropped from a pipeline, a file committed once and never
+regenerated — each leaves a corpus indistinguishable from a current one.
+
+`--producer` and `--revision` write that into the file, and `check` echoes it beside the target on
+every run. Nothing is discovered: no timestamp, because a file that churns on every run is a file
+whose diffs stop being read, and nothing about the machine — no hostname, no username, no absolute
+path — because a corpus is committed and reviewed. A corpus that names no producer says so out loud
+rather than printing nothing.
+
+```console
+$ indexwright-record --producer orders-service --revision "$(git rev-parse --short HEAD)" -- npm test
+$ indexwright-record check --project p --database '(default)' --require-identity
+indexwright-record: target projects/p/databases/(default)
+indexwright-record: corpus "firestore.queries.json" produced by "orders-service" at "9c1f2ab"
+```
+
+`--require-identity` is how a pipeline refuses a corpus that does not say where it came from. It is
+off by default, and has to be: a corpus written before the format carried an identity names none.
 
 **A project adopting `check` can hold the line where it is, with `--baseline`.** A codebase of any
 age discovers all of its existing gaps in one run — the queries no index has ever served, sitting
@@ -258,7 +284,8 @@ passes against the emulator passes against the proxy.
 
 ```jsonc
 {
-  "corpusVersion": 1,
+  "corpusVersion": 2,
+  "producers": [{ "name": "orders-service", "revision": "9c1f2ab" }],
   "queries": [
     {
       "key": "orders::COLLECTION::AND(status:EQUAL)::createdAt:DESCENDING",

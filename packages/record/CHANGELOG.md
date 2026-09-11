@@ -9,6 +9,39 @@ again, by its own `corpusVersion`.
 
 ### Added
 
+- **A corpus records who produced it** (issue #55), and `check` echoes it beside the target on every
+  run. `check` already refuses an *empty* corpus, on the grounds that one replays cleanly by
+  construction and a pass would report coverage having measured nothing. A corpus that is merely old
+  fails the same way and is harder to see: its entries describe a suite as it was, they are replayed
+  against a set as it is, and the result is reported as coverage of the set. A suite that stopped
+  running, a capture step dropped from a pipeline, a file committed once and never regenerated — each
+  leaves a corpus that looks exactly like a current one, and the run it feeds exits `0`. It was the
+  one input the verb still took on trust.
+
+  **The identity is supplied, never discovered**, and that is a consequence of the file's diff
+  stability rather than a convenience. `--producer <name>` and `--revision <rev>` on `record` are
+  written into the corpus as a `producers` list. A wall-clock timestamp would rewrite the file on
+  every run whether or not the queries changed, and a file that churns is a file whose diffs stop
+  being read; the recorder also puts nothing about the machine into the file — no hostname, no
+  username, no absolute path — which is the leak
+  [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7 already refuses when it declines
+  to interpolate wire-decoded text into `skipped`, arriving from the other side. `--revision` without
+  `--producer` is a usage error rather than a value quietly dropped, and a name or revision carrying
+  a control character, a line break, an invisible character, or a bidirectional override is refused
+  where it enters: the value is written into a reviewed file and echoed onto the stream the target
+  is announced on, and each of those stops the written name from being the name that is read.
+
+  **`--require-identity` on `check`** refuses a corpus that names no producer, with exit `2` — a run
+  that cannot report, not a run reporting a gap — before anything is dialled or settled. It is off by
+  default and has to be: every corpus written before this format version names none, so requiring it
+  unconditionally would refuse them all.
+
+  **`producers` is a list, and a set on the pair.** Sorted by name and then by revision, with an
+  absent revision before any present one, `[]` when none were named. A list rather than one producer
+  because §7's merge is a union and a merged corpus has to record which part came from where; a set
+  on the pair rather than on the name because two revisions of one suite — a current part and a stale
+  part — is exactly what the identity exists to make visible.
+
 - **`--baseline <file>` on `check`**, so the verb can be adopted by a project that already has gaps.
   `check` exits `1` on any entry the candidate set does not serve, which is the right answer for a
   gap a run just found — the oracle is Firestore rather than a heuristic. It left a codebase of any
@@ -44,6 +77,29 @@ again, by its own `corpusVersion`.
   all when the corpus itself replayed nothing, was never measured, and shrinking the file on that
   evidence would drop a gap that comes back as a finding the next time it is reached. Whether a stale
   entry should itself fail the run is left open; #57 names it a separate decision.
+
+### Changed
+
+- **`corpusVersion` is `2`.** Adding a top-level member is the case the integer exists for: a reader
+  that did not know `producers` would refuse a corpus for carrying a member the format does not
+  define, which is true and says nothing about why. Version `1` remains readable and is read as a
+  corpus naming no producer, so nothing committed before this release is refused, and a corpus read
+  at version `1` serialises back to version `1` rather than being rewritten into `2`. Knowing two
+  versions is not the fallback §7 forbids — that rule is about an *unknown* version, whose members a
+  reader can only guess at — and §7 now says so. What a reader still may not do is read a corpus of
+  one version as though it were another: the member set is part of what the integer names.
+
+- **`buildCorpus` takes a third argument**, the producers, defaulting to none, and throws
+  `CorpusError` on a name or a revision the reader would refuse — nothing this package writes may
+  fail to read back. `Corpus` gains a `producers` member, and `serialiseCorpus` refuses a corpus
+  that has none as well as one carrying producers at a version with no member to write them into:
+  both were ways to lose an identity without a word. The JS API is provisional before 1.0 (§10), and
+  this is named here because a caller greps the changelog for the symbol it calls.
+
+- **`CheckCommand` gains a `requireIdentity` member**, and it is required rather than optional, so a
+  caller naming the type builds a command that says which way the guard is set. `check` itself is
+  unchanged for a caller that passes `false`. Named for the same reason as `buildCorpus` above: the
+  type is exported, and a caller constructing one greps here.
 
 ### Fixed
 
