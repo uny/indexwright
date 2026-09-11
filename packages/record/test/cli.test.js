@@ -842,11 +842,43 @@ test('a producer name carrying a line break is refused where it enters', () => {
   );
 });
 
+test('an identity option written with no value is refused, rather than naming an empty producer', () => {
+  // `--producer=` is a flag written without its argument; read as a value it would name a producer
+  // that identifies nothing, and `buildCorpus` refuses one anyway — later, and further from the
+  // command line that can still say which option it was.
+  assert.throws(
+    () => parseArgs(['--producer=', '--', 'true']),
+    (error) => error instanceof UsageError && /--producer needs a value/.test(error.message),
+  );
+  assert.throws(
+    () => parseArgs(['--revision=', '--producer', 'suite', '--', 'true']),
+    (error) => error instanceof UsageError && /--revision needs a value/.test(error.message),
+  );
+});
+
+test('an identity option that swallowed the next option is refused, as a path option is', () => {
+  // `--producer --revision r` is a missing value rather than a producer named `--revision`, and the
+  // value would otherwise round-trip into a committed file.
+  assert.throws(
+    () => parseArgs(['--producer', '--revision', 'r', '--', 'true']),
+    (error) => error instanceof UsageError && /got the option "--revision"/.test(error.message),
+  );
+});
+
 test('a producer name that reorders itself under a bidi override is refused too', () => {
   // The same harm the target segments refuse: a name that reads as one thing in a review and is
   // another thing in the file, with no character altered.
   assert.throws(
     () => parseArgs(['--producer', 'a\u202eb', '--', 'true']),
+    (error) => error instanceof UsageError && /bidirectional override/.test(error.message),
+  );
+});
+
+test('the arabic letter mark is refused with the other bidi controls, not accepted as a letter', () => {
+  // U+061C is a bidi control like U+200E and U+200F, and invisible in a diff exactly as they are.
+  // Left out, it is the one member of the family this guard names that the guard does not hold.
+  assert.throws(
+    () => parseArgs(['--producer', 'orders\u061cservice', '--', 'true']),
     (error) => error instanceof UsageError && /bidirectional override/.test(error.message),
   );
 });
@@ -899,6 +931,40 @@ test('the corpus a run writes records the producer the run was given', async () 
     assert.equal(status, 0);
     const corpus = parseCorpus(readFileSync(out, 'utf8'));
     assert.deepEqual(corpus.producers, [{ name: 'orders-service', revision: '9c1f2ab' }]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    upstream.close();
+  }
+});
+
+test('a run given a producer and no revision records the revision as unnamed, not as empty', async () => {
+  // The glue between the command and the corpus: an absent revision is `null`, which is what the
+  // reader accepts. An empty string would make `buildCorpus` refuse the run's own output.
+  const upstream = createServer();
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-record-'));
+
+  try {
+    const out = join(directory, 'firestore.queries.json');
+    const status = await run(
+      [
+        '--emulator',
+        `127.0.0.1:${upstream.address().port}`,
+        '--out',
+        out,
+        '--producer',
+        'suite',
+        '--',
+        process.execPath,
+        '-e',
+        '',
+      ],
+      collect(),
+      {},
+    );
+
+    assert.equal(status, 0);
+    assert.deepEqual(parseCorpus(readFileSync(out, 'utf8')).producers, [{ name: 'suite', revision: null }]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
     upstream.close();

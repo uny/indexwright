@@ -20,8 +20,12 @@ export const CORPUS_VERSION = 2;
  * The alternative was refusing every corpus committed before this release, which is the outcome the
  * bump was supposed to avoid — `producers` is optional by construction, so a version-1 corpus is a
  * corpus that names no producer, not one this reader has to guess at.
+ *
+ * Frozen, not merely `readonly`: the type is erased at runtime, and `parseCorpus` reads this array
+ * to decide what it will accept, so a caller appending to the exported value would widen what this
+ * package reads — a version whose members it has no code for — rather than break its own build.
  */
-export const READABLE_CORPUS_VERSIONS: readonly number[] = [1, 2];
+export const READABLE_CORPUS_VERSIONS: readonly number[] = Object.freeze([1, 2]);
 
 /**
  * Who produced a corpus, and from what revision of their source (SPEC §7, *Producer identity*).

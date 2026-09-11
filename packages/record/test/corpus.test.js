@@ -8,6 +8,7 @@ import {
   CORPUS_VERSION,
   CorpusError,
   parseCorpus,
+  READABLE_CORPUS_VERSIONS,
   serialiseCorpus,
   toQueryShape,
   writeCorpus,
@@ -378,4 +379,59 @@ test('a corpus this package writes is one it can read back, producers included',
   // an empty value before it gets here, but the JS API reaches `buildCorpus` directly.
   assert.throws(() => buildCorpus([], [], [{ name: '', revision: null }]), CorpusError);
   assert.throws(() => buildCorpus([], [], [{ name: 'a', revision: '' }]), CorpusError);
+  // An untyped caller omits the revision rather than writing `null`, and `JSON.stringify` drops an
+  // `undefined` member — so the file would carry a producer with no `revision` at all, which this
+  // package's own reader refuses. Refused where it enters instead.
+  assert.throws(() => buildCorpus([], [], [{ name: 'a' }]), CorpusError);
+  assert.throws(() => buildCorpus([], [], [{ name: 7, revision: null }]), CorpusError);
+});
+
+test('two producers are two entries even when a name holds the character the set is keyed on', () => {
+  // The pair is keyed as a tuple rather than by joining on a separator: `Producer` reserves no
+  // character, so any separator is one a name may end with and a revision may begin with, and the
+  // two distinct identities would key the same. One of them would be dropped without a word.
+  const corpus = buildCorpus([], [], [
+    { name: 'a\u0000b', revision: null },
+    { name: 'a', revision: 'b' },
+  ]);
+  assert.equal(corpus.producers.length, 2);
+});
+
+test('a corpus at a version with no producers member is refused rather than written without them', () => {
+  // Dropping them is the silent loss the member exists against, and promoting the file to version 2
+  // would rewrite a corpus the caller only meant to add to. Neither: it is refused.
+  const version1 = parseCorpus('{"corpusVersion":1,"queries":[],"skipped":[]}');
+  assert.throws(
+    () => serialiseCorpus({ ...version1, producers: [{ name: 'suite', revision: null }] }),
+    (error) => error instanceof CorpusError && /version 1/.test(error.message),
+  );
+});
+
+test('a corpus object with no producers member at all is refused by name, not by TypeError', () => {
+  // What a caller written against the previous format version builds by hand. The refusal has to
+  // name the member it wants; a bare `TypeError` from a `.map` names neither it nor the version.
+  assert.throws(
+    () => serialiseCorpus({ corpusVersion: 2, queries: [], skipped: [] }),
+    (error) => error instanceof CorpusError && /producers/.test(error.message),
+  );
+});
+
+test('a producers list out of order on the revision is refused, and the refusal names the pair', () => {
+  // Sorted on the pair, so a refusal that named only the name would print it on both sides of
+  // "follows" and say nothing about what to reorder.
+  assert.throws(
+    () =>
+      parseCorpus(
+        '{"corpusVersion":2,"producers":[{"name":"a","revision":"1"},{"name":"a","revision":null}],' +
+          '"queries":[],"skipped":[]}',
+      ),
+    (error) => error instanceof CorpusError && /not sorted/.test(error.message) && /no revision/.test(error.message),
+  );
+});
+
+test('the readable versions are frozen, so a caller cannot widen what this package accepts', () => {
+  // `readonly` is erased at runtime and `parseCorpus` reads this array to decide what it will
+  // accept: an appended version is one the reader has no members written down for.
+  assert.throws(() => READABLE_CORPUS_VERSIONS.push(3), TypeError);
+  assert.deepEqual([...READABLE_CORPUS_VERSIONS], [1, 2]);
 });

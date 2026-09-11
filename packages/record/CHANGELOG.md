@@ -87,9 +87,16 @@ again, by its own `corpusVersion`.
   one version as though it were another: the member set is part of what the integer names.
 
 - **`buildCorpus` takes a third argument**, the producers, defaulting to none, and throws
-  `CorpusError` on an empty name or an empty revision — nothing this package writes may fail to read
-  back, and the reader refuses both. `Corpus` gains a `producers` member. The JS API is provisional before 1.0 (§10), and this is named here because a
-  caller greps the changelog for the symbol it calls.
+  `CorpusError` on a name or a revision the reader would refuse — nothing this package writes may
+  fail to read back. `Corpus` gains a `producers` member, and `serialiseCorpus` refuses a corpus
+  that has none as well as one carrying producers at a version with no member to write them into:
+  both were ways to lose an identity without a word. The JS API is provisional before 1.0 (§10), and
+  this is named here because a caller greps the changelog for the symbol it calls.
+
+- **`CheckCommand` gains a `requireIdentity` member**, and it is required rather than optional, so a
+  caller naming the type builds a command that says which way the guard is set. `check` itself is
+  unchanged for a caller that passes `false`. Named for the same reason as `buildCorpus` above: the
+  type is exported, and a caller constructing one greps here.
 
 ### Fixed
 

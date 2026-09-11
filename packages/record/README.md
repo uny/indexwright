@@ -284,7 +284,8 @@ passes against the emulator passes against the proxy.
 
 ```jsonc
 {
-  "corpusVersion": 1,
+  "corpusVersion": 2,
+  "producers": [{ "name": "orders-service", "revision": "9c1f2ab" }],
   "queries": [
     {
       "key": "orders::COLLECTION::AND(status:EQUAL)::createdAt:DESCENDING",

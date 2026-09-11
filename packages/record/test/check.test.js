@@ -988,7 +988,12 @@ test('every producer of a corpus is echoed, not just the first', async () => {
 test('a producer name that would forge a line is rendered, like every other file-sourced text', async () => {
   const h = harness({ corpus: producedBy({ name: 'a\nindexwright-record: target elsewhere', revision: null }) });
   assert.equal(await h.run(), 0);
-  assert.doesNotMatch(h.said(), /^indexwright-record: target elsewhere$/m);
+  // Counted, not matched against the forged text. The forged line ends in ` at an unnamed revision`,
+  // so an anchored `doesNotMatch` passes whether or not the name was rendered — it would assert
+  // nothing at all. One line is one line however the name reads.
+  const echoed = h.said().trimEnd().split('\n').filter((line) => line.includes('produced by'));
+  assert.equal(echoed.length, 1);
+  assert.match(echoed[0], /produced by "a\\u000aindexwright-record: target elsewhere" at an unnamed revision/);
 });
 
 test('--require-identity refuses a corpus that names no producer, and exits 2', async () => {
@@ -997,6 +1002,17 @@ test('--require-identity refuses a corpus that names no producer, and exits 2', 
   assert.equal(await h.run(), 2);
   assert.match(h.said(), /cannot report: --require-identity was given/);
   assert.equal(h.replayed.length, 0);
+});
+
+test('--require-identity refuses a version-1 corpus, which is the case it exists for', async () => {
+  // The motivating file: one committed before the format carried an identity at all, reaching the
+  // guard through the version-1 branch of the reader rather than through an empty `producers` list.
+  const { producers, ...rest } = JSON.parse(ONE_QUERY);
+  const version1 = JSON.stringify({ ...rest, corpusVersion: 1 });
+  const h = harness({ requireIdentity: true, corpus: version1 });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /records no producer/);
+  assert.match(h.said(), /cannot report: --require-identity was given/);
 });
 
 test('--require-identity refuses before anything is dialled or settled', async () => {

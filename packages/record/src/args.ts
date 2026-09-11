@@ -488,18 +488,6 @@ export function render(value: string): string {
 }
 
 /**
- * A file path, checked only for having been written at all.
- *
- * Unlike a target segment, what is *in* it is the filesystem's business rather than this parser's —
- * but an empty one is not a path, and `resolve('')` is the working directory, so a `--corpus=` typed
- * with nothing after it would otherwise be read as a request to open a directory as a corpus.
- *
- * A leading `-` is refused for the same reason it is on a target segment: `--corpus --indexes` is a
- * missing value rather than a file named `--indexes`, and read as a filename it fails much later,
- * somewhere that can no longer say which option was written without its argument. A path that really
- * does begin with `-` is still reachable as `./-name`.
- */
-/**
  * A producer name or a revision that will still mean itself in a committed file.
  *
  * A denylist rather than the allowlist a target segment gets, and the difference is what the value
@@ -514,7 +502,7 @@ export function render(value: string): string {
  * the echo safe on the way out, as it does for a corpus read from disk; a value arriving on this
  * command line can simply be refused where it enters, and the file gets the same protection.
  */
-const UNRENDERABLE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
+const UNRENDERABLE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
 
 function requireIdentityValue(value: string, option: string): string {
   if (value === '') throw new UsageError(`${option} needs a value`);
@@ -529,6 +517,18 @@ function requireIdentityValue(value: string, option: string): string {
   return value;
 }
 
+/**
+ * A file path, checked only for having been written at all.
+ *
+ * Unlike a target segment, what is *in* it is the filesystem's business rather than this parser's —
+ * but an empty one is not a path, and `resolve('')` is the working directory, so a `--corpus=` typed
+ * with nothing after it would otherwise be read as a request to open a directory as a corpus.
+ *
+ * A leading `-` is refused for the same reason it is on a target segment: `--corpus --indexes` is a
+ * missing value rather than a file named `--indexes`, and read as a filename it fails much later,
+ * somewhere that can no longer say which option was written without its argument. A path that really
+ * does begin with `-` is still reachable as `./-name`.
+ */
 function requirePath(value: string, option: string): string {
   if (value === '') throw new UsageError(`${option} needs a value`);
   if (value.startsWith('-')) {
