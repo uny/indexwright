@@ -9,6 +9,47 @@ again, by its own `corpusVersion`.
 
 ### Added
 
+- **`check --corpus` is repeatable, and the corpora are checked as one set** (issue #56). One index
+  set is routinely consumed by more than one suite — several packages in a workspace, or several
+  services in separate repositories sharing one database — and each suite's corpus is a partial view
+  of what queries the set. Checking them one at a time answers a narrower question than the set poses:
+  a run says "this corpus is covered", and a set can satisfy every corpus checked while failing the
+  one that was not. That is the ordinary shape of the failure this tool exists to catch, because the
+  declaration and the query that needs it are frequently not in the same place — and the consuming
+  suite whose capture did not run is exactly the one whose queries are missing an index.
+
+  **The merge invents nothing.**
+  [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7 already defined every rule it
+  needs, and now states the operation itself: `queries` de-duplicate on the canonical key and sort by
+  it, `skipped` is the union of the parts, and `producers` is the union as a set on the
+  `(name, revision)` pair. The result is a corpus in §7's sense — readable by anything that reads one
+  — which is the requirement rather than a property it happens to have. `mergeCorpora` is exported for
+  callers who want the merge without the verb. The union for `skipped` rather than the intersection:
+  a reason one part discarded is a reason the merged view discarded, and the merged corpus is no more
+  complete than its least complete part.
+
+  **A part with nothing replayable in it is refused, and the refusal names that part.** `check`
+  refuses a single empty corpus because one replays cleanly by construction and a pass would report
+  coverage having measured nothing; a merge of three corpora one of which is empty is *not* empty, so
+  a run that only examined the merge would lose that signal entirely and report full coverage for a
+  set whose other consuming suite was never captured. A suite driven through the Firebase Web SDK
+  produces exactly such a corpus, so this is a shape that really occurs; the remedy is to stop naming
+  that part, which is one argument removed from the command line rather than a flag to discover.
+
+  **Identity is read per part.** The line that echoes a corpus's producers is printed once per corpus,
+  and `--require-identity` is applied to each: a merged `producers` naming someone does not mean every
+  part named someone, and an anonymous stale part would otherwise hide behind a named current one,
+  presenting a wider surface than any of the inputs with nothing recording which is which. This is
+  what #55 made a list on the pair for.
+
+  **Refused rather than merged across:** a part at a different `corpusVersion`, because the integer
+  names the format both sides must agree on; the same path named twice, because a command meaning to
+  name two suites that names one of them twice checks a narrower set than it reads as checking; and a
+  canonical key two parts hold with bodies that differ, which means a part has been edited or has
+  arrived corrupted, since the key is injective over the shape. A merge of parts that agree keeps the
+  version they agree on and is not promoted, for the reason a read of a version-1 corpus serialises
+  back to version 1. The corpus format is unchanged by this release.
+
 - **A corpus records who produced it** (issue #55), and `check` echoes it beside the target on every
   run. `check` already refuses an *empty* corpus, on the grounds that one replays cleanly by
   construction and a pass would report coverage having measured nothing. A corpus that is merely old

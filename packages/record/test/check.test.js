@@ -9,6 +9,7 @@ import {
   buildCorpus,
   check,
   DEFAULT_SETTLE_MS,
+  parseCorpus,
   serialiseCorpus,
   toQueryShape,
 } from '../dist/index.js';
@@ -19,7 +20,7 @@ const COMMAND = {
   kind: 'check',
   project: 'indexwright-probe',
   database: '(default)',
-  corpus: 'firestore.queries.json',
+  corpus: ['firestore.queries.json'],
   indexes: 'firestore.indexes.json',
   requireIdentity: false,
 };
@@ -100,7 +101,11 @@ function keyOf(field) {
   }).key;
 }
 
-function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, declared = DECLARED, baseline, requireIdentity = false, ...rest } = {}) {
+function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, corpora, declared = DECLARED, baseline, requireIdentity = false, ...rest } = {}) {
+  // `corpora` names several parts as `{ path: text }`; `corpus` is the one-part shorthand every test
+  // written before issue #56 uses, and is the same thing with one entry under the default path.
+  const files = corpora ?? { [COMMAND.corpus[0]]: corpus };
+  const paths = Object.keys(files);
   const said = [];
   const closed = { lister: 0, replayer: 0 };
   const replayed = [];
@@ -117,7 +122,7 @@ function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, declar
     },
     readFile: (path) => {
       if (path === COMMAND.indexes) return JSON.stringify(declared);
-      if (path === COMMAND.corpus) return corpus;
+      if (path in files) return files[path];
       if (baseline !== undefined && path === BASELINE_PATH) return baseline;
       throw new Error(`ENOENT: no such file or directory, open '${path}'`);
     },
@@ -156,6 +161,7 @@ function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, declar
       check(
         {
           ...COMMAND,
+          corpus: paths,
           requireIdentity,
           ...(baseline === undefined ? {} : { baseline: BASELINE_PATH }),
         },
@@ -389,7 +395,7 @@ test('a path that could forge a report line is rendered before it reaches the st
   const corpus = 'firestore.queries.json\nindexwright-record: 9 queries replayed, 0 not served';
   const said = [];
   const code = await check(
-    { ...COMMAND, corpus },
+    { ...COMMAND, corpus: [corpus] },
     { out: () => {}, err: (text) => said.push(text) },
     {
       // The candidate file reads; the corpus is the one that fails, so the run reaches the line
@@ -1035,4 +1041,141 @@ test('a corpus naming no producer still runs when identity was not required', as
   const h = harness();
   assert.equal(await h.run(), 0);
   assert.equal(h.replayed.length, 1);
+});
+
+test('two corpora are checked as one set, and every entry of both is asked about', async () => {
+  // The question #56 is about: one index set consumed by two suites. Checked one at a time, the set
+  // below satisfies the first corpus and is reported clean while failing the second.
+  const h = harness({
+    corpora: {
+      'a.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
+      'b.queries.json': corpusOf({ op: 'AND', filters: [equals('unindexed')] }),
+    },
+    statuses: [{ kind: 'served' }, { kind: 'uncovered', message: '"the query requires an index"' }],
+  });
+  assert.equal(await h.run(), 1);
+  assert.equal(h.replayed.length, 2);
+  assert.match(h.said(), /2 corpora merged into 2 queries/);
+  assert.match(h.said(), /2 queries replayed, 1 not served/);
+});
+
+test('a query the candidate set cannot serve is the finding even when only one corpus holds it', async () => {
+  // Stated on its own because it is the whole claim of the issue: the consuming suite whose capture
+  // did not take part is exactly the one whose queries are missing an index.
+  const h = harness({
+    corpora: {
+      'a.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
+      'b.queries.json': corpusOf({ op: 'AND', filters: [equals('unindexed')] }),
+    },
+    statuses: [{ kind: 'served' }, { kind: 'uncovered', message: '"the query requires an index"' }],
+  });
+  assert.equal(await h.run(), 1);
+  assert.ok(h.said().includes(`not served: ${JSON.stringify(keyOf('unindexed'))}`));
+});
+
+test('a query two corpora both hold is replayed once, not once per corpus', async () => {
+  const both = corpusOf({ op: 'AND', filters: [equals('status')] });
+  const h = harness({ corpora: { 'a.queries.json': both, 'b.queries.json': both } });
+  assert.equal(await h.run(), 0);
+  assert.equal(h.replayed.length, 1);
+  assert.match(h.said(), /2 corpora merged into 1 query/);
+});
+
+test('one corpus is announced as itself, with no line about a merge', async () => {
+  // The overwhelmingly common command line. A merge of one is the identity, and announcing it would
+  // be noise on every run that names a single corpus.
+  const h = harness();
+  assert.equal(await h.run(), 0);
+  assert.doesNotMatch(h.said(), /merged/);
+});
+
+test('each corpus names its own producer, so an anonymous part cannot hide behind a named one', async () => {
+  // A merged `producers` naming someone does not mean every part named someone. The per-part lines
+  // are what keeps a stale anonymous part from being read as covered by the current named one.
+  const h = harness({
+    corpora: {
+      'a.queries.json': producedBy({ name: 'orders-suite', revision: '9c1f2ab' }),
+      'b.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
+    },
+  });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /corpus "a\.queries\.json" produced by "orders-suite" at "9c1f2ab"/);
+  assert.match(h.said(), /corpus "b\.queries\.json" records no producer/);
+});
+
+test('--require-identity refuses the part that names no producer, naming that part', async () => {
+  const h = harness({
+    requireIdentity: true,
+    corpora: {
+      'a.queries.json': producedBy({ name: 'orders-suite', revision: '9c1f2ab' }),
+      'b.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
+    },
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /cannot report: --require-identity was given and the corpus at "b\.queries\.json" names no producer/);
+});
+
+test('an empty part is refused even though the merge is not empty', async () => {
+  // The signal the issue names: a merge of parts one of which is empty is non-empty, so a run that
+  // only looked at the merge would report full coverage for a set whose other suite was never
+  // captured. `check` refuses a single empty corpus for the same reason, and the merge must not be a
+  // way around it.
+  const h = harness({
+    corpora: {
+      'a.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
+      'b.queries.json': serialiseCorpus(buildCorpus([], [])),
+    },
+    lister: async () => assert.fail('no client should be built on this path'),
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /there is nothing to replay: the corpus at "b\.queries\.json" holds no queries/);
+  assert.equal(h.replayed.length, 0);
+});
+
+test('a part at a different corpusVersion is a run that cannot answer, before any client', async () => {
+  const h = harness({
+    corpora: {
+      'a.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
+      // A real version-1 corpus: the same one query, serialised without a producers member.
+      'b.queries.json': serialiseCorpus({ ...parseCorpus(corpusOf({ op: 'AND', filters: [equals('status')] })), corpusVersion: 1, producers: [] }),
+    },
+    lister: async () => assert.fail('no client should be built on this path'),
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /could not merge the corpora: .*corpusVersion/);
+});
+
+test('a second corpus that cannot be read stops the run before the first one is announced', async () => {
+  // A run that said one part's producer and then declined reads as though the part it named is the
+  // one at fault.
+  const h = harness({
+    corpora: {
+      'a.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
+      'b.queries.json': 'not json at all',
+    },
+    lister: async () => assert.fail('no client should be built on this path'),
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /could not read the corpus at "b\.queries\.json"/);
+  assert.doesNotMatch(h.said(), /corpus "a\.queries\.json"/);
+});
+
+test('a skip reason either part discarded is the merged view\'s, and is reported once', async () => {
+  const h = harness({
+    corpora: {
+      'a.queries.json': serialiseCorpus(
+        buildCorpus(
+          [toQueryShape({ collectionGroup: 'orders', queryScope: 'COLLECTION', where: { op: 'AND', filters: [equals('status')] }, orderBy: [] })],
+          ['listen-query'],
+        ),
+      ),
+      'b.queries.json': serialiseCorpus(
+        buildCorpus(
+          [toQueryShape({ collectionGroup: 'orders', queryScope: 'COLLECTION', where: { op: 'AND', filters: [equals('status')] }, orderBy: [] })],
+          ['vector-query'],
+        ),
+      ),
+    },
+  });
+  assert.equal(await h.run(), 0);
 });

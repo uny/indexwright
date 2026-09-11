@@ -23,12 +23,12 @@ import { adminLister, AdminError, listLiveIndexes, type IndexLister } from './ad
 import { canonicalTarget, REQUIRE_IDENTITY, render, type CheckCommand } from './args.js';
 import { parseBaseline } from './baseline.js';
 import { messageOf } from './client.js';
-import { parseCorpus } from './corpus.js';
+import { mergeCorpora, parseCorpus } from './corpus.js';
 import { isReportable, isTransient, ReadinessGate, DEFAULT_SETTLE_MS, type Readiness } from './readiness.js';
 import { isVouched, reconcile, type LiveCompositeIndex, type Reconciliation } from './reconcile.js';
 import { planReplay, ReplayError, type ReplayPlan } from './synthesise.js';
 import { replayClient, TargetError, type Replayer } from './replay.js';
-import type { Producer, QueryShape } from './types.js';
+import type { Corpus, Producer, QueryShape } from './types.js';
 
 export interface Streams {
   out(text: string): void;
@@ -74,6 +74,13 @@ interface Entry {
   readonly plan: ReplayPlan;
 }
 
+/** What one corpus yields offline: the entries to replay, the ones that cannot be, and every key. */
+interface Planned {
+  readonly entries: Entry[];
+  readonly unreplayable: string[];
+  readonly keys: Set<string>;
+}
+
 /**
  * Run the verb, and return the process exit code.
  *
@@ -115,36 +122,104 @@ export async function check(
     return 2;
   }
 
-  let entries: readonly Entry[];
-  let unreplayable: readonly string[];
-  let corpusKeys: ReadonlySet<string>;
-  let producers: readonly Producer[];
-  try {
-    ({ entries, unreplayable, keys: corpusKeys, producers } = plan(readFile(command.corpus)));
-  } catch (error) {
-    say(`could not read the corpus at ${render(command.corpus)}: ${detail(error)}`);
-    return 2;
+  // Every part read before any is reported on, so that an unreadable second corpus is found before
+  // the first one's identity has been announced — a run that said one part's producer and then
+  // declined reads as though the part it named is the one at fault.
+  const parts: { readonly path: string; readonly corpus: Corpus; readonly planned: Planned }[] = [];
+  for (const path of command.corpus) {
+    try {
+      const corpus = parseCorpus(readFile(path));
+      parts.push({ path, corpus, planned: plan(corpus) });
+    } catch (error) {
+      say(`could not read the corpus at ${render(path)}: ${detail(error)}`);
+      return 2;
+    }
   }
 
+  // Said per part rather than over the merge, which is the whole reason the identity is a set on the
+  // pair. A merged `producers` naming someone does not mean every part named someone: an anonymous
+  // stale part hides behind a named current one, and the merged corpus then presents a wider surface
+  // than any of its inputs with nothing in the file recording which is which (issue #56).
+  //
   // Said on every run, beside the target, and for the same reason the target is said: it is the
   // other input that cannot be recovered from the output afterwards, and the mistake it guards
   // against — a corpus describing a suite as it was, replayed against a set as it is — is silent by
   // construction. A corpus naming no producer says so out loud rather than printing nothing;
   // silence is the reading this line exists to take away.
-  say(
-    producers.length === 0
-      ? `corpus ${render(command.corpus)} records no producer`
-      : `corpus ${render(command.corpus)} produced by ${producers.map(describeProducer).join(', ')}`,
-  );
+  for (const part of parts) {
+    say(
+      part.corpus.producers.length === 0
+        ? `corpus ${render(part.path)} records no producer`
+        : `corpus ${render(part.path)} produced by ${part.corpus.producers.map(describeProducer).join(', ')}`,
+    );
+  }
 
   // Refused here, before the settling period and before anything is dialled: nothing beyond this
   // point could change the answer, and the fix is on the command line or in the pipeline that wrote
   // the corpus. Exit 2 rather than 1 — this is a run that cannot report, not a run reporting a gap.
-  if (command.requireIdentity && producers.length === 0) {
+  //
+  // Per part, for the reason the lines above are per part: the flag asks whether what is being
+  // replayed describes the suite as it runs, and a merge is only as answerable as its least
+  // identified part.
+  if (command.requireIdentity) {
+    for (const part of parts) {
+      if (part.corpus.producers.length > 0) continue;
+      say(
+        `cannot report: ${REQUIRE_IDENTITY} was given and the corpus at ${render(part.path)} ` +
+          'names no producer, so there is nothing to say whether it describes the suite as it runs today',
+      );
+      return 2;
+    }
+  }
+
+  // Refused per part, before the merge rather than after it. `check` refuses a corpus with nothing
+  // replayable in it because such a corpus replays cleanly by construction and would exit 0 having
+  // measured nothing — and a merge of three corpora one of which is empty loses that signal
+  // entirely: the merged file is non-empty, so the run reports full coverage for a set one of whose
+  // consuming suites was never captured. That is the failure #56 is about, reached through the merge.
+  //
+  // Answered here rather than after the gates, because nothing beyond this point could change it:
+  // there is no entry to ask the target about, so a settling period would be a minute spent to
+  // arrive at the same line.
+  //
+  // It is also a shape that really occurs: a suite driven through the Firebase Web SDK issues no
+  // gRPC at all, so `record` writes a corpus with no queries and counts the requests it could not
+  // capture (SPEC §7). The fix for an operator holding one is to drop that part from the command
+  // line, which is one argument removed rather than a flag to discover.
+  for (const part of parts) {
+    if (part.planned.entries.length > 0) continue;
+    // This part's own refusals, said before the line that declines: "no entry has a replayable form"
+    // on its own asks an operator to go and find out why, and the why is already in hand. Said from
+    // the part rather than from the merge because the merge is never reached from here.
+    for (const line of part.planned.unreplayable) say(`cannot replay: ${line}`);
     say(
-      `cannot report: ${REQUIRE_IDENTITY} was given and the corpus at ${render(command.corpus)} ` +
-        'names no producer, so there is nothing to say whether it describes the suite as it runs today',
+      part.planned.unreplayable.length === 0
+        ? `there is nothing to replay: the corpus at ${render(part.path)} holds no queries`
+        : `there is nothing to replay: no entry in the corpus at ${render(part.path)} has a replayable form`,
     );
+    return 2;
+  }
+
+  // Merged after every part has been vouched for individually, so that a refusal names the part it
+  // is about. The rules are SPEC §7's own — see `mergeCorpora` — and a mismatched `corpusVersion` or
+  // a key two parts disagree on is refused here rather than merged across.
+  let entries: readonly Entry[];
+  let unreplayable: readonly string[];
+  let corpusKeys: ReadonlySet<string>;
+  try {
+    // Planned again over the merge rather than stitched together out of the per-part plans. The
+    // entries a run replays have to be in the merged corpus's own order and de-duplicated on its own
+    // key set, and deriving that from one pass over one corpus is how it stays that way; the work is
+    // offline and costs microseconds against a settling period measured in minutes.
+    const merged = mergeCorpora(parts.map((part) => part.corpus));
+    // Said only when there was something to merge. With one corpus the merge is the identity, and a
+    // line announcing it would be noise on the overwhelmingly common command line.
+    if (parts.length > 1) {
+      say(`${parts.length} corpora merged into ${merged.queries.length} ${merged.queries.length === 1 ? 'query' : 'queries'}`);
+    }
+    ({ entries, unreplayable, keys: corpusKeys } = plan(merged));
+  } catch (error) {
+    say(`could not merge the corpora: ${detail(error)}`);
     return 2;
   }
 
@@ -163,24 +238,6 @@ export async function check(
       say(`could not read the baseline at ${render(command.baseline)}: ${detail(error)}`);
       return 2;
     }
-  }
-
-  if (entries.length === 0) {
-    // Answered here rather than after the gates, because nothing beyond this point could change it:
-    // there is no entry to ask the target about, so a settling period would be a minute spent to
-    // arrive at the same line.
-    //
-    // An empty corpus is refused rather than reported as full coverage. It replays cleanly by
-    // construction, so the run would exit 0 having measured nothing — the false clean verdict §2
-    // forbids most strictly, arriving at the one moment nothing looks wrong. It is also a shape that
-    // really occurs: a suite driven through the Firebase Web SDK issues no gRPC at all, so `record`
-    // writes a corpus with no queries and counts the requests it could not capture (SPEC §7).
-    say(
-      unreplayable.length === 0
-        ? `there is nothing to replay: the corpus at ${render(command.corpus)} holds no queries`
-        : `there is nothing to replay: no entry in the corpus at ${render(command.corpus)} has a replayable form`,
-    );
-    return 2;
   }
 
   // Said before anything is dialled, because nothing that follows bears on it. A key the corpus
@@ -615,13 +672,7 @@ function reportReplay(
  * recorded. So the run continues — the other entries are still worth an answer — and the report says
  * it is incomplete.
  */
-function plan(source: string): {
-  entries: Entry[];
-  unreplayable: string[];
-  keys: Set<string>;
-  producers: readonly Producer[];
-} {
-  const corpus = parseCorpus(source);
+function plan(corpus: Corpus): Planned {
   const entries: Entry[] = [];
   const unreplayable: string[] = [];
   // Every key the corpus named, planned or not. A baseline entry is only known not to reproduce if
@@ -637,7 +688,7 @@ function plan(source: string): {
       unreplayable.push(`${render(shape.key)}: ${error.message}`);
     }
   }
-  return { entries, unreplayable, keys, producers: corpus.producers };
+  return { entries, unreplayable, keys };
 }
 
 function defaultReadFile(path: string): string {

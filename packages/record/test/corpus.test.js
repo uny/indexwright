@@ -7,6 +7,7 @@ import {
   buildCorpus,
   CORPUS_VERSION,
   CorpusError,
+  mergeCorpora,
   parseCorpus,
   READABLE_CORPUS_VERSIONS,
   serialiseCorpus,
@@ -434,4 +435,99 @@ test('the readable versions are frozen, so a caller cannot widen what this packa
   // accept: an appended version is one the reader has no members written down for.
   assert.throws(() => READABLE_CORPUS_VERSIONS.push(3), TypeError);
   assert.deepEqual([...READABLE_CORPUS_VERSIONS], [1, 2]);
+});
+
+test('a merge is the union of the queries, de-duplicated by key and sorted by it', () => {
+  const merged = mergeCorpora([buildCorpus([shape('z'), shape('m')], []), buildCorpus([shape('a'), shape('m')], [])]);
+  assert.deepEqual(
+    merged.queries.map((query) => query.collectionGroup),
+    ['a', 'm', 'z'],
+  );
+});
+
+test('a merge is a corpus in the sense §7 defines, so it reads back as one', () => {
+  // The whole of what the scope asks for: "readable by anything that reads one". A merge that
+  // produced something only this package's own reader tolerated would not be a corpus.
+  const merged = mergeCorpora([
+    buildCorpus([shape('z')], ['listen-query'], [{ name: 'b', revision: null }]),
+    buildCorpus([shape('a')], ['vector-query'], [{ name: 'a', revision: '9c1f' }]),
+  ]);
+  const text = serialiseCorpus(merged);
+  assert.deepEqual(parseCorpus(text), merged);
+  assert.equal(serialiseCorpus(parseCorpus(text)), text);
+});
+
+test('the merged skipped set is the union: a reason one part discarded, the merged view discarded', () => {
+  const merged = mergeCorpora([
+    buildCorpus([], ['listen-query', 'vector-query']),
+    buildCorpus([], ['aggregation-query', 'listen-query']),
+  ]);
+  assert.deepEqual(merged.skipped, ['aggregation-query', 'listen-query', 'vector-query']);
+});
+
+test('the merged producers are the union, as a set on the pair', () => {
+  // Two revisions of one producer stay two entries, which is the case the identity exists for: a
+  // merge of a current part and a stale part of the same suite.
+  const merged = mergeCorpora([
+    buildCorpus([], [], [{ name: 'suite', revision: '9c1f' }]),
+    buildCorpus([], [], [{ name: 'suite', revision: '1a0b' }]),
+    buildCorpus([], [], [{ name: 'suite', revision: '9c1f' }]),
+  ]);
+  assert.deepEqual(merged.producers, [
+    { name: 'suite', revision: '1a0b' },
+    { name: 'suite', revision: '9c1f' },
+  ]);
+});
+
+test('a mismatched corpusVersion is refused rather than merged across', () => {
+  assert.throws(
+    () => mergeCorpora([parseCorpus('{"corpusVersion":1,"queries":[],"skipped":[]}'), buildCorpus([], [])]),
+    (error) => error instanceof CorpusError && /corpusVersion/.test(error.message),
+  );
+});
+
+test('a merge of version-1 parts stays at version 1, which is the version its parts agreed on', () => {
+  // The merge does not promote: a reader that accepts version 1 accepts the merge of two of them,
+  // and rewriting the version here would make a merge of committed files unreadable to a consumer
+  // that reads every one of its inputs.
+  const merged = mergeCorpora([
+    parseCorpus('{"corpusVersion":1,"queries":[],"skipped":["listen-query"]}'),
+    parseCorpus('{"corpusVersion":1,"queries":[],"skipped":[]}'),
+  ]);
+  assert.equal(merged.corpusVersion, 1);
+  assert.equal(serialiseCorpus(merged), '{\n  "corpusVersion": 1,\n  "queries": [],\n  "skipped": [\n    "listen-query"\n  ]\n}\n');
+});
+
+test('two parts sharing a key but not a body are refused, naming the key', () => {
+  // The key is injective over the shape (SPEC §7), so this cannot arise from two recorders that
+  // saw the same query: it means one of the parts has been edited or corrupted. Merging it last-wins
+  // would produce exactly what this issue is about — a corpus that reads as broader than it is.
+  const honest = buildCorpus([shape('orders', { fieldPath: 'status', op: 'EQUAL' })], []);
+  const tampered = structuredClone(honest);
+  tampered.queries[0].where.filters[0].op = 'NOT_EQUAL';
+  assert.throws(
+    () => mergeCorpora([honest, tampered]),
+    (error) => error instanceof CorpusError && /differ/.test(error.message) && error.message.includes(honest.queries[0].key),
+  );
+});
+
+test('two parts holding the same query with the same body merge to one entry', () => {
+  const one = buildCorpus([shape('orders', { fieldPath: 'status', op: 'EQUAL' })], []);
+  const merged = mergeCorpora([one, parseCorpus(serialiseCorpus(one))]);
+  assert.equal(merged.queries.length, 1);
+  assert.deepEqual(merged.queries, one.queries);
+});
+
+test('a merge of one corpus is that corpus', () => {
+  const one = buildCorpus([shape('orders')], ['listen-query'], [{ name: 'suite', revision: null }]);
+  assert.deepEqual(mergeCorpora([one]), one);
+});
+
+test('a merge of no corpora is refused, rather than read as an empty corpus', () => {
+  // An empty corpus replays cleanly by construction, and `check` refuses one for that reason. A
+  // merge that invented one out of no parts would route around that refusal.
+  assert.throws(
+    () => mergeCorpora([]),
+    (error) => error instanceof CorpusError && /at least one/.test(error.message),
+  );
 });

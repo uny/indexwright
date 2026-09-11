@@ -47,7 +47,7 @@ test('check names its target in full, and defaults only the file paths', () => {
   assert.equal(command.kind, 'check');
   assert.equal(command.project, 'p-1');
   assert.equal(command.database, '(default)');
-  assert.equal(command.corpus, 'firestore.queries.json');
+  assert.deepEqual(command.corpus, ['firestore.queries.json']);
   assert.equal(command.indexes, 'firestore.indexes.json');
   assert.equal(canonicalTarget(command), 'projects/p-1/databases/(default)');
   // The one input with no default. A baseline decides which findings fail the run, so a default
@@ -285,7 +285,7 @@ test('a file path option that was written empty is a usage error', () => {
 
 test('check takes its options in either form, and refuses ones it does not have', () => {
   const command = parseArgs(['check', '--project=p', '--database=d', '--corpus=c.json', '--indexes=i.json']);
-  assert.equal(command.corpus, 'c.json');
+  assert.deepEqual(command.corpus, ['c.json']);
   assert.equal(command.indexes, 'i.json');
   assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'd', '--nope']), (error) => /unknown option/.test(error.message));
   assert.throws(() => parseArgs(['check', '--project', 'p', '--database', 'd', 'extra']), (error) => /unexpected argument/.test(error.message));
@@ -1005,4 +1005,35 @@ test('a run given no producer writes a corpus that names none', async () => {
     rmSync(directory, { recursive: true, force: true });
     upstream.close();
   }
+});
+
+test('--corpus is repeatable, and the default gives way to the first one named', () => {
+  // One index set is routinely consumed by more than one suite (issue #56). The default is a
+  // starting value rather than a part of the merge: a command that names two corpora checks those
+  // two, not those two and whatever `firestore.queries.json` happens to hold.
+  const command = parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus', 'a.json', '--corpus=b.json']);
+  assert.deepEqual(command.corpus, ['a.json', 'b.json']);
+});
+
+test('the corpora are kept in the order they were written, not sorted', () => {
+  // The order is what the per-part lines are reported in, and an operator reading them against the
+  // command line should find them in the same order they typed.
+  const command = parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus', 'z.json', '--corpus', 'a.json']);
+  assert.deepEqual(command.corpus, ['z.json', 'a.json']);
+});
+
+test('the same corpus named twice is a usage error, not a part counted once', () => {
+  // De-duplicating silently would absorb the typo this refusal exists to surface: a command meaning
+  // to name two suites that names one of them twice checks a narrower set than it reads as checking.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus', 'a.json', '--corpus', 'a.json']),
+    (error) => error instanceof UsageError && /--corpus names "a.json" twice/.test(error.message),
+  );
+});
+
+test('a repeated --corpus still refuses one written without a value', () => {
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus', 'a.json', '--corpus=']),
+    (error) => /--corpus needs a value/.test(error.message),
+  );
 });
