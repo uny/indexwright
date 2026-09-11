@@ -26,7 +26,10 @@ again, by its own `corpusVersion`.
   username, no absolute path — which is the leak
   [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7 already refuses when it declines
   to interpolate wire-decoded text into `skipped`, arriving from the other side. `--revision` without
-  `--producer` is a usage error rather than a value quietly dropped.
+  `--producer` is a usage error rather than a value quietly dropped, and a name or revision carrying
+  a control character, a line break, an invisible character, or a bidirectional override is refused
+  where it enters: the value is written into a reviewed file and echoed onto the stream the target
+  is announced on, and each of those stops the written name from being the name that is read.
 
   **`--require-identity` on `check`** refuses a corpus that names no producer, with exit `2` — a run
   that cannot report, not a run reporting a gap — before anything is dialled or settled. It is off by

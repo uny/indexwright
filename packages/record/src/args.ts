@@ -501,8 +501,15 @@ export function render(value: string): string {
  * places, and a bidi override reorders the name without altering a character of it. `render` makes
  * the echo safe on the way out, as it does for a corpus read from disk; a value arriving on this
  * command line can simply be refused where it enters, and the file gets the same protection.
+ *
+ * The zero-width and invisible formatting characters are refused on the same ground rather than a
+ * different one. They forge nothing on the stream — `render` escapes them there — but the file is
+ * the other place this text is read, and `JSON.stringify` writes them out raw: a name carrying one
+ * is byte-different from the real producer's and pixel-identical to it in the diff a reviewer
+ * reads, which is the whole of what this guard is for.
  */
-const UNRENDERABLE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
+const UNRENDERABLE =
+  /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060\u2066-\u2069\ufeff]|[\u{e0000}-\u{e007f}]/u;
 
 function requireIdentityValue(value: string, option: string): string {
   if (value === '') throw new UsageError(`${option} needs a value`);
@@ -511,7 +518,7 @@ function requireIdentityValue(value: string, option: string): string {
   }
   if (UNRENDERABLE.test(value)) {
     throw new UsageError(
-      `${option} may not hold a control character, a line break, or a bidirectional override, got ${render(value)}`,
+      `${option} may not hold a control character, a line break, an invisible character, or a bidirectional override, got ${render(value)}`,
     );
   }
   return value;

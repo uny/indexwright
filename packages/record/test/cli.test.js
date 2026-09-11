@@ -883,6 +883,18 @@ test('the arabic letter mark is refused with the other bidi controls, not accept
   );
 });
 
+test('an invisible character is refused, since the file is the other place the name is read', () => {
+  // `render` keeps the echo honest, but the corpus is written with `JSON.stringify`, which passes
+  // these through raw: a name carrying one is pixel-identical to the real producer's in the diff a
+  // reviewer reads, and byte-different from it.
+  for (const invisible of ['\u200b', '\ufeff', '\u00ad', '\u2060', '\u{e0041}']) {
+    assert.throws(
+      () => parseArgs(['--producer', `orders${invisible}service`, '--', 'true']),
+      (error) => error instanceof UsageError && /invisible character/.test(error.message),
+    );
+  }
+});
+
 test('a producer name in the team\'s own language is accepted', () => {
   // A denylist, not an allowlist: what is refused is what stops a name from being read as written,
   // and a non-ASCII name is not that.
