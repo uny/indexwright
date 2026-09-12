@@ -50,6 +50,12 @@ again, by its own `corpusVersion`.
   version they agree on and is not promoted, for the reason a read of a version-1 corpus serialises
   back to version 1. The corpus format is unchanged by this release.
 
+  **Breaking, for callers of the exported API:** `CheckCommand.corpus` is now `readonly string[]`
+  rather than `string`. The CLI is unaffected — a command naming no `--corpus` still defaults to
+  `firestore.queries.json` — but a JS caller building the command itself has to pass a list. One
+  passing the old string is refused by name with exit `2` rather than having its path walked a
+  character at a time, on the same principle as every other refusal at this boundary.
+
 - **A corpus records who produced it** (issue #55), and `check` echoes it beside the target on every
   run. `check` already refuses an *empty* corpus, on the grounds that one replays cleanly by
   construction and a pass would report coverage having measured nothing. A corpus that is merely old

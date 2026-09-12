@@ -110,6 +110,15 @@ export async function check(
   const readFile = options.readFile ?? defaultReadFile;
   const target = canonicalTarget(command);
 
+  // Checked rather than iterated. This member was one path until issue #56, and an untyped caller
+  // carried over from before that still passes the string — which `for..of` walks a character at a
+  // time, so the run declines naming a corpus at `"f"` rather than naming the change. The same
+  // refusal `serialiseCorpus` makes of a corpus object with no `producers`, and for the same reason.
+  if (typeof command.corpus === 'string') {
+    say('cannot report: --corpus is a list of paths rather than one path; pass [corpus] rather than corpus');
+    return 2;
+  }
+
   // Read and plan before anything is constructed, let alone dialled. Everything up to the first
   // client is offline and costs milliseconds, and everything after it costs a minute of settling at
   // the least — so a mistyped path or an unreplayable corpus should be found on the near side of

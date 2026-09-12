@@ -1160,7 +1160,7 @@ test('a second corpus that cannot be read stops the run before the first one is 
   assert.doesNotMatch(h.said(), /corpus "a\.queries\.json"/);
 });
 
-test('a skip reason either part discarded is the merged view\'s, and is reported once', async () => {
+test('two parts that discarded different things merge without refusing the run', async () => {
   const h = harness({
     corpora: {
       'a.queries.json': serialiseCorpus(
@@ -1178,4 +1178,18 @@ test('a skip reason either part discarded is the merged view\'s, and is reported
     },
   });
   assert.equal(await h.run(), 0);
+});
+
+test('a caller passing one path where a list belongs is refused by name, not by walking the string', async () => {
+  // The exported `check` took one path until issue #56. A `for..of` over the string would read its
+  // first character as a corpus and decline naming a file called "f", which names neither the member
+  // nor the change. Same refusal `serialiseCorpus` makes of a corpus object with no producers.
+  const said = [];
+  const code = await check(
+    { ...COMMAND, corpus: 'firestore.queries.json' },
+    { out: () => {}, err: (text) => said.push(text) },
+    { readFile: () => assert.fail('no file should be read on this path'), lister: async () => assert.fail('no client either') },
+  );
+  assert.equal(code, 2);
+  assert.match(said.join(''), /--corpus is a list of paths rather than one path/);
 });
