@@ -1031,6 +1031,32 @@ test('the same corpus named twice is a usage error, not a part counted once', ()
   );
 });
 
+test('one corpus named twice is refused however the second one is spelled', () => {
+  // The refusal is about the file and not about the spelling. `a.json` and `./a.json` are one corpus
+  // announced twice and counted twice, and a guard the shell's own tab completion can walk past is
+  // not a guard. Normalised rather than resolved: this parser reads nothing off the filesystem.
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus', 'a.json', '--corpus', './a.json']),
+    (error) => error instanceof UsageError && /--corpus names "\.\/a.json" twice/.test(error.message),
+  );
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus', 'pkg/a.json', '--corpus', 'pkg/b/../a.json']),
+    (error) => error instanceof UsageError && /twice/.test(error.message),
+  );
+});
+
+test('two corpora that differ only below a shared directory are still two', () => {
+  // The guard collapses spellings, not files. `packages/orders/…` and `packages/billing/…` are the
+  // ordinary command line this option exists for, and a refusal that caught them would be worse than
+  // no refusal at all.
+  const command = parseArgs([
+    'check', '--project', 'p', '--database', 'd',
+    '--corpus', 'packages/orders/firestore.queries.json',
+    '--corpus', './packages/billing/firestore.queries.json',
+  ]);
+  assert.deepEqual(command.corpus, ['packages/orders/firestore.queries.json', './packages/billing/firestore.queries.json']);
+});
+
 test('a repeated --corpus still refuses one written without a value', () => {
   assert.throws(
     () => parseArgs(['check', '--project', 'p', '--database', 'd', '--corpus', 'a.json', '--corpus=']),

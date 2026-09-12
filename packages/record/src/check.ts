@@ -17,7 +17,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { normalize, resolve } from 'node:path';
 import { analyse, parseDocument, type AnalysedIndex } from 'indexwright';
 import { adminLister, AdminError, listLiveIndexes, type IndexLister } from './admin.js';
 import { canonicalTarget, REQUIRE_IDENTITY, render, type CheckCommand } from './args.js';
@@ -119,6 +119,27 @@ export async function check(
     return 2;
   }
 
+  // The other two halves of what the member's own documentation states: never empty, and never one
+  // path twice. The parser enforces both, so this is the boundary the exported `check` presents to a
+  // caller that builds the command itself. An empty list would otherwise surface out of the merge as
+  // `a merge needs at least one corpus` — a sentence about merging for what is a caller naming no
+  // corpus at all — and a repeated path is read, announced and counted twice, so a run measuring one
+  // suite reports as having measured two. Compared normalised, for the reason the parser compares
+  // normalised.
+  if (command.corpus.length === 0) {
+    say('cannot report: --corpus names no corpus; a run has to be told what to replay');
+    return 2;
+  }
+  const named = new Set<string>();
+  for (const path of command.corpus) {
+    const normalised = normalize(path);
+    if (named.has(normalised)) {
+      say(`cannot report: --corpus names ${render(path)} twice, so one corpus would be counted as two`);
+      return 2;
+    }
+    named.add(normalised);
+  }
+
   // Read and plan before anything is constructed, let alone dialled. Everything up to the first
   // client is offline and costs milliseconds, and everything after it costs a minute of settling at
   // the least — so a mistyped path or an unreplayable corpus should be found on the near side of
@@ -209,9 +230,26 @@ export async function check(
     return 2;
   }
 
-  // Merged after every part has been vouched for individually, so that a refusal names the part it
-  // is about. The rules are SPEC §7's own — see `mergeCorpora` — and a mismatched `corpusVersion` or
-  // a key two parts disagree on is refused here rather than merged across.
+  // Refused here rather than left to `mergeCorpora`, which sees corpora and not paths and so can only
+  // say that two versions met. The integer names the format both sides have to agree on, and an
+  // operator holding five `--corpus` arguments needs to be told which file is the one to re-record
+  // — a refusal they have to go and bisect by hand is the refusal not doing its job. `mergeCorpora`
+  // keeps its own check for the caller that reaches it without going through here.
+  const first = parts[0] as { readonly path: string; readonly corpus: Corpus };
+  for (const part of parts) {
+    if (part.corpus.corpusVersion === first.corpus.corpusVersion) continue;
+    say(
+      `cannot report: the corpus at ${render(part.path)} is at corpusVersion ${part.corpus.corpusVersion} ` +
+        `and the one at ${render(first.path)} is at ${first.corpus.corpusVersion}; a merge across two ` +
+        'versions would describe only half of what went into it',
+    );
+    return 2;
+  }
+
+  // Merged after every part has been vouched for individually. The rules are SPEC §7's own — see
+  // `mergeCorpora`. What reaches the catch below is therefore what this function has no path of its
+  // own for: a key two parts hold with bodies that differ, which `parseCorpus` has already refused
+  // for anything read from a file, since it re-derives the key from the body it is stored beside.
   let entries: readonly Entry[];
   let unreplayable: readonly string[];
   let corpusKeys: ReadonlySet<string>;
@@ -224,7 +262,7 @@ export async function check(
     // Said only when there was something to merge. With one corpus the merge is the identity, and a
     // line announcing it would be noise on the overwhelmingly common command line.
     if (parts.length > 1) {
-      say(`${parts.length} corpora merged into ${merged.queries.length} ${merged.queries.length === 1 ? 'query' : 'queries'}`);
+      say(`${count(parts.length, 'corpus', 'corpora')} merged into ${count(merged.queries.length, 'query', 'queries')}`);
     }
     ({ entries, unreplayable, keys: corpusKeys } = plan(merged));
   } catch (error) {

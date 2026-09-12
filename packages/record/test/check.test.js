@@ -1132,7 +1132,10 @@ test('an empty part is refused even though the merge is not empty', async () => 
   assert.equal(h.replayed.length, 0);
 });
 
-test('a part at a different corpusVersion is a run that cannot answer, before any client', async () => {
+test('a part at a different corpusVersion is refused, and the refusal names both parts', async () => {
+  // Named, because the fix is to re-record one file and an operator holding several --corpus
+  // arguments cannot act on "two versions met". `mergeCorpora` sees corpora rather than paths, so
+  // the version is settled here, where the path is still in hand.
   const h = harness({
     corpora: {
       'a.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
@@ -1142,7 +1145,7 @@ test('a part at a different corpusVersion is a run that cannot answer, before an
     lister: async () => assert.fail('no client should be built on this path'),
   });
   assert.equal(await h.run(), 2);
-  assert.match(h.said(), /could not merge the corpora: .*corpusVersion/);
+  assert.match(h.said(), /the corpus at "b\.queries\.json" is at corpusVersion 1 and the one at "a\.queries\.json" is at 2/);
 });
 
 test('a second corpus that cannot be read stops the run before the first one is announced', async () => {
@@ -1160,7 +1163,10 @@ test('a second corpus that cannot be read stops the run before the first one is 
   assert.doesNotMatch(h.said(), /corpus "a\.queries\.json"/);
 });
 
-test('two parts that discarded different things merge without refusing the run', async () => {
+test('two parts that discarded different things are still one run, not a refusal', async () => {
+  // What this pins is the run, not the union: `check` never reads `skipped`, so the union itself is
+  // only assertable where it is computed. See corpus.test.js, "the merged skipped set is the union".
+
   const h = harness({
     corpora: {
       'a.queries.json': serialiseCorpus(
@@ -1192,4 +1198,85 @@ test('a caller passing one path where a list belongs is refused by name, not by 
   );
   assert.equal(code, 2);
   assert.match(said.join(''), /--corpus is a list of paths rather than one path/);
+});
+
+test('a baselined key held only by the second corpus is not reported as one the corpus dropped', async () => {
+  // The baseline is accounted for against the *merged* key set. Derived from one part instead, a run
+  // would tell an operator that an accepted gap has stopped reproducing on the strength of a corpus
+  // that never held it — the file shrinks by an entry nobody measured, and the gap comes back as a
+  // finding the next time the other suite is captured.
+  const h = harness({
+    corpora: {
+      'a.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
+      'b.queries.json': corpusOf({ op: 'AND', filters: [equals('unindexed')] }),
+    },
+    baseline: baselineOf(keyOf('unindexed')),
+    statuses: [{ kind: 'served' }, { kind: 'uncovered', message: '"the query requires an index"' }],
+  });
+  assert.equal(await h.run(), 0);
+  assert.doesNotMatch(h.said(), /no longer holds it/);
+  assert.match(h.said(), /in the baseline, so this does not fail the run/);
+});
+
+test('the corpora are announced in the order they were named, not in some order of their own', async () => {
+  // An operator reads these lines against the command line they typed. The parser keeps the order
+  // (see cli.test.js), and it survives to the report only if nothing here sorts on the way.
+  const h = harness({
+    corpora: {
+      'z.queries.json': producedBy({ name: 'z-suite', revision: null }),
+      'a.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
+    },
+  });
+  assert.equal(await h.run(), 0);
+  const lines = h.said().split('\n').filter((line) => line.includes('corpus "'));
+  assert.match(lines[0], /corpus "z\.queries\.json" produced by "z-suite"/);
+  assert.match(lines[1], /corpus "a\.queries\.json" records no producer/);
+});
+
+test('a second part whose every entry is unreplayable names that part, not the first', async () => {
+  // The other half of the per-part refusal. Rendered from the merge, or from `command.corpus[0]`,
+  // this line would send an operator to the file that is fine.
+  // A root OR with no children: on the wire, matches nothing, and has no replayable form — the same
+  // entry the single-corpus test above is built on.
+  const unreplayable = JSON.stringify({
+    corpusVersion: 2,
+    producers: [],
+    queries: [{ key: 'orders::COLLECTION::OR()::', collectionGroup: 'orders', queryScope: 'COLLECTION', where: { op: 'OR', filters: [] }, orderBy: [] }],
+    skipped: [],
+  });
+  const h = harness({
+    corpora: { 'a.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }), 'b.queries.json': unreplayable },
+    lister: async () => assert.fail('no client should be built on this path'),
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /no entry in the corpus at "b\.queries\.json" has a replayable form/);
+  assert.doesNotMatch(h.said(), /corpus at "a\.queries\.json" has a replayable form/);
+});
+
+test('a caller naming no corpus at all is refused by name, not by a sentence about merging', async () => {
+  // `CheckCommand.corpus` documents itself as never empty; the parser cannot produce an empty list,
+  // so this is the boundary the exported verb owes a caller that builds the command itself.
+  const said = [];
+  const code = await check(
+    { ...COMMAND, corpus: [] },
+    { out: () => {}, err: (text) => said.push(text) },
+    { readFile: () => assert.fail('no file should be read on this path'), lister: async () => assert.fail('no client either') },
+  );
+  assert.equal(code, 2);
+  assert.match(said.join(''), /--corpus names no corpus/);
+  assert.doesNotMatch(said.join(''), /merge/);
+});
+
+test('a caller naming one corpus twice is refused, however the second one is spelled', async () => {
+  // Read twice, announced twice and counted twice, a single suite reports as two — the narrower set
+  // read as the wider one, which is the failure the repeatable option exists to close rather than to
+  // open. The parser refuses this; a caller building the command itself reaches here instead.
+  const said = [];
+  const code = await check(
+    { ...COMMAND, corpus: ['a.queries.json', './a.queries.json'] },
+    { out: () => {}, err: (text) => said.push(text) },
+    { readFile: () => assert.fail('no file should be read on this path'), lister: async () => assert.fail('no client either') },
+  );
+  assert.equal(code, 2);
+  assert.match(said.join(''), /--corpus names "\.\/a\.queries\.json" twice/);
 });

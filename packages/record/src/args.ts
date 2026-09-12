@@ -1,5 +1,6 @@
 /** Argument parsing, in-tree and without a dependency, in the shape `indexwright` uses. */
 
+import { normalize } from 'node:path';
 import { parseHostPort, requireLoopbackUpstream, type HostOrigin } from './endpoints.js';
 
 export class UsageError extends Error {
@@ -356,7 +357,17 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
         // Refused rather than de-duplicated. A command meaning to name two suites that names one of
         // them twice would otherwise check a narrower set than it reads as checking, which is the
         // whole failure class this option is repeatable for.
-        if (corpora.includes(path)) throw new UsageError(`${name} names ${render(path)} twice`);
+        //
+        // Compared normalised, because the refusal is about the file and not about the spelling:
+        // `a.json` and `./a.json` are one corpus announced twice and counted twice, and a guard the
+        // shell's own tab completion can walk past is not a guard. `normalize` and not `resolve`:
+        // this parser reads nothing from the filesystem and consults no working directory (issue
+        // #8), and collapsing `./` and `..` is what distinguishes the spellings that actually arise.
+        // Two paths that reach one file by different roots — a symlink, an absolute and a relative
+        // form — are still two here, which is the part `check` cannot settle either.
+        if (corpora.some((named) => normalize(named) === normalize(path))) {
+          throw new UsageError(`${name} names ${render(path)} twice`);
+        }
         corpora.push(path);
         break;
       }
