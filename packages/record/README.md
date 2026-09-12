@@ -66,7 +66,7 @@ indexwright-record check --project <id> --database <name> [options]
 Options:
   --project <id>          project holding the database to replay against (required)
   --database <name>       database within it (required; the default one is named "(default)")
-  --corpus <file>         the corpus to replay (default: firestore.queries.json)
+  --corpus <file>         a corpus to replay (default: firestore.queries.json). Repeatable
   --indexes <file>        the candidate index declarations (default: firestore.indexes.json)
   --baseline <file>       gaps already accepted by this project (no default)
   --require-identity      refuse a corpus that names no producer (off by default)
@@ -85,6 +85,45 @@ a file it could not read, a readiness it could not establish, a target that is n
 candidate set, an entry it could not replay, a status it cannot interpret, and a set that did not
 hold across the replay. It outranks `1`, because a report that is missing entries is not a clean
 report with a caveat.
+
+**`--corpus` is repeatable, and the corpora are checked as one.** One index set is routinely
+consumed by more than one suite — several packages in a workspace, or several services in separate
+repositories sharing one database — and each suite's corpus is a partial view of what queries the
+set. Checking them one at a time answers a narrower question than the set poses: a set can satisfy
+every corpus checked while failing the one that was not, which is the ordinary shape of the failure
+this tool exists to catch, because the declaration and the query that needs it are frequently not in
+the same place.
+
+```bash
+indexwright-record check --project p --database '(default)' \
+  --corpus packages/orders/firestore.queries.json \
+  --corpus packages/billing/firestore.queries.json
+```
+
+The merge is [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7's own: `queries`
+de-duplicate on the canonical key and sort by it, `skipped` is the union of the parts, and
+`producers` is the union as a set on the `(name, revision)` pair.
+
+Three things are refused rather than merged across, and each refusal names the part it is about. A
+part at a different `corpusVersion`, because the integer names the format both sides have to agree
+on. Two parts holding one canonical key with bodies that differ — the key is derived from the body,
+so a corpus file that disagrees with itself is refused by the reader before the merge is reached, and
+this catches the same disagreement arriving through the API. And **a part with nothing replayable in
+it** — `check` refuses a single empty corpus because one replays cleanly by construction, and a merge
+of three corpora one of which is empty is non-empty, so a run that only looked at the merge would
+report full coverage for a set whose other consuming suite was never captured. A suite driven through
+the Firebase Web SDK produces exactly such a corpus; the fix is to drop that part from the command
+line.
+
+Naming one corpus twice is refused earlier, as a usage error, and the two spellings of one path are
+one corpus: a command meaning to name two suites that names one of them twice checks a narrower set
+than it reads as checking.
+
+Every corpus is announced on its own line, with its own producers, for the same reason. A merged
+`producers` naming someone does not mean every part named someone: an anonymous stale part would
+otherwise hide behind a named current one, and the merged view presents a wider surface than any of
+its inputs. `--require-identity` is likewise per part — a merge is only as answerable as its least
+identified part.
 
 **The set is checked again after the last query is answered.** Both gates read it once, before the
 first replayed query, so a run vouches for a set at one moment and reports about a window that

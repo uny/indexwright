@@ -1,5 +1,6 @@
 /** Argument parsing, in-tree and without a dependency, in the shape `indexwright` uses. */
 
+import { normalize } from 'node:path';
 import { parseHostPort, requireLoopbackUpstream, type HostOrigin } from './endpoints.js';
 
 export class UsageError extends Error {
@@ -34,8 +35,16 @@ export interface CheckCommand {
   readonly project: string;
   /** The database within it. `(default)` is a name like any other, and has to be written out. */
   readonly database: string;
-  /** The corpus to replay, as written by `record`. */
-  readonly corpus: string;
+  /**
+   * The corpora to replay, as written by `record`, in the order they were named. Never empty.
+   *
+   * A list rather than one path because one index set is routinely consumed by more than one suite —
+   * several packages in a workspace, or several services sharing one database — and each suite's
+   * corpus is a partial view of what queries the set. Checking them one at a time answers a narrower
+   * question than the set poses: a set can satisfy every corpus checked while failing the one that
+   * was not, which is the ordinary shape of the failure this tool exists to catch (issue #56).
+   */
+  readonly corpus: readonly string[];
   /** The candidate index declarations the target is supposed to be carrying. */
   readonly indexes: string;
   /**
@@ -303,7 +312,11 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = {}):
 function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command {
   let project: string | undefined;
   let database: string | undefined;
-  let corpus = DEFAULT_CORPUS;
+  // The default is a starting value rather than a first part: the moment a `--corpus` is named it
+  // gives way entirely. A command naming two corpora checks those two, and not those two plus
+  // whatever `firestore.queries.json` happens to be sitting in the working directory — which is the
+  // ambient-input failure #8 is about, arriving through a default instead of the environment.
+  const corpora: string[] = [];
   let indexes = DEFAULT_INDEXES;
   let baseline: string | undefined;
   let requireIdentity = false;
@@ -339,9 +352,25 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
       case '--database':
         database = requireSegment(takeValue(), name, DATABASE_SEGMENT);
         break;
-      case '--corpus':
-        corpus = requirePath(takeValue(), name);
+      case '--corpus': {
+        const path = requirePath(takeValue(), name);
+        // Refused rather than de-duplicated. A command meaning to name two suites that names one of
+        // them twice would otherwise check a narrower set than it reads as checking, which is the
+        // whole failure class this option is repeatable for.
+        //
+        // Compared normalised, because the refusal is about the file and not about the spelling:
+        // `a.json` and `./a.json` are one corpus announced twice and counted twice, and a guard the
+        // shell's own tab completion can walk past is not a guard. `normalize` and not `resolve`:
+        // this parser reads nothing from the filesystem and consults no working directory (issue
+        // #8), and collapsing `./` and `..` is what distinguishes the spellings that actually arise.
+        // Two paths that reach one file by different roots — a symlink, an absolute and a relative
+        // form — are still two here, which is the part `check` cannot settle either.
+        if (corpora.some((named) => normalize(named) === normalize(path))) {
+          throw new UsageError(`${name} names ${render(path)} twice`);
+        }
+        corpora.push(path);
         break;
+      }
       case '--indexes':
         indexes = requirePath(takeValue(), name);
         break;
@@ -394,7 +423,7 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
     kind: 'check',
     project,
     database,
-    corpus,
+    corpus: corpora.length === 0 ? [DEFAULT_CORPUS] : corpora,
     indexes,
     requireIdentity,
     ...(baseline === undefined ? {} : { baseline }),
@@ -625,7 +654,10 @@ export function usage(): string {
     'Options:',
     '  --project <id>          project holding the database to replay against (required)',
     '  --database <name>       database within it (required; the default one is named "(default)")',
-    `  --corpus <file>         the corpus to replay (default: ${DEFAULT_CORPUS})`,
+    `  --corpus <file>         a corpus to replay (default: ${DEFAULT_CORPUS}). Repeatable:`,
+    '                          one index set consumed by several suites is checked against all of',
+    '                          their corpora merged, since a set can satisfy every corpus checked',
+    '                          while failing the one that was not',
     `  --indexes <file>        the candidate index declarations (default: ${DEFAULT_INDEXES})`,
     '  --baseline <file>       gaps already accepted by this project (no default). An entry in it',
     '                          is reported and does not fail the run; anything else exits 1',

@@ -9,6 +9,54 @@ again, by its own `corpusVersion`.
 
 ### Added
 
+- **`check --corpus` is repeatable, and the corpora are checked as one set** (issue #56). One index
+  set is routinely consumed by more than one suite — several packages in a workspace, or several
+  services in separate repositories sharing one database — and each suite's corpus is a partial view
+  of what queries the set. Checking them one at a time answers a narrower question than the set poses:
+  a run says "this corpus is covered", and a set can satisfy every corpus checked while failing the
+  one that was not. That is the ordinary shape of the failure this tool exists to catch, because the
+  declaration and the query that needs it are frequently not in the same place — and the consuming
+  suite whose capture did not run is exactly the one whose queries are missing an index.
+
+  **The merge invents nothing.**
+  [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7 already defined every rule it
+  needs, and now states the operation itself: `queries` de-duplicate on the canonical key and sort by
+  it, `skipped` is the union of the parts, and `producers` is the union as a set on the
+  `(name, revision)` pair. The result is a corpus in §7's sense — readable by anything that reads one
+  — which is the requirement rather than a property it happens to have. `mergeCorpora` is exported for
+  callers who want the merge without the verb. The union for `skipped` rather than the intersection:
+  a reason one part discarded is a reason the merged view discarded, and the merged corpus is no more
+  complete than its least complete part.
+
+  **A part with nothing replayable in it is refused, and the refusal names that part.** `check`
+  refuses a single empty corpus because one replays cleanly by construction and a pass would report
+  coverage having measured nothing; a merge of three corpora one of which is empty is *not* empty, so
+  a run that only examined the merge would lose that signal entirely and report full coverage for a
+  set whose other consuming suite was never captured. A suite driven through the Firebase Web SDK
+  produces exactly such a corpus, so this is a shape that really occurs; the remedy is to stop naming
+  that part, which is one argument removed from the command line rather than a flag to discover.
+
+  **Identity is read per part.** The line that echoes a corpus's producers is printed once per corpus,
+  and `--require-identity` is applied to each: a merged `producers` naming someone does not mean every
+  part named someone, and an anonymous stale part would otherwise hide behind a named current one,
+  presenting a wider surface than any of the inputs with nothing recording which is which. This is
+  what #55 made a list on the pair for.
+
+  **Refused rather than merged across:** a part at a different `corpusVersion`, because the integer
+  names the format both sides must agree on — named with the path, since the fix is to re-record one
+  file; and a canonical key two parts hold with bodies that differ, which means a part has been
+  edited or has arrived corrupted, since the key is injective over the shape. The second of those
+  binds parts that did not come from a file: a corpus file whose key and body disagree is refused
+  where it is read, because the reader re-derives the key from the body it is stored beside. A merge
+  of parts that agree keeps the version they agree on and is not promoted, for the reason a read of a
+  version-1 corpus serialises back to version 1. The corpus format is unchanged by this release.
+
+  **Refused before the merge:** one corpus named twice, because a command meaning to name two suites
+  that names one of them twice checks a narrower set than it reads as checking. The two spellings of
+  one path are one corpus — `a.json` and `./a.json` are compared normalised — since a guard the
+  shell's own tab completion can walk past is not a guard. Two paths that reach one file by different
+  roots are still two, which is the part nothing here can settle.
+
 - **A corpus records who produced it** (issue #55), and `check` echoes it beside the target on every
   run. `check` already refuses an *empty* corpus, on the grounds that one replays cleanly by
   construction and a pass would report coverage having measured nothing. A corpus that is merely old
@@ -79,6 +127,17 @@ again, by its own `corpusVersion`.
   entry should itself fail the run is left open; #57 names it a separate decision.
 
 ### Changed
+
+- **`CheckCommand.corpus` is `readonly string[]` rather than `string`**, so a caller building the
+  command itself passes a list. One passing the old string is refused by name with exit `2` rather
+  than having its path walked a character at a time, and so are a list that is empty and a list that
+  names one path twice — the three things the member documents about itself, at the boundary the
+  exported verb owes a caller the parser does not reach. Named here for the reason `requireIdentity`
+  below is: the type is exported, and a caller constructing one greps here.
+
+  A command naming no `--corpus` still defaults to `firestore.queries.json`, but two command lines do
+  change meaning. `--corpus a.json --corpus b.json` named `b.json` alone before this release and now
+  checks both merged; `--corpus a.json --corpus a.json` parsed before and is now a usage error.
 
 - **`corpusVersion` is `2`.** Adding a top-level member is the case the integer exists for: a reader
   that did not know `producers` would refuse a corpus for carrying a member the format does not

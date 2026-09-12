@@ -622,6 +622,59 @@ corpus that named none, as `skipped` is `[]` on a run that discarded nothing.
 A corpus at version 1 carries no `producers` member. It is read as naming none, which is what the
 member being optional means; it is not refused, and nothing is guessed for it.
 
+### Merging
+
+A corpus is written for one run, and `record` replaces rather than merges for the reason above. A
+*consumer* faces the other case: one index set is routinely consumed by more than one suite — several
+packages in a workspace, or several services in separate repositories sharing one database — and each
+suite's corpus is a partial view of what queries the set. Checking them one at a time answers a
+narrower question than the set poses. A run says "this corpus is covered", and a set can satisfy
+every corpus checked while failing the one that was not, which is the ordinary shape of the failure a
+coverage check exists to catch: the declaration and the query that needs it are frequently not in the
+same place, and the consuming suite whose capture did not run is the one whose queries are missing an
+index.
+
+The merge invents nothing. Every rule it needs is already above: `queries` de-duplicate on the
+canonical key and sort by it, `skipped` is a set of reasons, and `producers` is a set on the
+`(name, revision)` pair. The result is therefore a corpus in the sense this section defines —
+readable by anything that reads one — and that is the requirement rather than a property it happens
+to have. That the rules were already written down is also the argument for a tool doing it: every
+adopter otherwise writes the same `jq`, and the ones who write it slightly wrong get a corpus that
+reads as broader than it is.
+
+`skipped` is the union and not the intersection. A reason one part discarded is a reason the merged
+view discarded: the merged corpus is no more complete than its least complete part, and an
+intersection would say the opposite.
+
+**A mismatched `corpusVersion` is refused rather than merged across.** The integer names the format
+both sides have to agree on, so a file produced under one version out of parts at two would describe
+only half of what went into it. A merge of parts that agree keeps the version they agree on; it is
+not promoted, for the same reason a read of a version-1 corpus serialises back to version 1.
+
+**A consumer refuses a part with nothing replayable in it, and the refusal names that part.** This is
+a rule of the consumer and not of the merge itself: the merge is an operation on corpora, and a
+corpus with no queries is a corpus. A consumer refuses an empty corpus on its own because such a
+corpus replays cleanly by construction and a pass would report coverage having measured nothing. A merge of three corpora one of which is empty is
+*not* empty, so a consumer that only examined the merge would lose that signal entirely and report
+full coverage for a set whose other consuming suite was never captured. The same applies to a part
+whose every entry is unreplayable. A suite driven through the Firebase Web SDK produces exactly such
+a corpus, so this is a shape that really occurs rather than a hypothetical; the remedy is to stop
+naming that part, which is a decision the operator makes rather than one the merge makes for them.
+
+**Two parts sharing a canonical key must agree on the body under it.** The key is injective over the
+shape, so two recorders that observed the same query write the same entry; parts that disagree mean
+one of them has been edited or has arrived corrupted, and taking either side silently is how a merged
+corpus comes to describe a query neither part recorded. A *file* that disagrees with itself this way
+does not reach the merge — the key is derived from the body, so a reader that re-derives it refuses
+the entry where it is read (*File shape*, above) and says so in those terms. The rule therefore binds
+the merge for parts that did not come from a file.
+
+**Producer identity is read per part, not over the merge.** A merged `producers` naming someone does
+not mean every part named someone: an anonymous stale part would hide behind a named current one, and
+the merged corpus then presents a wider surface than any of its inputs with nothing recording which
+is which. A consumer that echoes the identity echoes it per part, and a consumer that requires one
+requires it of every part — a merge is only as answerable as its least identified part.
+
 ### Implicit fields are not materialised
 
 Firestore appends the document key to every query's sort order, and promotes an inequality field

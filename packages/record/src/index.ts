@@ -38,7 +38,7 @@ export {
   redirectRefusal,
   type FirestoreModule,
 } from './client.js';
-export { buildCorpus, CorpusError, parseCorpus, serialiseCorpus, writeCorpus } from './corpus.js';
+export { buildCorpus, CorpusError, mergeCorpora, parseCorpus, serialiseCorpus, writeCorpus } from './corpus.js';
 export { decodeRunQuery, type DecodeResult } from './decode.js';
 export {
   classifyHost,

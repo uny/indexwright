@@ -98,6 +98,69 @@ function sortProducers(producers: Iterable<Producer>): Producer[] {
 }
 
 /**
+ * Merge several corpora into one (SPEC §7, *Merging*).
+ *
+ * One index set is routinely consumed by more than one suite, and each suite's corpus is a partial
+ * view of what queries the set. Checking them one at a time answers a narrower question than the set
+ * poses, because a set can satisfy every corpus checked while failing the one that was not.
+ *
+ * Every rule here is §7's own rather than this function's: `queries` de-duplicate on the canonical
+ * key and sort by it, `skipped` is a set of reasons, `producers` is a set on the (name, revision)
+ * pair, and `corpusVersion` names the format the parts must agree on. That the rules were already
+ * written down is the argument for this being a function rather than a `jq` every adopter writes —
+ * and the ones who write it slightly wrong get a corpus that reads as broader than it is.
+ *
+ * The result is a corpus in the sense §7 defines: readable by anything that reads one. It is not
+ * promoted to `CORPUS_VERSION`; it stays at the version its parts agreed on, for the reason a read
+ * of a version-1 corpus serialises back to version 1.
+ */
+export function mergeCorpora(parts: readonly Corpus[]): Corpus {
+  // Refused rather than answered with an empty corpus. An empty corpus replays cleanly by
+  // construction — it is the false clean verdict `check` refuses a single empty corpus for — and a
+  // merge that invented one out of no parts would be a route around that refusal.
+  if (parts.length === 0) throw new CorpusError('a merge needs at least one corpus');
+
+  const version = (parts[0] as Corpus).corpusVersion;
+  for (const part of parts) {
+    // Refused rather than merged across, and refused before anything is combined. The integer names
+    // the format both sides have to agree on, so a merge across two of them would be producing a
+    // file under a version that describes only half of what went into it.
+    if (part.corpusVersion !== version) {
+      throw new CorpusError(
+        `cannot merge corpora at different versions: corpusVersion ${version} and ${part.corpusVersion}`,
+      );
+    }
+  }
+
+  const byKey = new Map<string, QueryShape>();
+  for (const part of parts) {
+    for (const query of part.queries) {
+      const existing = byKey.get(query.key);
+      // The key is injective over the shape, so two parts that observed the same query agree on
+      // every other member. Disagreeing means a part has been edited or has arrived corrupted, and
+      // taking either side silently — which is what the last-writer-wins of `buildCorpus` would do —
+      // is how a merged corpus comes to describe a query neither part recorded.
+      if (existing !== undefined) {
+        if (JSON.stringify(queryToJson(existing)) !== JSON.stringify(queryToJson(query))) {
+          throw new CorpusError(
+            `two corpora hold the key ${JSON.stringify(query.key)} with bodies that differ; one of them is not the shape its key names`,
+          );
+        }
+        continue;
+      }
+      byKey.set(query.key, query);
+    }
+  }
+
+  return {
+    corpusVersion: version,
+    producers: sortProducers(parts.flatMap((part) => [...part.producers])),
+    queries: [...byKey.values()].sort((a, b) => compareByCodePoint(a.key, b.key)),
+    skipped: [...new Set(parts.flatMap((part) => [...part.skipped]))].sort(compareByCodePoint),
+  };
+}
+
+/**
  * Serialise with every member present and in the documented order.
  *
  * Built explicitly rather than handed to `JSON.stringify` as-is: the order of the members is part
@@ -127,19 +190,27 @@ export function serialiseCorpus(corpus: Corpus): string {
     // than after `queries`, so that the first thing a review of a regenerated corpus sees is who
     // says it is theirs.
     ...(corpus.corpusVersion >= 2 ? { producers: corpus.producers.map(producerToJson) } : {}),
-    queries: corpus.queries.map((query) => ({
-      key: query.key,
-      collectionGroup: query.collectionGroup,
-      queryScope: query.queryScope,
-      where: filterToJson(query.where),
-      orderBy: query.orderBy.map((order) => ({
-        fieldPath: order.fieldPath,
-        direction: order.direction,
-      })),
-    })),
+    queries: corpus.queries.map(queryToJson),
     skipped: [...corpus.skipped],
   };
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+/**
+ * One entry in the documented member order.
+ *
+ * Named rather than inlined because `mergeCorpora` compares two entries sharing a key through it:
+ * the comparison has to be over every member the file carries, and deriving it from the same
+ * function that writes the file is what keeps it that way when a member is added.
+ */
+function queryToJson(query: QueryShape): unknown {
+  return {
+    key: query.key,
+    collectionGroup: query.collectionGroup,
+    queryScope: query.queryScope,
+    where: filterToJson(query.where),
+    orderBy: query.orderBy.map((order) => ({ fieldPath: order.fieldPath, direction: order.direction })),
+  };
 }
 
 function producerToJson(producer: Producer): unknown {
