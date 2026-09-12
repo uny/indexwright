@@ -34,6 +34,65 @@ test('the IPv6 loopback is recognised in the spellings a socket answers with', (
   }
 });
 
+test('the IPv6 loopback is recognised in every spelling, not the two that were enumerated', () => {
+  // Issue #27. Each of these is `::1` to `net.isIP` and to a socket; a compose file or a v6-first
+  // runner produces `[0::1]:8080` without anyone choosing the spelling, and refusing it teaches the
+  // override for a purely local run.
+  for (const host of [
+    '0::1',
+    '0:0::1',
+    '0:0:0::1',
+    '0:0:0:0:0:0::1',
+    '[0::1]',
+    '0000:0000:0000:0000:0000:0000:0000:0001',
+    '::0001',
+    '0:0:0:0:0:ffff:127.0.0.1',
+    '0:0:0:0:0:ffff:7f00:1',
+    '::FFFF:127.0.0.1',
+    '0000:0000:0000:0000:0000:ffff:127.0.0.2',
+  ]) {
+    assert.equal(classifyHost(host), 'loopback', host);
+  }
+});
+
+test('an IPv6 literal that is nearly the loopback is still remote', () => {
+  // The canonical form is compared whole: `::2` and `1::1` are routable (or unassigned) addresses,
+  // and `::ffff:10.0.0.1` in its long spelling is as remote as in its short one.
+  for (const host of ['::2', '1::1', '::1:0', '1::', '0:0:0:0:0:ffff:10.0.0.1', '::ffff:0a00:1']) {
+    assert.equal(classifyHost(host), 'remote', host);
+  }
+});
+
+test('a zoned IPv6 literal is not read as an address here', () => {
+  // `net.isIP` accepts `::1%lo0`, but the zone names an interface and loopback needs none; reading
+  // past the `%` would admit the address by accident rather than by decision. Refused, as before.
+  for (const host of ['::1%lo0', '0::1%1', '::%lo0']) {
+    assert.equal(classifyHost(host), 'remote', host);
+  }
+});
+
+test('the legacy IPv4 shorthand is not read as an address, as 127.0.0 is not', () => {
+  // `127.1` is loopback to `getaddrinfo`, but this check reads a dotted quad only: `127.0.0` is
+  // refused because it is not an address, and `127.1` is the same string with a different claim
+  // attached. Issue #27 raised it and left it refused.
+  for (const host of ['127.1', '127.0.1', '127']) {
+    assert.equal(classifyHost(host), 'remote', host);
+  }
+});
+
+test('a dotted quad with leading zeros keeps classifying loopback', () => {
+  // `net.isIP` rejects `127.000.000.001`; `getaddrinfo` reads it — decimal or octal, either lands
+  // inside 127/8 — so it is not a hole, and it was admitted before #27. Pinned so that it does not
+  // change without a decision.
+  for (const host of ['127.000.000.001', '127.0.0.01']) {
+    assert.equal(classifyHost(host), 'loopback', host);
+  }
+  // A four-digit octet never matched, and `0127` read as octal is 87 — outside 127/8 — so that
+  // one is refused on purpose.
+  assert.equal(classifyHost('0127.0.0.1'), 'remote');
+  assert.equal(classifyHost('::ffff:127.000.000.001'), 'remote', 'not an IPv6 literal to isIP');
+});
+
 test('an IPv4-mapped address that is not loopback stays remote', () => {
   assert.equal(classifyHost('::ffff:10.0.0.1'), 'remote');
   assert.equal(classifyHost('::ffff:0a00:1'), 'remote');
@@ -71,7 +130,18 @@ test('a name that merely contains localhost is not loopback', () => {
 test('every spelling of the all-zeros address is a wildcard, not a routable host', () => {
   // The classification now decides whether a *connect* is permitted, so a spelling missed here
   // refuses a local emulator rather than merely mislabelling it.
-  for (const host of ['::0', '0::0', '0::', '0:0:0:0:0:0:0:0', '::', '::ffff:0.0.0.0', '::ffff:0:0']) {
+  for (const host of [
+    '::0',
+    '0::0',
+    '0::',
+    '0:0:0:0:0:0:0:0',
+    '::',
+    '::ffff:0.0.0.0',
+    '::ffff:0:0',
+    '0:0:0:0:0:ffff:0.0.0.0',
+    '0:0:0:0:0:ffff:0:0',
+    '::0000',
+  ]) {
     assert.equal(classifyHost(host), 'wildcard', host);
   }
   // Still not addresses, so still not wildcards.
