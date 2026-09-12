@@ -562,4 +562,16 @@ test('a primitive corpusVersion is still quoted as itself, so the refusal names 
     () => parseCorpus('{"corpusVersion":"2","producers":[],"queries":[],"skipped":[]}'),
     (error) => error instanceof CorpusError && /corpusVersion "2" is not readable/.test(error.message),
   );
+  // `null` is the value the composite test is written around: `typeof null` is `'object'`, so a
+  // reader that asked only that much would describe a null version as an object.
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":null,"producers":[],"queries":[],"skipped":[]}'),
+    (error) => error instanceof CorpusError && /corpusVersion null is not readable/.test(error.message),
+  );
+  // A missing member is the one value `JSON.stringify` returns no string for, and the only reason
+  // the fallback to `String` is there at all.
+  assert.throws(
+    () => parseCorpus('{"producers":[],"queries":[],"skipped":[]}'),
+    (error) => error instanceof CorpusError && /corpusVersion undefined is not readable/.test(error.message),
+  );
 });
