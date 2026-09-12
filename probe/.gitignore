@@ -14,9 +14,9 @@ ui-debug.log
 differential.json
 differential-*.json
 # Step 5b's report, ignored for the same reason and on the same terms as step 5's. It was committed
-# once and untracked again in #61, and this is the entry that stops the next run of the runbook from
-# dirtying a tracked file — the redirect in step 5b writes here, and a shell truncates the target
-# before the script's own guard can refuse the run. The readings it carried are quoted in the
-# README's prose, which is where step 5's 429 lives too; the commit that carried the raw file is no
-# longer reachable, so the prose is the record.
+# once, at 323188c, and untracked again in #61, and this is the entry that stops the next run of the
+# runbook from dirtying a tracked file — the redirect in step 5b writes here, and a shell truncates
+# the target before the script's own guard can refuse the run. The readings it carried are quoted in
+# the README's prose, which is where step 5's 429 lives too. That commit is reachable from no branch
+# or tag, so a clone does not carry it, but GitHub still serves the file at the SHA.
 limit-*.json
