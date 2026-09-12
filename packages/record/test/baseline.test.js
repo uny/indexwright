@@ -101,7 +101,7 @@ test('a deeply nested version is a BaselineError, not a RangeError escaping the 
   refuses(`{"baselineVersion": ${deep}, "accepted": []}`, /baselineVersion \[\.\.\.\] is not readable/);
 });
 
-test('a primitive version is still quoted as itself, so the refusal names the value in the file', () => {
+test('a primitive version is named by its value, rather than named as a composite is', () => {
   refuses({ baselineVersion: '1', accepted: [] }, /baselineVersion "1" is not readable/);
   refuses({ baselineVersion: null, accepted: [] }, /baselineVersion null is not readable/);
 });

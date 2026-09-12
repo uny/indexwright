@@ -177,9 +177,9 @@ again, by its own `corpusVersion`.
   and nothing walks the value at all. Bounded by construction rather than by catching the overflow,
   which is the rule `MAX_FILTER_DEPTH` already applies to the filter tree: a caught `RangeError` is a
   guess about how much stack was left when the value arrived, and the depth at which it happens is a
-  property of the runtime rather than of the file. A primitive version keeps the spelling it had, so
-  the message still names the value that is in the file, and a missing member still reads
-  `undefined`.
+  property of the runtime rather than of the file. A primitive version is serialised as it was
+  before, so the message names the value — not always the file's spelling of it, since `1e2` is named
+  `100` and an `Infinity` is named `null` — and a missing member still reads `undefined`.
 
 - **A replayed query reads one document rather than the collection** (issue #43). What `check` asks
   is answered by the RPC's status; the rows come back and are discarded. Until now they came back in

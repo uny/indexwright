@@ -560,7 +560,7 @@ test('a deeply nested corpusVersion is a CorpusError, not a RangeError escaping 
   );
 });
 
-test('a primitive corpusVersion is still quoted as itself, so the refusal names the value in the file', () => {
+test('a primitive corpusVersion is named by its value, rather than named as a composite is', () => {
   assert.throws(
     () => parseCorpus('{"corpusVersion":"2","producers":[],"queries":[],"skipped":[]}'),
     (error) => error instanceof CorpusError && /corpusVersion "2" is not readable/.test(error.message),
