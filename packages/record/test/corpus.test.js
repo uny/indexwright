@@ -565,7 +565,7 @@ test('a primitive corpusVersion is named by its value, rather than named as a co
     () => parseCorpus('{"corpusVersion":"2","producers":[],"queries":[],"skipped":[]}'),
     (error) => error instanceof CorpusError && /corpusVersion "2" is not readable/.test(error.message),
   );
-  // `null` is the value the composite test is written around: `typeof null` is `'object'`, so a
+  // `null` is the value the composite check is written around: `typeof null` is `'object'`, so a
   // reader that asked only that much would describe a null version as an object.
   assert.throws(
     () => parseCorpus('{"corpusVersion":null,"producers":[],"queries":[],"skipped":[]}'),
