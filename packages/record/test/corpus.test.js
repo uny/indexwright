@@ -534,10 +534,10 @@ test('a merge of no corpora is refused, rather than read as an empty corpus', ()
 
 test('a composite corpusVersion is named rather than serialised, so the refusal says what it is', () => {
   // The shallow case is what pins the rule: it names both composites, and it does so without
-  // depending on the runtime's stack. Reverting the fix fails the deep case below as well — the
-  // message is the serialised `[[[[` where the stack is big enough to build it, and `not valid
-  // JSON` where `JSON.parse` refuses the depth — so that case is not vacuous either; what it cannot
-  // say on its own is which composite got which name.
+  // depending on the runtime's stack. The deep case below is not vacuous either — reverting the fix
+  // throws the issue's own bare `RangeError` at the default stack, and where the stack is large
+  // enough to serialise ten thousand frames the refusal carries the `[[[[` instead — but neither
+  // outcome says which composite got which name.
   assert.throws(
     () => parseCorpus('{"corpusVersion":[1],"producers":[],"queries":[],"skipped":[]}'),
     (error) => error instanceof CorpusError && /corpusVersion \[\.\.\.\] is not readable/.test(error.message),
