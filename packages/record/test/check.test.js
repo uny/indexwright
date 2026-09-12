@@ -1166,7 +1166,6 @@ test('a second corpus that cannot be read stops the run before the first one is 
 test('two parts that discarded different things are still one run, not a refusal', async () => {
   // What this pins is the run, not the union: `check` never reads `skipped`, so the union itself is
   // only assertable where it is computed. See corpus.test.js, "the merged skipped set is the union".
-
   const h = harness({
     corpora: {
       'a.queries.json': serialiseCorpus(
@@ -1235,9 +1234,9 @@ test('the corpora are announced in the order they were named, not in some order 
 
 test('a second part whose every entry is unreplayable names that part, not the first', async () => {
   // The other half of the per-part refusal. Rendered from the merge, or from `command.corpus[0]`,
-  // this line would send an operator to the file that is fine.
-  // A root OR with no children: on the wire, matches nothing, and has no replayable form — the same
-  // entry the single-corpus test above is built on.
+  // this line would send an operator to the file that is fine. The entry is a root OR with no
+  // children — on the wire, matching nothing, and with no replayable form — which is what the
+  // single-corpus test above is built on.
   const unreplayable = JSON.stringify({
     corpusVersion: 2,
     producers: [],
