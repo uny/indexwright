@@ -162,6 +162,25 @@ again, by its own `corpusVersion`.
 
 ### Fixed
 
+- **A deeply nested version value is refused rather than overflowing on the way** (issue #60).
+  `parseCorpus` and `parseBaseline` are both documented to fail one way — `CorpusError` and
+  `BaselineError`, never a repair — and both built the version-mismatch message by serialising the
+  offending value. `JSON.parse` and `JSON.stringify` do not have the same recursion budget, and
+  `stringify`'s frames are the heavier, so a file whose version was a deep enough nested array parsed
+  and then threw a `RangeError` on the way to being refused. The exposure was the published API
+  rather than the CLI, which catches `unknown` around both reads and exits `2`: a consumer catching
+  `CorpusError` got an uncaught `RangeError` instead. Only the corpus half was ever reachable from a
+  release — `parseBaseline` ships for the first time in this one — so the baseline half is a defect
+  fixed before it could be caught.
+
+  A composite version is now *named* rather than serialised — `corpusVersion [...] is not readable` —
+  and nothing walks the value at all. Bounded by construction rather than by catching the overflow,
+  which is the rule `MAX_FILTER_DEPTH` already applies to the filter tree: a caught `RangeError` is a
+  guess about how much stack was left when the value arrived, and the depth at which it happens is a
+  property of the runtime rather than of the file. A primitive version is serialised as it was
+  before, so the message names the value — not always the file's spelling of it, since `1e2` is named
+  `100` and an `Infinity` is named `null` — and a missing member still reads `undefined`.
+
 - **A replayed query reads one document rather than the collection** (issue #43). What `check` asks
   is answered by the RPC's status; the rows come back and are discarded. Until now they came back in
   full — the synthesised sentinel matches nothing for an equality, but `!=`, `not-in`, and the

@@ -69,7 +69,7 @@ export function parseBaseline(source: string): Baseline {
   const version = root['baselineVersion'];
   if (version !== BASELINE_VERSION) {
     throw new BaselineError(
-      `baselineVersion ${JSON.stringify(version)} is not readable by this version, which reads ${BASELINE_VERSION}`,
+      `baselineVersion ${describeVersion(version)} is not readable by this version, which reads ${BASELINE_VERSION}`,
     );
   }
 
@@ -116,6 +116,17 @@ function parseAccepted(value: unknown, at: string): AcceptedGap {
   }
 
   return { key, reason };
+}
+
+/**
+ * A version value as one phrase, for the message that refuses it.
+ *
+ * @see corpus.ts — the same rule, and the same reason for it: a deep enough nested value parses and
+ * then overflows on the way to being refused, out of a reader documented to fail one way.
+ */
+function describeVersion(value: unknown): string {
+  if (typeof value === 'object' && value !== null) return Array.isArray(value) ? '[...]' : '{...}';
+  return JSON.stringify(value) ?? String(value);
 }
 
 function expectObject(value: unknown, at: string): Record<string, unknown> {

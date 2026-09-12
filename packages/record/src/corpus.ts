@@ -266,7 +266,7 @@ export function parseCorpus(source: string): Corpus {
     // change that reading on regardless would mis-read. The versions listed are the ones whose
     // shape is written down here, not the ones whose members happen to overlap.
     throw new CorpusError(
-      `corpusVersion ${JSON.stringify(version)} is not readable by this version, which writes ${CORPUS_VERSION}`,
+      `corpusVersion ${describeVersion(version)} is not readable by this version, which writes ${CORPUS_VERSION}`,
     );
   }
 
@@ -451,6 +451,35 @@ function parseOrder(value: unknown, at: string): Order {
     throw new CorpusError(`${at}.direction is not a direction this format defines`);
   }
   return { fieldPath, direction: direction as Direction };
+}
+
+/**
+ * A version value as one phrase, for the message that refuses it.
+ *
+ * An array or an object is *named* rather than serialised. `JSON.parse` and `JSON.stringify` do not
+ * have the same recursion budget, and `stringify`'s frames are the heavier, so a file whose version
+ * is a deep enough nested array parses and then overflows on the way to being refused — a
+ * `RangeError` escaping a function documented to fail with `CorpusError`, which is the same failure
+ * `MAX_FILTER_DEPTH` exists to close, arriving through the message instead of the tree.
+ *
+ * Bounded by construction rather than by catching the overflow: a caught `RangeError` is a guess
+ * about how much stack was left when the value arrived, and the depth at which it happens is a
+ * property of the runtime rather than of the file. Nothing here walks the value at all.
+ *
+ * Everything else is serialised. What is bounded above is the depth and not the size: a primitive is
+ * not recursive to serialise, so it arrives at whatever length serialising it takes. And it arrives
+ * as `JSON.stringify` writes it rather than as the file spelled it — `1e2` is named `100`, a version
+ * written `"\u0032"` is named `"2"`, and `1e400`, which parses to `Infinity`, is named `null`, so a
+ * magnitude no double holds refuses under the same name as a version that really is null. A missing
+ * member still reads `undefined`, because `JSON.stringify` returns no string for that one.
+ *
+ * The two names are ASCII, like every other message this reader writes: `check` renders the whole of
+ * it before it reaches the stream, so an ellipsis would have arrived as `\u2026` — and a non-ASCII
+ * primitive is escaped by that pass rather than by this one.
+ */
+function describeVersion(value: unknown): string {
+  if (typeof value === 'object' && value !== null) return Array.isArray(value) ? '[...]' : '{...}';
+  return JSON.stringify(value) ?? String(value);
 }
 
 function expectObject(value: unknown, at: string): Record<string, unknown> {

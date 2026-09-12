@@ -82,3 +82,26 @@ test('a key this version could never have produced is carried rather than refuse
   const stale = { ...ONE, accepted: [{ key: 'not a §7 key at all', reason: 'left over' }] };
   assert.equal(parseBaseline(file(stale)).accepted.length, 1);
 });
+
+test('a composite version is named rather than serialised, so the refusal says what it is', () => {
+  // The shallow case is what pins the rule: it names both composites, and it does so without
+  // depending on the runtime's stack. The deep case below is not vacuous either — reverting the fix
+  // throws the issue's own bare `RangeError` at the default stack, and where the stack is large
+  // enough to serialise ten thousand frames the refusal carries the `[[[[` instead — but neither
+  // outcome says which composite got which name.
+  refuses({ baselineVersion: [1], accepted: [] }, /baselineVersion \[\.\.\.\] is not readable/);
+  refuses({ baselineVersion: { v: 1 }, accepted: [] }, /baselineVersion \{\.\.\.\} is not readable/);
+});
+
+test('a deeply nested version is a BaselineError, not a RangeError escaping the reader', () => {
+  // Issue #60's own repro. `JSON.parse` and `JSON.stringify` do not have the same recursion budget,
+  // and `stringify`'s frames are the heavier, so a value that parses can overflow on the way to
+  // being refused — out of a function documented to fail one way.
+  const deep = `${'['.repeat(10000)}${']'.repeat(10000)}`;
+  refuses(`{"baselineVersion": ${deep}, "accepted": []}`, /baselineVersion \[\.\.\.\] is not readable/);
+});
+
+test('a primitive version is named by its value, rather than named as a composite is', () => {
+  refuses({ baselineVersion: '1', accepted: [] }, /baselineVersion "1" is not readable/);
+  refuses({ baselineVersion: null, accepted: [] }, /baselineVersion null is not readable/);
+});
