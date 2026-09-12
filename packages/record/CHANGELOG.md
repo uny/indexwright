@@ -162,6 +162,24 @@ again, by its own `corpusVersion`.
 
 ### Fixed
 
+- **Every spelling of the IPv6 loopback is recognised, not the two that were enumerated** (issue
+  #27). `classifyHost` matched `::1` and `0:0:0:0:0:0:0:1` as strings, so `0::1`, `0:0::1`, and
+  `0:0:0:0:0:ffff:127.0.0.1` — each of which `net.isIP` and a socket read as the loopback — classified
+  `remote`, and `FIRESTORE_EMULATOR_HOST=[0::1]:8080`, which a compose file or a v6-first runner
+  produces without anyone choosing the spelling, was refused with `--allow-remote-emulator` offered
+  as the remedy. That is the outcome the refusal exists to prevent: once the override is on for a
+  run it is on for every upstream in it. An IPv6 literal is now expanded to its eight groups before
+  being compared, so the answer depends on the address and not on how it was written; the same
+  expansion carries the IPv4-mapped and all-zeros cases, which were spelling-matched too. `isIP`
+  remains the only judge of what is a literal, and it still resolves nothing.
+
+  Two shapes are refused on purpose and are now pinned by tests rather than left to fall through.
+  The legacy shorthand `127.1` is loopback to `getaddrinfo` and not an address to this check, for
+  the same reason `127.0.0` is not; and a zoned literal such as `::1%lo0`, which `isIP` accepts, is
+  not expanded, because reading past the `%` would admit the address by accident. `127.000.000.001`,
+  which `isIP` rejects and `getaddrinfo` reads as loopback either way, keeps classifying `loopback`
+  as it did before — pinned so that it does not change without a decision.
+
 - **A deeply nested version value is refused rather than overflowing on the way** (issue #60).
   `parseCorpus` and `parseBaseline` are both documented to fail one way — `CorpusError` and
   `BaselineError`, never a repair — and both built the version-mismatch message by serialising the

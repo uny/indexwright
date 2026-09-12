@@ -65,8 +65,11 @@ export type HostClass =
 /** Each octet of a dotted-quad, so `127.999.0.1` is not read as loopback. */
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
-/** The shape every IPv6 unspecified address shares: `::`, `::0`, `0::0`, `0:0:0:0:0:0:0:0`. */
-const ALL_ZERO = /^[0:]+$/;
+/** An IPv6 address as its eight 16-bit groups: the form two spellings of one address share. */
+type Ipv6Groups = readonly [number, number, number, number, number, number, number, number];
+
+/** The six groups every IPv4-mapped address, `::ffff:a.b.c.d`, begins with. */
+const IPV4_MAPPED_PREFIX = [0, 0, 0, 0, 0, 0xffff] as const;
 
 /**
  * Reduce a host to the form the tests below expect.
@@ -101,6 +104,37 @@ function isLoopbackIpv4(host: string): boolean {
   return values[0] === 127;
 }
 
+/**
+ * The eight 16-bit groups of an IPv6 literal, or `null` when the string is not one.
+ *
+ * `isIP` settles what counts as a literal — a parser rather than a resolver, it opens nothing, and
+ * it is the judge a socket will apply — and this only expands what it has already accepted: `::` to
+ * the zeros it stands for, and an embedded dotted quad to the two groups it occupies. Two spellings
+ * of one address therefore expand to the same groups, which is what a comparison by spelling could
+ * not offer (issue #27).
+ *
+ * A zone index (`::1%lo0`) is not expanded. `isIP` accepts one, but it names an interface, and a
+ * loopback address needs none; reading past the `%` would admit the address by accident rather than
+ * by decision, so the literal is returned as not-an-address and classifies as it did before.
+ */
+function ipv6Groups(host: string): Ipv6Groups | null {
+  if (host.includes('%') || isIP(host) !== 6) return null;
+  const groups = (part: string): number[] =>
+    part === ''
+      ? []
+      : part.split(':').flatMap((group) => {
+          if (!group.includes('.')) return [parseInt(group, 16)];
+          const [a = 0, b = 0, c = 0, d = 0] = group.split('.').map(Number);
+          return [(a << 8) | b, (c << 8) | d];
+        });
+  const [head = '', tail = undefined] = host.split('::');
+  const left = groups(head);
+  const right = tail === undefined ? [] : groups(tail);
+  const all = [...left, ...new Array<number>(8 - left.length - right.length).fill(0), ...right];
+  // `isIP` has already guaranteed eight; the check is what lets the type say so.
+  return all.length === 8 ? (all as unknown as Ipv6Groups) : null;
+}
+
 export function classifyHost(host: string): HostClass {
   const value = normalise(host);
 
@@ -116,23 +150,27 @@ export function classifyHost(host: string): HostClass {
   if (value === 'localhost') return 'loopback';
 
   if (isLoopbackIpv4(value)) return 'loopback';
-  // `::ffff:127.0.0.1` and `::ffff:7f00:1` are the same address wearing IPv4-mapped clothing, and
-  // `::ffff:0.0.0.0` is the unspecified address wearing it.
-  if (value.startsWith('::ffff:')) {
-    const mapped = value.slice('::ffff:'.length);
-    if (isLoopbackIpv4(mapped)) return 'loopback';
-    if (/^7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(mapped)) return 'loopback';
-    if (mapped === '0.0.0.0' || ALL_ZERO.test(mapped)) return 'wildcard';
-  }
-  if (value === '::1' || value === '0:0:0:0:0:0:0:1') return 'loopback';
-
-  // Every spelling of all-zeros, not the three obvious ones. `isIP` is a parser rather than a
-  // resolver — it opens nothing — so it can settle which strings are the same address here, where
-  // the answer now decides whether a *connect* is permitted and a missed spelling would refuse a
-  // local emulator.
   if (value === '0.0.0.0') return 'wildcard';
-  if (ALL_ZERO.test(value) && isIP(value) === 6) return 'wildcard';
 
+  // An IPv6 literal is judged by the address it expands to, not the spelling it arrived in: `0::1`
+  // and `0:0:0:0:0:0:0:1` are `::1`, and a compose file or a v6-first runner produces either
+  // without anyone choosing. The answer decides whether a *connect* is permitted, and a missed
+  // spelling would refuse a local emulator — and teach the override for it.
+  const groups = ipv6Groups(value);
+  if (groups === null) return 'remote';
+
+  // `::ffff:127.0.0.1` and `::ffff:7f00:1` are the same address wearing IPv4-mapped clothing, and
+  // `::ffff:0.0.0.0` is the unspecified address wearing it. The whole of 127/8 again, and the
+  // whole of the last 32 bits for the wildcard.
+  if (IPV4_MAPPED_PREFIX.every((group, i) => groups[i] === group)) {
+    if (groups[6] >> 8 === 127) return 'loopback';
+    if (groups[6] === 0 && groups[7] === 0) return 'wildcard';
+    return 'remote';
+  }
+  if (groups.slice(0, 7).every((group) => group === 0)) {
+    if (groups[7] === 1) return 'loopback';
+    if (groups[7] === 0) return 'wildcard';
+  }
   return 'remote';
 }
 
