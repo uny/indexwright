@@ -84,8 +84,11 @@ test('a key this version could never have produced is carried rather than refuse
 });
 
 test('a composite version is named rather than serialised, so the refusal says what it is', () => {
-  // The shallow case is what pins the rule. A deep one alone would pass on a machine with a bigger
-  // stack, or pass vacuously at a depth `JSON.parse` itself refuses.
+  // The shallow case is what pins the rule: it names both composites, and it does so without
+  // depending on the runtime's stack. Reverting the fix fails the deep case below as well — the
+  // message is the serialised `[[[[` where the stack is big enough to build it, and `not valid
+  // JSON` where `JSON.parse` refuses the depth — so that case is not vacuous either; what it cannot
+  // say on its own is which composite got which name.
   refuses({ baselineVersion: [1], accepted: [] }, /baselineVersion \[\.\.\.\] is not readable/);
   refuses({ baselineVersion: { v: 1 }, accepted: [] }, /baselineVersion \{\.\.\.\} is not readable/);
 });
