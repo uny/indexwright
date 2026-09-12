@@ -119,7 +119,7 @@ function parseAccepted(value: unknown, at: string): AcceptedGap {
 }
 
 /**
- * A version value as one bounded phrase, for the message that refuses it.
+ * A version value as one phrase, for the message that refuses it.
  *
  * @see corpus.ts — the same rule, and the same reason for it: a deep enough nested value parses and
  * then overflows on the way to being refused, out of a reader documented to fail one way.
