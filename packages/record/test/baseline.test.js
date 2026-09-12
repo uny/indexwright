@@ -82,3 +82,23 @@ test('a key this version could never have produced is carried rather than refuse
   const stale = { ...ONE, accepted: [{ key: 'not a §7 key at all', reason: 'left over' }] };
   assert.equal(parseBaseline(file(stale)).accepted.length, 1);
 });
+
+test('a composite version is named rather than serialised, so the refusal says what it is', () => {
+  // The shallow case is what pins the rule. A deep one alone would pass on a machine with a bigger
+  // stack, or pass vacuously at a depth `JSON.parse` itself refuses.
+  refuses({ baselineVersion: [1], accepted: [] }, /baselineVersion \[\.\.\.\] is not readable/);
+  refuses({ baselineVersion: { v: 1 }, accepted: [] }, /baselineVersion \{\.\.\.\} is not readable/);
+});
+
+test('a deeply nested version is a BaselineError, not a RangeError escaping the reader', () => {
+  // Issue #60's own repro. `JSON.parse` and `JSON.stringify` do not have the same recursion budget,
+  // and `stringify`'s frames are the heavier, so a value that parses can overflow on the way to
+  // being refused — out of a function documented to fail one way.
+  const deep = `${'['.repeat(10000)}${']'.repeat(10000)}`;
+  refuses(`{"baselineVersion": ${deep}, "accepted": []}`, /baselineVersion \[\.\.\.\] is not readable/);
+});
+
+test('a primitive version is still quoted as itself, so the refusal names the value in the file', () => {
+  refuses({ baselineVersion: '1', accepted: [] }, /baselineVersion "1" is not readable/);
+  refuses({ baselineVersion: null, accepted: [] }, /baselineVersion null is not readable/);
+});

@@ -266,7 +266,7 @@ export function parseCorpus(source: string): Corpus {
     // change that reading on regardless would mis-read. The versions listed are the ones whose
     // shape is written down here, not the ones whose members happen to overlap.
     throw new CorpusError(
-      `corpusVersion ${JSON.stringify(version)} is not readable by this version, which writes ${CORPUS_VERSION}`,
+      `corpusVersion ${describeVersion(version)} is not readable by this version, which writes ${CORPUS_VERSION}`,
     );
   }
 
@@ -451,6 +451,31 @@ function parseOrder(value: unknown, at: string): Order {
     throw new CorpusError(`${at}.direction is not a direction this format defines`);
   }
   return { fieldPath, direction: direction as Direction };
+}
+
+/**
+ * A version value as one bounded phrase, for the message that refuses it.
+ *
+ * An array or an object is *named* rather than serialised. `JSON.parse` and `JSON.stringify` do not
+ * have the same recursion budget, and `stringify`'s frames are the heavier, so a file whose version
+ * is a deep enough nested array parses and then overflows on the way to being refused — a
+ * `RangeError` escaping a function documented to fail with `CorpusError`, which is the same failure
+ * `MAX_FILTER_DEPTH` exists to close, arriving through the message instead of the tree.
+ *
+ * Bounded by construction rather than by catching the overflow: a caught `RangeError` is a guess
+ * about how much stack was left when the value arrived, and the depth at which it happens is a
+ * property of the runtime rather than of the file. Nothing here walks the value at all.
+ *
+ * Everything else keeps the spelling it had. A primitive is not recursive to serialise, so the
+ * message still names the value that is actually in the file, and a missing member still reads
+ * `undefined` — `JSON.stringify` returns no string for that one.
+ *
+ * ASCII, like every other message in this reader: `check` renders the whole of it before it reaches
+ * the stream, and an ellipsis would arrive as `\u2026`.
+ */
+function describeVersion(value: unknown): string {
+  if (typeof value === 'object' && value !== null) return Array.isArray(value) ? '[...]' : '{...}';
+  return JSON.stringify(value) ?? String(value);
 }
 
 function expectObject(value: unknown, at: string): Record<string, unknown> {

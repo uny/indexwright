@@ -531,3 +531,35 @@ test('a merge of no corpora is refused, rather than read as an empty corpus', ()
     (error) => error instanceof CorpusError && /at least one/.test(error.message),
   );
 });
+
+test('a composite corpusVersion is named rather than serialised, so the refusal says what it is', () => {
+  // The shallow case is what pins the rule: a deep one alone would pass on a machine with a bigger
+  // stack, or pass vacuously at a depth `JSON.parse` itself refuses.
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":[1],"producers":[],"queries":[],"skipped":[]}'),
+    (error) => error instanceof CorpusError && /corpusVersion \[\.\.\.\] is not readable/.test(error.message),
+  );
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":{"v":1},"producers":[],"queries":[],"skipped":[]}'),
+    (error) => error instanceof CorpusError && /corpusVersion \{\.\.\.\} is not readable/.test(error.message),
+  );
+});
+
+test('a deeply nested corpusVersion is a CorpusError, not a RangeError escaping the reader', () => {
+  // Issue #60's own repro, and the same rule `MAX_FILTER_DEPTH` exists for: a nested-enough file is
+  // a RangeError escaping a function documented to fail with CorpusError. Bounded by construction
+  // here rather than by catching the overflow, because a caught stack overflow is a guess about how
+  // much stack was left rather than a rule.
+  const deep = `${'['.repeat(10000)}${']'.repeat(10000)}`;
+  assert.throws(
+    () => parseCorpus(`{"corpusVersion": ${deep}, "producers":[],"queries":[],"skipped":[]}`),
+    (error) => error instanceof CorpusError && /corpusVersion \[\.\.\.\] is not readable/.test(error.message),
+  );
+});
+
+test('a primitive corpusVersion is still quoted as itself, so the refusal names the value in the file', () => {
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":"2","producers":[],"queries":[],"skipped":[]}'),
+    (error) => error instanceof CorpusError && /corpusVersion "2" is not readable/.test(error.message),
+  );
+});
