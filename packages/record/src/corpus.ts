@@ -466,12 +466,12 @@ function parseOrder(value: unknown, at: string): Order {
  * about how much stack was left when the value arrived, and the depth at which it happens is a
  * property of the runtime rather than of the file. Nothing here walks the value at all.
  *
- * Everything else is serialised, at whatever length the file gave it — what is bounded above is the
- * depth, not the size. A primitive is not recursive to serialise, so the message names the value
- * rather than a stand-in for it, and a missing member still reads `undefined` — `JSON.stringify`
- * returns no string for that one. The value, though, and not the file's spelling of it: `1e2` is
- * named `100` and `"\u0032"` is named `"2"`, and a magnitude no double holds — `1e400`, which parses
- * to `Infinity` — is named `null`, which is the only spelling JSON has for it.
+ * Everything else is serialised. What is bounded above is the depth and not the size: a primitive is
+ * not recursive to serialise, so it arrives at whatever length serialising it takes. And it arrives
+ * as `JSON.stringify` writes it rather than as the file spelled it — `1e2` is named `100`, a version
+ * written `"\u0032"` is named `"2"`, and `1e400`, which parses to `Infinity`, is named `null`, so a
+ * magnitude no double holds refuses under the same name as a version that really is null. A missing
+ * member still reads `undefined`, because `JSON.stringify` returns no string for that one.
  *
  * The two names are ASCII, like every other message this reader writes: `check` renders the whole of
  * it before it reaches the stream, so an ellipsis would have arrived as `\u2026` — and a non-ASCII
