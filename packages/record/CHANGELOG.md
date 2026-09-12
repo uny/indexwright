@@ -169,7 +169,9 @@ again, by its own `corpusVersion`.
   `stringify`'s frames are the heavier, so a file whose version was a deep enough nested array parsed
   and then threw a `RangeError` on the way to being refused. The exposure was the published API
   rather than the CLI, which catches `unknown` around both reads and exits `2`: a consumer catching
-  the documented error type got an uncaught `RangeError` instead.
+  `CorpusError` got an uncaught `RangeError` instead. Only the corpus half was ever reachable from a
+  release — `parseBaseline` ships for the first time in this one — so the baseline half is a defect
+  fixed before it could be caught.
 
   A composite version is now *named* rather than serialised — `corpusVersion [...] is not readable` —
   and nothing walks the value at all. Bounded by construction rather than by catching the overflow,
