@@ -651,9 +651,10 @@ both sides have to agree on, so a file produced under one version out of parts a
 only half of what went into it. A merge of parts that agree keeps the version they agree on; it is
 not promoted, for the same reason a read of a version-1 corpus serialises back to version 1.
 
-**A part with nothing replayable in it is refused, and the refusal names that part.** A consumer
-refuses an empty corpus on its own because such a corpus replays cleanly by construction and a pass
-would report coverage having measured nothing. A merge of three corpora one of which is empty is
+**A consumer refuses a part with nothing replayable in it, and the refusal names that part.** This is
+a rule of the consumer and not of the merge itself: the merge is an operation on corpora, and a
+corpus with no queries is a corpus. A consumer refuses an empty corpus on its own because such a
+corpus replays cleanly by construction and a pass would report coverage having measured nothing. A merge of three corpora one of which is empty is
 *not* empty, so a consumer that only examined the merge would lose that signal entirely and report
 full coverage for a set whose other consuming suite was never captured. The same applies to a part
 whose every entry is unreplayable. A suite driven through the Firebase Web SDK produces exactly such
@@ -663,7 +664,10 @@ naming that part, which is a decision the operator makes rather than one the mer
 **Two parts sharing a canonical key must agree on the body under it.** The key is injective over the
 shape, so two recorders that observed the same query write the same entry; parts that disagree mean
 one of them has been edited or has arrived corrupted, and taking either side silently is how a merged
-corpus comes to describe a query neither part recorded.
+corpus comes to describe a query neither part recorded. A *file* that disagrees with itself this way
+does not reach the merge — the key is derived from the body, so a reader that re-derives it refuses
+the entry where it is read (*File shape*, above) and says so in those terms. The rule therefore binds
+the merge for parts that did not come from a file.
 
 **Producer identity is read per part, not over the merge.** A merged `producers` naming someone does
 not mean every part named someone: an anonymous stale part would hide behind a named current one, and

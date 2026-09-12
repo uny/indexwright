@@ -102,15 +102,22 @@ indexwright-record check --project p --database '(default)' \
 
 The merge is [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §7's own: `queries`
 de-duplicate on the canonical key and sort by it, `skipped` is the union of the parts, and
-`producers` is the union as a set on the `(name, revision)` pair. Three things are refused rather
-than merged across. A part at a different `corpusVersion`, because the integer names the format both
-sides have to agree on. The same path named twice, because a command meaning to name two suites that
-names one of them twice checks a narrower set than it reads as checking. And **a part with nothing
-replayable in it, named as that part** — `check` refuses a single empty corpus because one replays
-cleanly by construction, and a merge of three corpora one of which is empty is non-empty, so a run
-that only looked at the merge would report full coverage for a set whose other consuming suite was
-never captured. A suite driven through the Firebase Web SDK produces exactly such a corpus; the fix
-is to drop that part from the command line.
+`producers` is the union as a set on the `(name, revision)` pair.
+
+Three things are refused rather than merged across, and each refusal names the part it is about. A
+part at a different `corpusVersion`, because the integer names the format both sides have to agree
+on. Two parts holding one canonical key with bodies that differ — the key is derived from the body,
+so a corpus file that disagrees with itself is refused by the reader before the merge is reached, and
+this catches the same disagreement arriving through the API. And **a part with nothing replayable in
+it** — `check` refuses a single empty corpus because one replays cleanly by construction, and a merge
+of three corpora one of which is empty is non-empty, so a run that only looked at the merge would
+report full coverage for a set whose other consuming suite was never captured. A suite driven through
+the Firebase Web SDK produces exactly such a corpus; the fix is to drop that part from the command
+line.
+
+Naming one corpus twice is refused earlier, as a usage error, and the two spellings of one path are
+one corpus: a command meaning to name two suites that names one of them twice checks a narrower set
+than it reads as checking.
 
 Every corpus is announced on its own line, with its own producers, for the same reason. A merged
 `producers` naming someone does not mean every part named someone: an anonymous stale part would
