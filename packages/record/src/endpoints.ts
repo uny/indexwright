@@ -130,9 +130,11 @@ function ipv6Groups(host: string): Ipv6Groups | null {
   const [head = '', tail = undefined] = host.split('::');
   const left = groups(head);
   const right = tail === undefined ? [] : groups(tail);
-  const all = [...left, ...new Array<number>(8 - left.length - right.length).fill(0), ...right];
-  // `isIP` has already guaranteed eight; the check is what lets the type say so.
-  return all.length === 8 ? (all as unknown as Ipv6Groups) : null;
+  // `isIP` bounds the groups at eight, so a shortfall is the only case `::` has to fill; the check
+  // is what keeps a literal that somehow exceeds it from throwing here instead of classifying.
+  const missing = 8 - left.length - right.length;
+  if (missing < 0) return null;
+  return [...left, ...new Array<number>(missing).fill(0), ...right] as unknown as Ipv6Groups;
 }
 
 export function classifyHost(host: string): HostClass {
