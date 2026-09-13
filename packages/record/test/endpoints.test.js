@@ -119,6 +119,10 @@ test('a dotted quad with leading zeros keeps classifying loopback', () => {
   // A four-digit octet never matched, and `0127` read as octal is 87 — outside 127/8 — so that
   // one is refused on purpose.
   assert.equal(classifyHost('0127.0.0.1'), 'remote');
+  // The mapped spelling is the one place this changes: before #27 the string after `::ffff:` went
+  // to the dotted-quad check and was admitted; now `isIP` judges the whole literal, and it rejects
+  // a leading-zero octet inside one. `getaddrinfo` does not, so this is a narrowing — recorded in
+  // the CHANGELOG, and pinned here so that it stays a decision.
   assert.equal(classifyHost('::ffff:127.000.000.001'), 'remote', 'not an IPv6 literal to isIP');
 });
 

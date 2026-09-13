@@ -178,7 +178,11 @@ again, by its own `corpusVersion`.
   the same reason `127.0.0` is not; and a zoned literal such as `::1%lo0`, which `isIP` accepts, is
   not expanded, because reading past the `%` would admit the address by accident. `127.000.000.001`,
   which `isIP` rejects and `getaddrinfo` reads as loopback either way, keeps classifying `loopback`
-  as it did before — pinned so that it does not change without a decision.
+  as it did before — pinned so that it does not change without a decision. Its mapped spelling,
+  `::ffff:127.000.000.001`, is the one string that moves the other way: it was admitted because the
+  part after `::ffff:` was read as a dotted quad, and is now `remote` because `isIP` judges the whole
+  literal and rejects it. `getaddrinfo` still reads it as loopback, so this is a narrowing, of a
+  spelling with no known writer; it is pinned by a test rather than left to be found.
 
 - **A deeply nested version value is refused rather than overflowing on the way** (issue #60).
   `parseCorpus` and `parseBaseline` are both documented to fail one way — `CorpusError` and
