@@ -50,15 +50,44 @@ test('the IPv6 loopback is recognised in every spelling, not the two that were e
     '0:0:0:0:0:ffff:7f00:1',
     '::FFFF:127.0.0.1',
     '0000:0000:0000:0000:0000:ffff:127.0.0.2',
+    // The whole of 127/8 in mapped clothing, up to its last address, in both payload spellings.
+    '::ffff:127.1.2.3',
+    '::ffff:127.255.255.255',
+    '::ffff:7fff:ffff',
+    // The IPv4-compatible spelling of `::1`: the same sixteen bytes, so the same address.
+    '::0.0.0.1',
   ]) {
     assert.equal(classifyHost(host), 'loopback', host);
   }
 });
 
-test('an IPv6 literal that is nearly the loopback is still remote', () => {
+test('an IPv6 literal that is nearly a loopback or wildcard is still remote', () => {
   // The canonical form is compared whole: `::2` and `1::1` are routable (or unassigned) addresses,
   // and `::ffff:10.0.0.1` in its long spelling is as remote as in its short one.
-  for (const host of ['::2', '1::1', '::1:0', '1::', '0:0:0:0:0:ffff:10.0.0.1', '::ffff:0a00:1']) {
+  for (const host of [
+    '::2',
+    '1::1',
+    '::1:0',
+    '1::',
+    '0:0:0:0:0:ffff:10.0.0.1',
+    '::ffff:0a00:1',
+    // Either side of 127/8, so a check on the first octet alone is not a check on the whole prefix.
+    '::ffff:126.255.255.255',
+    '::ffff:128.0.0.1',
+    '::ffff:8000:1',
+    // A mapped-looking tail behind a non-zero head is a routable address, not a mapped one.
+    '1::ffff:127.0.0.1',
+    '2001:db8::ffff:127.0.0.1',
+    // Mapped with only one half of the payload zero: neither the wildcard nor anything else here.
+    '::ffff:0.0.0.1',
+    '::ffff:0:1',
+    '::ffff:10.0.0.0',
+    '::ffff:0a00:0',
+    // An IPv4-compatible loopback is not a loopback: the embedded quad is judged as the two groups
+    // it occupies, not as a dotted quad on its own.
+    '::127.0.0.1',
+    '::7f00:1',
+  ]) {
     assert.equal(classifyHost(host), 'remote', host);
   }
 });
