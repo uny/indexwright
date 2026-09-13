@@ -5,7 +5,18 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## Unreleased
+## [0.6.0] — 2026-09-13
+
+The release that makes `check` adoptable. 0.5.0 shipped the verb; using it from a real project ran
+into four things in a row, and this release is those four. A project that already has gaps can
+start with `--baseline` and be told about new ones only. An index set queried by more than one
+suite can be checked against all of their corpora at once, as the one set it is. A corpus now
+records who produced it, echoed beside the target on every run and — with `--require-identity` —
+refused when absent, so a file nobody regenerates stops looking like a current one. And a replayed
+query reads one document rather than the collection it names, which is what it costs to run on
+every push. The corpus format moves to `corpusVersion` 2 for the producer, and version 1 stays
+readable; `CheckCommand.corpus` becomes a list, which is the one change here that breaks a caller
+of the JS API.
 
 ### Added
 
@@ -235,6 +246,27 @@ again, by its own `corpusVersion`.
   chain, so destroying it unpipes the upstream without cancelling the RPC: `close()` never returns,
   and the stalled `RunQuery` reissues from its cursor once its deadline passes. It blocks the
   verdict and reads more than `get()` does.
+
+### Notes
+
+- **What the `limit(1)` measurement reaches, and what it does not.** The reading behind the #43
+  fix is eight shapes, all conjunctions of `EQUAL` and the ordering operators against a single
+  collection. Replay emits more than that — a disjunction, a `COLLECTION_GROUP` scope, `not-in`,
+  `array-contains-any`, and the negated unary forms — and the limit goes on all of it. A
+  disjunction's index requirement is per-disjunct and a collection group's is a distinct index kind,
+  so neither is a shape the run generalises over; they carry the limit on the argument that it is
+  one field on the wire rather than on a reading, and `replay.ts` says so beside the call. Extending
+  the probe with those two shapes is what would close it. The limits 0.5.0's notes named — one
+  operand type per shape, arities 1, 3 and 10 only — still stand.
+- **Two things are bounded through the file and not through the JS API.** `parseCorpus` refuses a
+  filter tree deeper than it descends, so a corpus file cannot overflow the reader; a caller who
+  builds a `Corpus` by hand and passes a tree of that depth to `mergeCorpora` or `serialiseCorpus`
+  gets a `RangeError` from the runtime instead. The JS API is provisional before 1.0 (§10), the
+  file is the boundary this package defends, and no writer this package knows of produces such a
+  tree. Named so that it is a decision rather than a discovery.
+- **#50 ships open, as it did in 0.5.0.** `reconcile` keys on fields rather than on `state`, so an
+  index changing identity or state *while* `check` runs still reconciles as `identical`. Nothing in
+  this release moved it either way.
 
 ## [0.5.0] — 2026-09-06
 
