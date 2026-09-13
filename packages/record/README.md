@@ -302,14 +302,15 @@ because nothing here looks. And a name that is loopback on your machine but is n
 `localhost` is refused: `foo.localhost`, which RFC 6761 only *recommends* resolvers answer with
 loopback, or `ip6-localhost`, which is loopback because a distribution's `/etc/hosts` says so.
 
-Give the address instead of the name, in a spelling this check recognises — a dotted quad in
-`127.0.0.0/8`, `::1`, `0:0:0:0:0:0:0:1`, or an IPv4-mapped form of those. That is the remedy that
-stays correct, whereas `--allow-remote-emulator` admits the name without establishing where it
-points, and a search domain or a wildcard zone can answer either of those names with a routable
-address. Being spelling-bound cuts the same way here: `0::1` and `127.1` are loopback to a resolver
-and `remote` to this check, so an address is not automatically accepted either — write one of the
-spellings above, and see [issue #27](https://github.com/uny/indexwright/issues/27) for widening them.
-All of that holds at the bind end too, where the opt-in is `allowRemoteBind: true` and there is no
+Give the address instead of the name — a dotted quad in `127.0.0.0/8`, or any spelling of `::1` or
+of an IPv4-mapped form of those (`0::1`, `0:0:0:0:0:ffff:127.0.0.1`; an IPv6 literal is judged by
+the address it expands to, not by how it was written). That is the remedy that stays correct,
+whereas `--allow-remote-emulator` admits the name without establishing where it points, and a search
+domain or a wildcard zone can answer either of those names with a routable address. Two shapes are
+still refused as not being addresses: the legacy shorthand `127.1`, which a resolver reads as
+`127.0.0.1` but which this check does not, for the same reason it refuses `127.0.0`; and a zoned
+literal such as `::1%lo0`, because the zone names an interface and loopback needs none. All of that
+holds at the bind end too, where the opt-in is `allowRemoteBind: true` and there is no
 flag; it buys the same thing `--allow-remote-emulator` does, which is why the address is the better
 answer there as well. Verifying by resolution rather than by spelling is
 [issue #24](https://github.com/uny/indexwright/issues/24).
