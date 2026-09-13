@@ -7,8 +7,8 @@ again, by its own `corpusVersion`.
 
 ## [0.6.0] — 2026-09-13
 
-The release that makes `check` adoptable. 0.5.0 shipped the verb; using it from a real project ran
-into four things in a row, and this release is those four. A project that already has gaps can
+The release that makes `check` adoptable. 0.5.0 shipped the verb; this release is what it takes to
+adopt it, in four parts. A project that already has gaps can
 start with `--baseline` and be told about new ones only. An index set queried by more than one
 suite can be checked against all of their corpora at once, as the one set it is. A corpus now
 records who produced it, echoed beside the target on every run and — with `--require-identity` —
@@ -723,6 +723,7 @@ First release. Query capture, specified in [SPEC.md](https://github.com/uny/inde
   stderr. Snapshot listeners carry their query over `Listen` and are counted, not recorded.
   Capturing `Listen` is the first extension worth making.
 
+[0.6.0]: https://github.com/uny/indexwright/releases/tag/record-v0.6.0
 [0.5.0]: https://github.com/uny/indexwright/releases/tag/record-v0.5.0
 [0.4.0]: https://github.com/uny/indexwright/releases/tag/record-v0.4.0
 [0.3.0]: https://github.com/uny/indexwright/releases/tag/record-v0.3.0
