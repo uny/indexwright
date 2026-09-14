@@ -470,14 +470,10 @@ test('closing destroys a pending upstream connection, so a run does not hang aft
 });
 
 test('closing a pending upstream connection is not reported as an upstream failure', async () => {
-  // The socket above is destroyed on the way out, and that alone frees the handle. It is not
-  // alone: the session is destroyed first, and this is the observable reason. A session whose
-  // socket closes under it while it is still connecting reports ERR_SOCKET_CLOSED through its
-  // 'error' event — the session forwards the socket's failure, and to the session, its socket
-  // being pulled is one. `close` would then warn "upstream connection: Socket is closed" for a
-  // teardown it performed itself, on the last line of a capture that succeeded. Destroying the
-  // session before the socket is what keeps that warning from being emitted, and nothing else in
-  // the suite can tell the two orders apart; issue #35 measured the line's removal as invisible.
+  // The companion to the pending-connect test: the socket's `destroy` frees the handle, and the
+  // session's `destroy` is what keeps `close` from warning "upstream connection: Socket is closed"
+  // about the socket it pulled itself — see the comment on that line in `close`. Issue #35 measured
+  // the line's removal as invisible to the suite; this is what sees it.
   const warnings = [];
   const capture = await startCapture({
     upstream: '192.0.2.1:8080',
@@ -490,5 +486,11 @@ test('closing a pending upstream connection is not reported as an upstream failu
   // assertion needs a bound, and twenty turns is that bound: ten times what the event needs, and no
   // clock involved.
   for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(warnings, []);
+  // Only the self-inflicted warning is judged. On a host with no route to TEST-NET-1 the dial fails
+  // outright instead of pending, and the session reports that before `close` runs — a real upstream
+  // failure, and not this test's subject.
+  assert.deepEqual(
+    warnings.filter((message) => message.includes('Socket is closed')),
+    [],
+  );
 });
