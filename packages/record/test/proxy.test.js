@@ -488,7 +488,7 @@ test('closing a pending upstream connection is not reported as an upstream failu
   for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
   // Only the self-inflicted warning is judged. On a host with no route to TEST-NET-1 the dial fails
   // outright instead of pending, and the session reports that before `close` runs — a real upstream
-  // failure, and not this test's subject.
+  // failure, not this test's subject; on such a host this test passes without pinning anything.
   assert.deepEqual(
     warnings.filter((message) => message.includes('Socket is closed')),
     [],
