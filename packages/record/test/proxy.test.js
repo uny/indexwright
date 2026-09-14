@@ -458,15 +458,28 @@ test('closing destroys a pending upstream connection, so a run does not hang aft
   // 192.0.2.1 is TEST-NET-1 (RFC 5737): reserved for documentation and routed nowhere, so the
   // connect stays pending rather than being refused. It must not be an address that could belong to
   // someone, because it is really dialled — `http2.connect` opens the socket immediately.
-  const before = process.getActiveResourcesInfo().filter((kind) => kind === 'TCPWRAP').length;
+  //
+  // 'TCPSocketWrap' is what `getActiveResourcesInfo` calls a socket on Node 22 through 26; it never
+  // said 'TCPWRAP', and counting that kind compared zero with zero, so this test passed with the
+  // socket's `destroy` removed while the process hung the full 75 seconds.
+  const sockets = () => process.getActiveResourcesInfo().filter((kind) => kind === 'TCPSocketWrap').length;
+  const settle = async () => {
+    for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+  // Settled before the baseline too: the test before this one has just closed sockets of its own,
+  // and their handles are still being released.
+  await settle();
+  const before = sockets();
   const capture = await startCapture({
     upstream: '192.0.2.1:8080',
     allowRemoteUpstream: true,
     onWarning: () => {},
   });
   await capture.close();
-  const after = process.getActiveResourcesInfo().filter((kind) => kind === 'TCPWRAP').length;
-  assert.equal(after, before, 'close left a socket open');
+  // A destroyed socket's handle is released from the close-callbacks phase, two turns after `close`
+  // resolves; twenty is the same bound as the test below, for the same reason.
+  await settle();
+  assert.equal(sockets(), before, 'close left a socket open');
 });
 
 test('closing a pending upstream connection is not reported as an upstream failure', async () => {
