@@ -434,15 +434,18 @@ async function close(
   upstreamSocket: Socket,
 ): Promise<void> {
   // `destroy`, not `close`. A graceful close asks an established session to finish; it does nothing
-  // for one whose TCP connection has not been established yet, and that socket then keeps the
-  // process alive until the OS gives up on the connect — 75 seconds on macOS. The upstream being
-  // unreachable is exactly when a run reaches here, since the suite has already finished and the
-  // corpus is written, so the failure mode is `indexwright-record` appearing to hang after a
-  // successful capture. The other two collections have always been destroyed; this one was the
-  // exception.
+  // for one whose TCP connection has not been established yet. The upstream being unreachable is
+  // exactly when a run reaches here, since the suite has already finished and the corpus is written.
+  //
+  // The session first, then the socket, and the order is the point. The socket's `destroy` below is
+  // what frees the handle — a pending connect survives `client.destroy()` and is unreachable through
+  // `client.socket`, see where the socket is created — so this line holds nothing open on its own,
+  // and removing it leaves every handle closed. What it decides is how the session learns it is
+  // over. A session whose socket closes under it while still connecting reports that as
+  // ERR_SOCKET_CLOSED on its 'error' event, and `warn` would then print "upstream connection:
+  // Socket is closed" for a teardown `close` performed itself, as the last line of a capture that
+  // succeeded. Destroyed first, the session has nothing left to report when the socket goes.
   client.destroy();
-  // After the session, and separately from it: see the comment where the socket is created. A
-  // pending connect survives `client.destroy()` and is unreachable through `client.socket`.
   upstreamSocket.destroy();
   const closed = new Promise<void>((resolve) => tcp.close(() => resolve()));
   for (const session of sessions) session.destroy();

@@ -468,3 +468,27 @@ test('closing destroys a pending upstream connection, so a run does not hang aft
   const after = process.getActiveResourcesInfo().filter((kind) => kind === 'TCPWRAP').length;
   assert.equal(after, before, 'close left a socket open');
 });
+
+test('closing a pending upstream connection is not reported as an upstream failure', async () => {
+  // The socket above is destroyed on the way out, and that alone frees the handle. It is not
+  // alone: the session is destroyed first, and this is the observable reason. A session whose
+  // socket closes under it while it is still connecting reports ERR_SOCKET_CLOSED through its
+  // 'error' event — the session forwards the socket's failure, and to the session, its socket
+  // being pulled is one. `close` would then warn "upstream connection: Socket is closed" for a
+  // teardown it performed itself, on the last line of a capture that succeeded. Destroying the
+  // session before the socket is what keeps that warning from being emitted, and nothing else in
+  // the suite can tell the two orders apart; issue #35 measured the line's removal as invisible.
+  const warnings = [];
+  const capture = await startCapture({
+    upstream: '192.0.2.1:8080',
+    allowRemoteUpstream: true,
+    onWarning: (message) => warnings.push(message),
+  });
+  await capture.close();
+  // The 'error' that would arrive is delivered from the socket's 'close', which is emitted from the
+  // loop's close-callbacks phase after `destroy` and lands here on the second full turn. A negative
+  // assertion needs a bound, and twenty turns is that bound: ten times what the event needs, and no
+  // clock involved.
+  for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(warnings, []);
+});
