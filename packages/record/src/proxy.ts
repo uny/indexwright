@@ -437,14 +437,15 @@ async function close(
   // for one whose TCP connection has not been established yet. The upstream being unreachable is
   // exactly when a run reaches here, since the suite has already finished and the corpus is written.
   //
-  // The session first, then the socket, and the order is the point. The socket's `destroy` below is
-  // what frees the handle — a pending connect survives `client.destroy()` and is unreachable through
-  // `client.socket`, see where the socket is created — so this line holds nothing open on its own,
-  // and removing it leaves every handle closed. What it decides is how the session learns it is
-  // over. A session whose socket closes under it while still connecting reports that as
-  // ERR_SOCKET_CLOSED on its 'error' event, and `warn` would then print "upstream connection:
+  // This line frees no handle. The socket's `destroy` below is what does that — a pending connect
+  // survives `client.destroy()` and is unreachable through `client.socket`, see where the socket is
+  // created — and removing this line leaves every handle closed. What it decides is how the session
+  // learns it is over. A session whose socket closes under it while still connecting reports that
+  // as ERR_SOCKET_CLOSED on its 'error' event, and `warn` would then print "upstream connection:
   // Socket is closed" for a teardown `close` performed itself, as the last line of a capture that
-  // succeeded. Destroyed first, the session has nothing left to report when the socket goes.
+  // succeeded. Destroyed here, the session has nothing left to report when the socket goes. The
+  // socket's 'close' is asynchronous, so the two lines could stand in either order; what matters is
+  // that both run before `close` yields.
   client.destroy();
   upstreamSocket.destroy();
   const closed = new Promise<void>((resolve) => tcp.close(() => resolve()));
