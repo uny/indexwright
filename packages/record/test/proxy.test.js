@@ -458,13 +458,52 @@ test('closing destroys a pending upstream connection, so a run does not hang aft
   // 192.0.2.1 is TEST-NET-1 (RFC 5737): reserved for documentation and routed nowhere, so the
   // connect stays pending rather than being refused. It must not be an address that could belong to
   // someone, because it is really dialled — `http2.connect` opens the socket immediately.
-  const before = process.getActiveResourcesInfo().filter((kind) => kind === 'TCPWRAP').length;
+  //
+  // 'TCPSocketWrap' is what `getActiveResourcesInfo` calls a socket on Node 22 through 26; it never
+  // said 'TCPWRAP', and counting that kind compared zero with zero, so this test passed with the
+  // socket's `destroy` removed while the process hung the full 75 seconds.
+  const sockets = () => process.getActiveResourcesInfo().filter((kind) => kind === 'TCPSocketWrap').length;
+  const settle = async () => {
+    for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+  // Settled before the baseline too: the test before this one has just closed sockets of its own,
+  // and their handles are still being released.
+  await settle();
+  const before = sockets();
   const capture = await startCapture({
     upstream: '192.0.2.1:8080',
     allowRemoteUpstream: true,
     onWarning: () => {},
   });
   await capture.close();
-  const after = process.getActiveResourcesInfo().filter((kind) => kind === 'TCPWRAP').length;
-  assert.equal(after, before, 'close left a socket open');
+  // A destroyed socket's handle is released from the close-callbacks phase, two turns after `close`
+  // resolves; twenty is the same bound as the test below, for the same reason.
+  await settle();
+  assert.equal(sockets(), before, 'close left a socket open');
+});
+
+test('closing a pending upstream connection is not reported as an upstream failure', async () => {
+  // The companion to the pending-connect test: the socket's `destroy` frees the handle, and the
+  // session's `destroy` is what keeps `close` from warning "upstream connection: Socket is closed"
+  // about the socket it pulled itself — see the comment on that line in `close`. Issue #35 measured
+  // the line's removal as invisible to the suite; this is what sees it.
+  const warnings = [];
+  const capture = await startCapture({
+    upstream: '192.0.2.1:8080',
+    allowRemoteUpstream: true,
+    onWarning: (message) => warnings.push(message),
+  });
+  await capture.close();
+  // The 'error' that would arrive is delivered from the socket's 'close', which is emitted from the
+  // loop's close-callbacks phase after `destroy` and lands here on the second full turn. A negative
+  // assertion needs a bound, and twenty turns is that bound: ten times what the event needs, and no
+  // clock involved.
+  for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  // Only the self-inflicted warning is judged. On a host with no route to TEST-NET-1 the dial fails
+  // outright instead of pending, and the session reports that before `close` runs — a real upstream
+  // failure, not this test's subject; on such a host this test passes without pinning anything.
+  assert.deepEqual(
+    warnings.filter((message) => message.includes('Socket is closed')),
+    [],
+  );
 });
