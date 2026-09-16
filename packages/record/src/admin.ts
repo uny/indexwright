@@ -22,7 +22,7 @@
  */
 
 import { render } from './args.js';
-import { loadFirestore, messageOf, redirectRefusal, type FirestoreModule } from './client.js';
+import { loadFirestore, messageOf, redirectRefusal } from './client.js';
 import type { LiveCompositeIndex } from './reconcile.js';
 
 export class AdminError extends Error {
@@ -32,15 +32,36 @@ export class AdminError extends Error {
 /**
  * The slice of the admin client this module uses, and the one method it does not.
  *
- * Typed off the client itself, so a fake cannot drift from what the real one accepts, and so nothing
- * here has to model the request or the response shape a second time.
+ * Declared structurally rather than picked off the client, because the type is public and the
+ * client's is not ours to promise. `FirestoreAdminClient` reaches `@indexwright/record` through
+ * `@google-cloud/firestore`'s `v1` accessor, and its method signatures are generated in
+ * `@google-cloud/firestore-api` — a 0.x package this one neither declares nor controls, whose
+ * range the data client moves at a minor of its own. A `Pick` of that client re-exported here made
+ * a consumer's fake typecheck against whichever `firestore-api` *their* install resolved, so a
+ * `@google-cloud/firestore` minor could break a consumer of an unchanged `@indexwright/record`, and
+ * our lockfile would never see it (issue #40). Written as the two members this module calls, with
+ * the request and the options narrowed to the fields it sends, the type is governed by this
+ * package's semver alone and nothing in the published declarations names the transitive package.
  *
- * `close` is in the `Pick` without being called anywhere in this module, which is issue #39's
- * answer in one line. The gRPC stub is lazy — the constructor opens nothing and `close` is a no-op
- * until the first call creates it — so the channel appears on the first `listIndexesAsync` and then
- * refs the event loop until something closes it. A `check` that listed and reported would print its
- * report and never exit. Narrowed to `listIndexesAsync` alone, a caller holding an `IndexLister`
- * had no typed way to release it even if it wanted to, and the JavaScript API is public.
+ * What the `Pick` bought — a fake that cannot drift from what the real client accepts — is kept by
+ * `adminLister`, whose `satisfies IndexLister` pins the real client against this interface at
+ * compile time without exporting the client's type. The members are function-typed properties
+ * rather than methods for that pin's sake: a method's parameters are checked bivariantly even under
+ * `strict`, so a regenerated request type that grew a required field would still have passed,
+ * while a property's are checked contravariantly and a real client that no longer accepts
+ * `{ parent }` fails the build here. (`Replayer` in `replay.ts` uses method syntax; it pins nothing.)
+ *
+ * The elements are `unknown` rather than the generated `IIndex`, which is also what
+ * `listLiveIndexes` treats them as: it conveys them to `reconcile` and `readiness`, which read every
+ * field defensively, and a type that named the protos would put the transitive package straight
+ * back into the public surface.
+ *
+ * `close` is here without being called anywhere in this module, which is issue #39's answer in one
+ * line. The gRPC stub is lazy — the constructor opens nothing and `close` is a no-op until the
+ * first call creates it — so the channel appears on the first `listIndexesAsync` and then refs the
+ * event loop until something closes it. A `check` that listed and reported would print its report
+ * and never exit. Narrowed to `listIndexesAsync` alone, a caller holding an `IndexLister` had no
+ * typed way to release it even if it wanted to, and the JavaScript API is public.
  *
  * Closing it *here* would be the smaller change and the wrong one: readiness is established by
  * observing the same set at least twice, separated by a settling period, so `listLiveIndexes` is
@@ -51,10 +72,19 @@ export class AdminError extends Error {
  * The client's `close()` is idempotent and safe on one that never opened a channel, so a caller may
  * close unconditionally in a `finally`.
  */
-export type IndexLister = Pick<
-  InstanceType<FirestoreModule['v1']['FirestoreAdminClient']>,
-  'listIndexesAsync' | 'close'
->;
+export interface IndexLister {
+  /**
+   * `projects.databases.collectionGroups.indexes.list`, following its own page tokens. `parent` is
+   * what `indexesParent` builds; `autoPaginate: false` is the one option this module sends, and why
+   * is explained where it is sent.
+   */
+  listIndexesAsync: (
+    request: { parent: string },
+    options?: { autoPaginate?: boolean },
+  ) => AsyncIterable<unknown>;
+  /** Releases the channel the first listing opened. Idempotent; a no-op on a client that never listed. */
+  close: () => Promise<void>;
+}
 
 /**
  * The wildcard that lists every collection group's indexes in one call.
@@ -111,7 +141,12 @@ export async function adminLister(project: string): Promise<IndexLister> {
         'installed version is likely newer than this package supports',
     );
   }
-  return new admin({ projectId: project });
+  // `satisfies` is the compile-time pin `IndexLister`'s docblock refers to: the real client must
+  // still be assignable to the structural type, so a regenerated signature that stopped accepting
+  // what this module sends fails this build rather than a consumer's. The declared return type
+  // performs the same check; the keyword says the check is intended, so a refactor that changed
+  // what this function returns would not quietly take the pin with it.
+  return new admin({ projectId: project }) satisfies IndexLister;
 }
 
 /**
@@ -146,15 +181,15 @@ export async function listLiveIndexes(
     // `AutopaginateTrueWarning` to stderr on every run. That line would land beside the one naming
     // the target, which is the one line `check` asks an operator to read.
     for await (const index of lister.listIndexesAsync({ parent }, { autoPaginate: false })) {
-      // Conveyed rather than converted, and the cast says so. The generated protos type every field
-      // of an `Index` as optional, nullable, and — for the enums — possibly numeric, while
-      // `LiveCompositeIndex` models the same message as the listings `reconcile` was written
-      // against. Both consumers already read it that defensively: `readiness.ts` coerces `name` and
-      // `state` before it touches them and classifies a state it cannot name as `unrecognised`, and
-      // `readLive` refuses an entry whose scope, fields, or `apiScope` it cannot read. Coercing here
-      // would move those decisions into the one module with no way to report them, and coercing
-      // `null` is how a field with no path acquires one.
-      indexes.push(index as unknown as LiveCompositeIndex);
+      // Conveyed rather than converted, and the cast says so. What comes off the wire is the
+      // generated `Index` proto, every field of it optional, nullable, and — for the enums —
+      // possibly numeric, while `LiveCompositeIndex` models the same message as the listings
+      // `reconcile` was written against. Both consumers already read it that defensively:
+      // `readiness.ts` coerces `name` and `state` before it touches them and classifies a state it
+      // cannot name as `unrecognised`, and `readLive` refuses an entry whose scope, fields, or
+      // `apiScope` it cannot read. Coercing here would move those decisions into the one module
+      // with no way to report them, and coercing `null` is how a field with no path acquires one.
+      indexes.push(index as LiveCompositeIndex);
     }
   } catch (error) {
     // Wrapped rather than propagated, because what the caller must not do with a failure is treat it

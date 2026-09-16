@@ -5,6 +5,24 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## Unreleased
+
+### Changed
+
+- **`IndexLister` is declared structurally, and no longer names a package this one does not
+  control** (issue #40). It was a `Pick` of `@google-cloud/firestore`'s admin client, whose method
+  signatures are generated in `@google-cloud/firestore-api` — a transitive 0.x dependency whose
+  range the data client moves at a minor of its own. Re-exported, that meant a consumer's fake
+  typechecked against whichever `firestore-api` *their* install resolved, so a `@google-cloud/firestore`
+  minor could break the typecheck of a project whose `@indexwright/record` had not changed, and this
+  package's lockfile would never see it. The type is now the two members `listLiveIndexes` calls,
+  with the request and options narrowed to the fields it sends, so it is governed by this package's
+  semver alone; the real client is pinned against it inside `adminLister` at compile time, which is
+  where the drift-safety the `Pick` bought now lives. The one visible change: `listIndexesAsync`
+  yields `unknown` rather than the generated `IIndex`, which is what `listLiveIndexes` always treated
+  it as. A fake that yielded index-shaped objects still typechecks; a caller that derived a type from
+  the old element type must name it themselves.
+
 ## [0.6.0] — 2026-09-13
 
 The release that makes `check` adoptable. 0.5.0 shipped the verb; this release is what it takes to
