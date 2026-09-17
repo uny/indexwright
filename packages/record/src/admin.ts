@@ -49,13 +49,13 @@ export class AdminError extends Error {
  * `adminLister`, whose `satisfies IndexLister` pins the real client against this interface at
  * compile time without exporting the client's type. The members are function-typed properties
  * rather than methods for that pin's sake: a method's parameters are checked bivariantly even under
- * `strict`, so a regenerated `CallOptions` that grew a required field would still have passed —
- * every field of it is optional, so the reverse direction of the bivariant check succeeds —
- * while a property's are checked contravariantly and a real client that no longer accepts
- * `{ autoPaginate: false }` or `{ parent }` fails the build here. The request alone would fail
- * either way — the proto's `parent` is optional and nullable, so neither direction is assignable —
- * which is why the options are the example. (`Replayer` in `replay.ts` uses method syntax; it pins
- * nothing.)
+ * `strict`, so a regenerated `CallOptions` that grew a required field would still have passed:
+ * the grown type is assignable *to* `{ autoPaginate?: boolean }` here, whose one field is optional,
+ * and one direction is all the bivariant check asks. A property's are checked contravariantly, so
+ * a real client that no longer accepts `{ autoPaginate: false }` or `{ parent }` fails the build
+ * here. The request is not the example because a grown request would fail either way: forward on
+ * the field this module does not send, and reverse because the proto's `parent` is optional and
+ * nullable where ours is required. (`Replayer` in `replay.ts` uses method syntax; it pins nothing.)
  *
  * The elements are `object` rather than the generated `IIndex`, which is also what
  * `listLiveIndexes` treats them as: it conveys them to `reconcile` and `readiness`, which read every
