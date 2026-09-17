@@ -18,10 +18,14 @@ again, by its own `corpusVersion`.
   package's lockfile would never see it. The type is now the two members `listLiveIndexes` calls,
   with the request and options narrowed to the fields it sends, so it is governed by this package's
   semver alone; the real client is pinned against it inside `adminLister` at compile time, which is
-  where the drift-safety the `Pick` bought now lives. The one visible change: `listIndexesAsync`
-  yields `unknown` rather than the generated `IIndex`, which is what `listLiveIndexes` always treated
-  it as. A fake that yielded index-shaped objects still typechecks; a caller that derived a type from
-  the old element type must name it themselves.
+  where the drift-safety the `Pick` bought now lives. What is visible from outside: `listIndexesAsync`
+  yields `object` rather than the generated `IIndex`, which is what `listLiveIndexes` always treated
+  it as, so a fake that yields index-shaped objects still typechecks, while a caller that derived a
+  type from the old element type must name it themselves; the request is now exactly `{ parent }`
+  and the options exactly `{ autoPaginate? }`, so a caller that passed the client other fields
+  through an `IndexLister` (`pageSize`, `filter`, a `timeout`) must hold the client itself, and a
+  fake whose parameters were narrower than those (a required field beyond `parent`) no longer
+  satisfies the type.
 
 ## [0.6.0] — 2026-09-13
 

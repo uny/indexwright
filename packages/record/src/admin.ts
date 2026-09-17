@@ -41,20 +41,30 @@ export class AdminError extends Error {
  * `@google-cloud/firestore` minor could break a consumer of an unchanged `@indexwright/record`, and
  * our lockfile would never see it (issue #40). Written as the two members this module calls, with
  * the request and the options narrowed to the fields it sends, the type is governed by this
- * package's semver alone and nothing in the published declarations names the transitive package.
+ * package's semver alone and nothing in this type's declaration names the transitive package.
+ * (`FirestoreModule` is still exported, and its `v1` accessor still reaches that package; what is
+ * closed here is the surface a fake of *this* type is checked against.)
  *
  * What the `Pick` bought — a fake that cannot drift from what the real client accepts — is kept by
  * `adminLister`, whose `satisfies IndexLister` pins the real client against this interface at
  * compile time without exporting the client's type. The members are function-typed properties
  * rather than methods for that pin's sake: a method's parameters are checked bivariantly even under
- * `strict`, so a regenerated request type that grew a required field would still have passed,
+ * `strict`, so a regenerated `CallOptions` that grew a required field would still have passed —
+ * every field of it is optional, so the reverse direction of the bivariant check succeeds —
  * while a property's are checked contravariantly and a real client that no longer accepts
- * `{ parent }` fails the build here. (`Replayer` in `replay.ts` uses method syntax; it pins nothing.)
+ * `{ autoPaginate: false }` or `{ parent }` fails the build here. The request alone would fail
+ * either way — the proto's `parent` is optional and nullable, so neither direction is assignable —
+ * which is why the options are the example. (`Replayer` in `replay.ts` uses method syntax; it pins
+ * nothing.)
  *
- * The elements are `unknown` rather than the generated `IIndex`, which is also what
+ * The elements are `object` rather than the generated `IIndex`, which is also what
  * `listLiveIndexes` treats them as: it conveys them to `reconcile` and `readiness`, which read every
  * field defensively, and a type that named the protos would put the transitive package straight
- * back into the public surface.
+ * back into the public surface. `object` rather than `unknown` because the field reads are the
+ * whole of that defence: `readLive` and `observe` dereference the element itself before they coerce
+ * anything, so a fake that yielded `null` would fail as a `TypeError` in a module whose contract is
+ * to decline what it cannot read. The floor rejects that fake at compile time and costs nothing —
+ * the generated `IIndex` is an object type, so the real client still satisfies it.
  *
  * `close` is here without being called anywhere in this module, which is issue #39's answer in one
  * line. The gRPC stub is lazy — the constructor opens nothing and `close` is a no-op until the
@@ -81,7 +91,7 @@ export interface IndexLister {
   listIndexesAsync: (
     request: { parent: string },
     options?: { autoPaginate?: boolean },
-  ) => AsyncIterable<unknown>;
+  ) => AsyncIterable<object>;
   /** Releases the channel the first listing opened. Idempotent; a no-op on a client that never listed. */
   close: () => Promise<void>;
 }
