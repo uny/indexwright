@@ -17,7 +17,9 @@
  *      whichever of the three probe groups is missing. `probe` is created with no density and is
  *      the index the fixture pins; `probe_sparse_all` and `probe_density_unspecified` exist so that
  *      the `densityIsAlwaysStamped` and `wildcardListsEveryGroup` observations are read from a
- *      listing rather than remembered. Creation blocks until the index is built, which is minutes.
+ *      listing rather than remembered, then waits for every one of them to list as READY — minutes.
+ *      The runbook's own indexes on `probe` are left alone: the index this script owns is the one
+ *      on `x, z`, and it is found by its fields, not by its group.
  *   2. Attempts the three creations the observations say a standard native database refuses —
  *      `--density sparse-any`, `--density dense`, `--unique` — and records each refusal verbatim.
  *      One of them succeeding is a finding, not a fixture: the script stops and says so.
@@ -130,9 +132,13 @@ async function listWith(client) {
   return indexes.sort((a, b) => a.name.localeCompare(b.name));
 }
 const groupOf = (index) => index.name.split('/collectionGroups/')[1].split('/')[0];
+// The probe runbook deploys its own indexes on `probe`, so a group is not an identity: the index
+// this script owns is the one on exactly these fields, wherever else the group has been used.
+const isProbeShape = (index) =>
+  index.fields.map((field) => `${field.fieldPath}:${field.order}`).join('|') === 'x:ASCENDING|z:ASCENDING|__name__:ASCENDING';
 const onlyIn = (indexes, group) => {
-  const found = indexes.filter((index) => groupOf(index) === group);
-  if (found.length !== 1) fail(`expected exactly one composite index in ${group}, found ${found.length}`);
+  const found = indexes.filter((index) => groupOf(index) === group && isProbeShape(index));
+  if (found.length !== 1) fail(`expected exactly one composite index on x, z in ${group}, found ${found.length}`);
   return found[0];
 };
 
@@ -144,10 +150,12 @@ try {
   let listing = await listWith(grpc);
   const created = [];
   for (const [group, density] of GROUPS) {
-    if (listing.some((index) => groupOf(index) === group)) continue;
+    if (listing.some((index) => groupOf(index) === group && isProbeShape(index))) continue;
     const command = createIndex(group, ...(density === undefined ? [] : ['--density', density]));
-    process.stderr.write(`creating ${group} (this blocks until the index is built)\n  ${shown(command)}\n`);
-    must(...command);
+    process.stderr.write(`creating ${group}\n  ${shown(command)}\n`);
+    // `--async`, and the poll below is what waits: the blocking form was seen to sit for minutes
+    // after the listing already said READY, and the listing is the reading this script is after.
+    must(command[0], [...command[1], '--async']);
     created.push(group);
   }
   const deadline = Date.now() + READY_TIMEOUT_MS;
@@ -186,6 +194,7 @@ try {
   const gcloudList = gcloud('firestore', 'indexes', 'composite', 'list', '--format=json');
   const byGcloud = JSON.parse(must(...gcloudList));
 
+
   // The Firebase CLI reads `.firebaserc` and drops `firebase-debug.log` in its cwd; neither belongs
   // in the repository, so it runs from a directory of its own.
   const firebaseList = ['firebase', ['firestore:indexes', '--project', project, '--database', database]];
@@ -199,8 +208,10 @@ try {
     gcloud: must('gcloud', ['version', '--format=value("Google Cloud SDK")']).trim(),
     firebase: must('firebase', ['--version']).trim(),
   };
-  const withPlaceholder = (value) => JSON.parse(JSON.stringify(value).replaceAll(`projects/${project}/`, `projects/${PLACEHOLDER}/`));
-  const today = new Date().toISOString().slice(0, 10);
+  // Resource names and the commands both: the note promises the file is verbatim except for the
+  // project id, and the header above is where the real invocation lives.
+  const withPlaceholder = (value) => JSON.parse(JSON.stringify(value).replaceAll(project, PLACEHOLDER));
+  const today = new Date().toLocaleDateString('sv'); // ISO date, in local time
 
   const source = {
     project: `${PLACEHOLDER} (placeholder; the observation was made against a disposable project)`,
@@ -220,18 +231,23 @@ try {
       declarationByFirebaseCli: shown(firebaseList),
     },
     refusals,
-    wildcardListing: listing.map((index) => ({ collectionGroup: groupOf(index), density: index.density, state: index.state })),
+    wildcardListing: listing.map((index) => ({
+      collectionGroup: groupOf(index),
+      fields: index.fields.map((field) => `${field.fieldPath}:${field.order ?? field.arrayConfig}`).join('|'),
+      density: index.density,
+      state: index.state,
+    })),
   };
 
   const fixture = {
     note: existing.note,
-    source,
+    source: withPlaceholder(source),
     observations: existing.observations,
     liveByAdminClient: withPlaceholder(onlyIn(listing, PINNED_GROUP)),
     liveByGcloud: withPlaceholder(onlyIn(byGcloud, PINNED_GROUP)),
     declarationByFirebaseCli: (() => {
-      const found = (byFirebase.indexes ?? []).filter((index) => index.collectionGroup === PINNED_GROUP);
-      if (found.length !== 1) fail(`firebase firestore:indexes returned ${found.length} entries for ${PINNED_GROUP}`);
+      const found = (byFirebase.indexes ?? []).filter((index) => index.collectionGroup === PINNED_GROUP && isProbeShape(index));
+      if (found.length !== 1) fail(`firebase firestore:indexes returned ${found.length} entries on x, z for ${PINNED_GROUP}`);
       return found[0];
     })(),
   };

@@ -1,43 +1,127 @@
 {
-  "note": "One composite index, as three different tools report it. Observed 2026-08-15 against a standard Firestore-native database, for issue #20 — before this, every reconcile test fed the module a listing the module's own author wrote. Verbatim except for the project id, which is the placeholder `demo-fixtures` rather than the disposable project actually used, matching `scripts/capture-fixtures.mjs`; nothing here reads the project segment, so the substitution costs no observation. Regenerate with `scripts/capture-live-indexes.mjs`, which records under `source` how each rendering was read back; `note` and `observations` are the parts it leaves to a maintainer.",
+  "note": "One composite index, as three different tools report it. First observed 2026-08-15 against a standard Firestore-native database, for issue #20 (`source.observed` dates the current capture) — before this, every reconcile test fed the module a listing the module's own author wrote. Verbatim except for the project id, which is the placeholder `demo-fixtures` rather than the disposable project actually used, matching `scripts/capture-fixtures.mjs`; nothing here reads the project segment, so the substitution costs no observation. Regenerate with `scripts/capture-live-indexes.mjs`, which records under `source` how each rendering was read back; `note` and `observations` are the parts it leaves to a maintainer.",
   "source": {
     "project": "demo-fixtures (placeholder; the observation was made against a disposable project)",
     "database": "(default)",
-    "edition": "standard, Firestore-native",
-    "declared": "created with no density: `gcloud firestore indexes composite create --collection-group probe --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending`"
+    "edition": "STANDARD, FIRESTORE_NATIVE (from `gcloud firestore databases describe`)",
+    "observed": "2026-09-20",
+    "script": "packages/record/scripts/capture-live-indexes.mjs",
+    "versions": {
+      "@google-cloud/firestore": "9.0.0",
+      "gcloud": "583.0.0",
+      "firebase": "15.7.0"
+    },
+    "created": {
+      "probe": "gcloud firestore indexes composite create --collection-group probe --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --project demo-fixtures --database '(default)'",
+      "probe_sparse_all": "gcloud firestore indexes composite create --collection-group probe_sparse_all --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --density sparse-all --project demo-fixtures --database '(default)'",
+      "probe_density_unspecified": "gcloud firestore indexes composite create --collection-group probe_density_unspecified --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --density density-unspecified --project demo-fixtures --database '(default)'"
+    },
+    "readBack": {
+      "liveByAdminClient": "v1.FirestoreAdminClient.listIndexesAsync({ parent: 'projects/demo-fixtures/databases/(default)/collectionGroups/-' }, { autoPaginate: false }), constructed with and without `fallback: true`; the two listings were compared equal",
+      "liveByGcloud": "gcloud firestore indexes composite list --format=json --project demo-fixtures --database '(default)'",
+      "declarationByFirebaseCli": "firebase firestore:indexes --project demo-fixtures --database '(default)'"
+    },
+    "refusals": {
+      "sparseAny": {
+        "command": "gcloud firestore indexes composite create --collection-group probe_refused --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --density sparse-any --project demo-fixtures --database '(default)'",
+        "stderr": "ERROR: (gcloud.firestore.indexes.composite.create) INVALID_ARGUMENT: Indexes with api scope ANY_API does not support SPARSE_ANY density on standard database"
+      },
+      "dense": {
+        "command": "gcloud firestore indexes composite create --collection-group probe_refused --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --density dense --project demo-fixtures --database '(default)'",
+        "stderr": "ERROR: (gcloud.firestore.indexes.composite.create) INVALID_ARGUMENT: Indexes with api scope ANY_API does not support DENSE density on standard database"
+      },
+      "unique": {
+        "command": "gcloud firestore indexes composite create --collection-group probe_refused --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --unique --project demo-fixtures --database '(default)'",
+        "stderr": "ERROR: (gcloud.firestore.indexes.composite.create) INVALID_ARGUMENT: Unique index is only supported in the Enterprise database."
+      }
+    },
+    "wildcardListing": [
+      {
+        "collectionGroup": "probe_density_unspecified",
+        "fields": "x:ASCENDING|z:ASCENDING|__name__:ASCENDING",
+        "density": "SPARSE_ALL",
+        "state": "READY"
+      },
+      {
+        "collectionGroup": "probe_sparse_all",
+        "fields": "x:ASCENDING|z:ASCENDING|__name__:ASCENDING",
+        "density": "SPARSE_ALL",
+        "state": "READY"
+      },
+      {
+        "collectionGroup": "probe",
+        "fields": "tags:CONTAINS|a:ASCENDING|__name__:ASCENDING",
+        "density": "SPARSE_ALL",
+        "state": "READY"
+      },
+      {
+        "collectionGroup": "probe",
+        "fields": "a:ASCENDING|b:ASCENDING|__name__:ASCENDING",
+        "density": "SPARSE_ALL",
+        "state": "READY"
+      },
+      {
+        "collectionGroup": "probe",
+        "fields": "x:ASCENDING|z:ASCENDING|__name__:ASCENDING",
+        "density": "SPARSE_ALL",
+        "state": "READY"
+      }
+    ]
   },
   "observations": {
-    "densityIsAlwaysStamped": "An index created with no density comes back SPARSE_ALL, and so does one created with --density density-unspecified: the API normalises rather than echoing. DENSITY_UNSPECIFIED was never returned. Re-observed 2026-08-23: the group created as density-unspecified still lists as SPARSE_ALL.",
-    "enumsAreStrings": "v1.FirestoreAdminClient returns state, density, apiScope and queryScope as enum names, identically over gRPC and over `fallback: true`. Not numbers, which `readiness.ts` warns the generated protos can deliver. Re-observed 2026-08-23 through the adapter, on all three indexes.",
-    "sparseAnyAndDenseAreUnreachableHere": "`--density sparse-any` and `--density dense` are refused at creation: 'Indexes with api scope ANY_API does not support SPARSE_ANY density on standard database'. So SPARSE_ALL is the only density a standard native database produces.",
-    "uniqueIsEnterpriseOnly": "`--unique` is refused: 'Unique index is only supported in the Enterprise database.' The field is still returned, as false.",
+    "densityIsAlwaysStamped": "An index created with no density comes back SPARSE_ALL, and so does one created with --density density-unspecified: the API normalises rather than echoing. DENSITY_UNSPECIFIED was never returned. Re-observed 2026-08-23: the group created as density-unspecified still lists as SPARSE_ALL. Since 2026-09-20 the script reads it: `source.wildcardListing` carries the density of every group, `source.created` the flag each was created under.",
+    "enumsAreStrings": "v1.FirestoreAdminClient returns state, density, apiScope and queryScope as enum names, identically over gRPC and over `fallback: true`. Not numbers, which `readiness.ts` warns the generated protos can deliver. Re-observed 2026-08-23 through the adapter, on all three indexes. Since 2026-09-20 the script compares the two listings and refuses to write if they differ.",
+    "sparseAnyAndDenseAreUnreachableHere": "`--density sparse-any` and `--density dense` are refused at creation: 'Indexes with api scope ANY_API does not support SPARSE_ANY density on standard database'. So SPARSE_ALL is the only density a standard native database produces. The refusals are recorded verbatim under `source.refusals`, and the script stops if one of them stops refusing.",
+    "uniqueIsEnterpriseOnly": "`--unique` is refused: 'Unique index is only supported in the Enterprise database.' The field is still returned, as false. Recorded under `source.refusals.unique`.",
     "renderingsDiffer": "Only the admin client fills in the fields holding their proto3 default — apiScope, unique, multikey, shardCount. gcloud omits them. That is why an absent apiScope has to count as comparable.",
-    "wildcardListsEveryGroup": "2026-08-23, through `admin.ts` against the same disposable database: the parent `.../collectionGroups/-` returned every composite index in one call, across three different collection groups (probe, probe_sparse_all, probe_density_unspecified). This is the observation the adapter's design rests on — listing group by group would make the observed set a function of the corpus. Paging was not exercised: three entries is one page.",
+    "wildcardListsEveryGroup": "2026-08-23, through `admin.ts` against the same disposable database: the parent `.../collectionGroups/-` returned every composite index in one call, across three different collection groups (probe, probe_sparse_all, probe_density_unspecified). This is the observation the adapter's design rests on — listing group by group would make the observed set a function of the corpus. Paging was not exercised: three entries is one page. Re-observed 2026-09-20 by the script: five indexes across three groups in one call, the extra two being the probe runbook's own on `probe`, which is why the fixture's index is found by its fields and not by its group; see `source.wildcardListing`.",
     "searchIndexOptionsArrivesNull": "The 2026-08-23 listing carried `searchIndexOptions: null`, which the 2026-08-15 one did not — the same client, eight days later. It is not modelled by `LiveCompositeIndex` and is not compared: it belongs to the MONGODB_COMPATIBLE_API scope that `COMPARABLE_API_SCOPES` already refuses, and null under ANY_API states nothing the canonical key could disagree with. What has not been observed is a non-null one under ANY_API, which would be the `unique`/`multikey`/`shardCount` hole of issue #30 by a fourth route."
   },
   "liveByAdminClient": {
     "fields": [
-      { "fieldPath": "x", "order": "ASCENDING", "valueMode": "order" },
-      { "fieldPath": "z", "order": "ASCENDING", "valueMode": "order" },
-      { "fieldPath": "__name__", "order": "ASCENDING", "valueMode": "order" }
+      {
+        "fieldPath": "x",
+        "order": "ASCENDING",
+        "valueMode": "order"
+      },
+      {
+        "fieldPath": "z",
+        "order": "ASCENDING",
+        "valueMode": "order"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING",
+        "valueMode": "order"
+      }
     ],
-    "name": "projects/demo-fixtures/databases/(default)/collectionGroups/probe/indexes/CICAgOjXh4EK",
+    "name": "projects/demo-fixtures/databases/(default)/collectionGroups/probe/indexes/CICAgNjpgYIK",
     "queryScope": "COLLECTION",
     "state": "READY",
     "apiScope": "ANY_API",
     "density": "SPARSE_ALL",
     "multikey": false,
     "shardCount": 0,
+    "searchIndexOptions": null,
     "unique": false
   },
   "liveByGcloud": {
     "density": "SPARSE_ALL",
     "fields": [
-      { "fieldPath": "x", "order": "ASCENDING" },
-      { "fieldPath": "z", "order": "ASCENDING" },
-      { "fieldPath": "__name__", "order": "ASCENDING" }
+      {
+        "fieldPath": "x",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "z",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
     ],
-    "name": "projects/demo-fixtures/databases/(default)/collectionGroups/probe/indexes/CICAgOjXh4EK",
+    "name": "projects/demo-fixtures/databases/(default)/collectionGroups/probe/indexes/CICAgNjpgYIK",
     "queryScope": "COLLECTION",
     "state": "READY"
   },
@@ -45,9 +129,18 @@
     "collectionGroup": "probe",
     "queryScope": "COLLECTION",
     "fields": [
-      { "fieldPath": "x", "order": "ASCENDING" },
-      { "fieldPath": "z", "order": "ASCENDING" },
-      { "fieldPath": "__name__", "order": "ASCENDING" }
+      {
+        "fieldPath": "x",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "z",
+        "order": "ASCENDING"
+      },
+      {
+        "fieldPath": "__name__",
+        "order": "ASCENDING"
+      }
     ],
     "density": "SPARSE_ALL"
   }
