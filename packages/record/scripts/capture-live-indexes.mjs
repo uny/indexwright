@@ -136,8 +136,9 @@ const groupOf = (index) => index.name.split('/collectionGroups/')[1].split('/')[
 // this script owns is the one on exactly these fields, wherever else the group has been used.
 const isProbeShape = (index) =>
   index.fields.map((field) => `${field.fieldPath}:${field.order}`).join('|') === 'x:ASCENDING|z:ASCENDING|__name__:ASCENDING';
+const ownedIn = (indexes, group) => indexes.filter((index) => groupOf(index) === group && isProbeShape(index));
 const onlyIn = (indexes, group) => {
-  const found = indexes.filter((index) => groupOf(index) === group && isProbeShape(index));
+  const found = ownedIn(indexes, group);
   if (found.length !== 1) fail(`expected exactly one composite index on x, z in ${group}, found ${found.length}`);
   return found[0];
 };
@@ -161,9 +162,15 @@ try {
   const deadline = Date.now() + READY_TIMEOUT_MS;
   for (;;) {
     listing = await listWith(grpc);
-    const pending = GROUPS.map(([group]) => onlyIn(listing, group)).filter((index) => index.state !== 'READY');
+    // An index just created with `--async` may not be listed yet; absent is pending, not an error.
+    // Two on the same fields in one group is still an error, and `onlyIn` says so below.
+    const pending = GROUPS.flatMap(([group]) => {
+      const owned = ownedIn(listing, group);
+      if (owned.length === 0) return [`${group} (not yet listed)`];
+      return onlyIn(listing, group).state === 'READY' ? [] : [onlyIn(listing, group).name];
+    });
     if (pending.length === 0) break;
-    if (Date.now() > deadline) fail(`still not READY after ${READY_TIMEOUT_MS / 60000} minutes: ${pending.map((i) => i.name).join(', ')}`);
+    if (Date.now() > deadline) fail(`still not READY after ${READY_TIMEOUT_MS / 60000} minutes: ${pending.join(', ')}`);
     await new Promise((resolve) => setTimeout(resolve, 10_000));
   }
 
@@ -205,6 +212,8 @@ try {
   // --- 4. the fixture -------------------------------------------------------------------------------
   const versions = {
     '@google-cloud/firestore': createRequire(import.meta.url)('@google-cloud/firestore/package.json').version,
+    // The generated client the listing's shape actually comes from — the 0.x package issue #40 is about.
+    '@google-cloud/firestore-api': createRequire(import.meta.url)('@google-cloud/firestore-api/package.json').version,
     gcloud: must('gcloud', ['version', '--format=value("Google Cloud SDK")']).trim(),
     firebase: must('firebase', ['--version']).trim(),
   };

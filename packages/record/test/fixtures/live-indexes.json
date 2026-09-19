@@ -8,6 +8,7 @@
     "script": "packages/record/scripts/capture-live-indexes.mjs",
     "versions": {
       "@google-cloud/firestore": "9.0.0",
+      "@google-cloud/firestore-api": "0.2.0",
       "gcloud": "583.0.0",
       "firebase": "15.7.0"
     },
