@@ -7,7 +7,33 @@ again, by its own `corpusVersion`.
 
 ## Unreleased
 
+### Added
+
+- **`check` reconciles `fieldOverrides` against the target, and waits on them** (issue #53). The
+  index set has two halves, and `check` read one. Single-field configuration —
+  `collectionGroups.fields` on the API, `fieldOverrides` in the file — decides which replayed
+  queries succeed as surely as composites do: a collection-group query on one field is served only
+  by an override declaring that scope, and an exemption removes the automatic indexes a query with no
+  composite index relies on. So both failure modes SPEC §3 names arrived by a route `check` was not
+  looking at, and the confirmation at the end of the run did not see them either. Now every
+  readiness poll lists fields beside indexes, under the filter the Firebase CLI's
+  `firestore:indexes` uses (`indexConfig.usesAncestorConfig=false OR ttlConfig:*`, so a declaration
+  the CLI wrote for a TTL-only field reconciles rather than reading as missing); the nested
+  single-field indexes go through the gate, so an override still building is waited on; and both
+  halves are reconciled in both directions before replay and again after it, on the canonical
+  override key `indexwright` 0.3.0 gives each. `__default__/*` is recognised by name and checked
+  against the three documented indexes rather than compared; a database whose default differs is
+  declined on, since the override model assumes it. `ttl` is compared on neither side. New on the JS
+  API: `listLiveFields`, `FIELDS_FILTER`, `reconcileOverrides`, `liveSingleFieldIndexes`, and the
+  `LiveField` / `OverrideReconciliation` family beside `Reconciliation`. `isVouched` now accepts
+  either reconciliation.
+
 ### Changed
+
+- **`IndexLister` gains `listFieldsAsync`**, for the listing above. A fake of the type must now
+  yield fields as well as indexes — `(request: { parent; filter }, options?) => AsyncIterable<object>`
+  — or `check` throws on its first poll. The real client satisfies it unchanged. The dependency on
+  `indexwright` moves to `>=0.3.0 <1`, which is where `analyseOverrides` and the override key live.
 
 - **`IndexLister` is declared structurally, and no longer names a package this one does not
   control** (issue #40). It was a `Pick` of `@google-cloud/firestore`'s admin client, whose method
@@ -40,6 +66,13 @@ again, by its own `corpusVersion`.
   Run by hand against the disposable project, never in CI. The fixture is the 2026-09-20 capture:
   it now carries the `searchIndexOptions: null` the observations already described, and `source`
   names the client versions and every command. Not a change to the package.
+- **`test/fixtures/live-fields.json` is its sibling** (issue #53): `scripts/capture-live-fields.mjs`
+  configures three fields of a probe collection group — an override with a collection-group scope
+  through the admin client's `updateField`, an exemption through `gcloud`, and a TTL-only field —
+  waits for them, and reads the listing back through the admin client (twice), `gcloud`, and the
+  Firebase CLI. The three claims `overrides.ts` rests on are read from it rather than remembered:
+  the default lists under `__default__/*` with the three documented indexes, an exemption arrives
+  with no `indexes`, and a TTL-only field arrives with the inherited set materialised.
 
 ## [0.6.0] — 2026-09-13
 
