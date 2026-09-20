@@ -14,8 +14,8 @@ output shape is the stable contract.
   an entry needs `collectionGroup`, `fieldPath`, and an `indexes` array (empty for an exemption),
   each index a `queryScope` and exactly one of `order`, `arrayConfig`, and `vectorConfig`, and `ttl`
   a boolean when present — and `analyseOverrides` reduces each to an `AnalysedOverride` keyed as
-  `<collectionGroup>::<fieldPath>::<queryScope>:<direction>|…`, sorted and de-duplicated as the set
-  it is. No rule reads it yet; the form exists so that `@indexwright/record` can reconcile a
+  `<collectionGroup>::<fieldPath>::<queryScope>:<direction>|…`, sorted, with entries alike in scope and
+  direction collapsed, as the set it is. No rule reads it yet; the form exists so that `@indexwright/record` can reconcile a
   declaration against a live field listing on the same key the linter will report on, rather than
   on a second model. A file whose `fieldOverrides` cannot be read that way is now malformed, where
   it previously passed unexamined. `fieldDirection` accepts any object carrying the three configs,

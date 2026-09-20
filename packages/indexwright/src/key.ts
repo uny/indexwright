@@ -116,8 +116,11 @@ export function overrideKey(
  *
  * A composite index's fields are a sequence and their order is part of the key; an override's
  * indexes are a set, and Firestore holds at most one single-field index per (scope, direction) of
- * a field. So the entries are sorted, and an exact repeat is collapsed: two spellings of one
- * configuration reach the same key, while two configurations that differ in any member cannot.
+ * a field. So the entries are sorted, and entries that agree on scope and direction are collapsed
+ * to one: two spellings of one configuration reach the same key, while two configurations that
+ * differ in any member cannot. The collapse reads only what the key reads — two entries alike in
+ * scope and direction but differing in a key the form does not see (`density`, `unique`) collapse
+ * too, and `source.indexes` keeps both for a consumer that refuses what the key cannot express.
  */
 export function canonicalSingleFieldIndexes(
   indexes: readonly SingleFieldIndex[],
@@ -126,9 +129,11 @@ export function canonicalSingleFieldIndexes(
   const canonical: CanonicalSingleFieldIndex[] = [];
   for (const index of indexes) {
     const entry = { queryScope: index.queryScope, direction: fieldDirection(index) };
-    const rendered = formatSingleFieldIndex(entry);
-    if (seen.has(rendered)) continue;
-    seen.add(rendered);
+    // Not the rendered `scope:direction`, which is not injective — nothing forbids `:` in either
+    // part. `JSON.stringify` over the pair is, without an assumption about the vocabulary.
+    const identity = JSON.stringify([entry.queryScope, entry.direction]);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     canonical.push(entry);
   }
   return canonical.sort(

@@ -305,7 +305,7 @@ whether the document key is written explicitly resolve to the same resource.
 The same shape, for a field override. `direction` is as above. A composite index's fields are a
 sequence, so their order is part of its key; an override's `indexes` are a set — Firestore holds at
 most one single-field index per (scope, direction) of a field — so they are sorted by query scope
-and then direction before the key is formed, and an entry repeated exactly is collapsed. An
+and then direction before the key is formed, and entries alike in both are collapsed to one. An
 exemption has an empty final part. `ttl` and any key the tool does not understand are carried on
 the declaration and are not part of the key: they decide no query.
 

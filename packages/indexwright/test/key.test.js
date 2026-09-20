@@ -8,6 +8,7 @@ import {
   implicitNameDirection,
   indexKey,
   overrideKey,
+  parseDocument,
 } from '../dist/index.js';
 
 test('the implicit __name__ direction follows the last ordered field', () => {
@@ -150,7 +151,7 @@ test('an override key is the collection group, the field path, and the declared 
   assert.equal(override.key, overrideKey('posts', 'tags', override.indexes));
 });
 
-test('the declared set is canonicalised as a set: order-independent, and an exact repeat collapsed', () => {
+test('the declared set is canonicalised as a set: order-independent, and a repeat collapsed', () => {
   const canonical = canonicalSingleFieldIndexes([
     { queryScope: 'COLLECTION_GROUP', order: 'ASCENDING' },
     { queryScope: 'COLLECTION', order: 'DESCENDING' },
@@ -197,4 +198,35 @@ test('ttl and unknown keys are carried on the source and are not part of the key
   });
   assert.equal(withTtl.key, without.key);
   assert.equal(withTtl.source.ttl, true);
+});
+
+test('an override as the Firebase CLI exports one — every default materialised — parses and keys', () => {
+  // The shape `firebase firestore:indexes` writes for a field given a COLLECTION_GROUP scope: the
+  // three defaults the override keeps are written out beside the one it adds, and `queryScope` is
+  // on every entry (required in the CLI's own `FieldIndex`). Pinned so that a later tightening of
+  // the parser fails here rather than on a user's export.
+  const [override] = analyseOverrides(
+    parseDocument(
+      JSON.stringify({
+        indexes: [],
+        fieldOverrides: [
+          {
+            collectionGroup: 'posts',
+            fieldPath: 'tags',
+            ttl: false,
+            indexes: [
+              { order: 'ASCENDING', queryScope: 'COLLECTION' },
+              { order: 'DESCENDING', queryScope: 'COLLECTION' },
+              { arrayConfig: 'CONTAINS', queryScope: 'COLLECTION' },
+              { arrayConfig: 'CONTAINS', queryScope: 'COLLECTION_GROUP' },
+            ],
+          },
+        ],
+      }),
+    ),
+  );
+  assert.equal(
+    override.key,
+    'posts::tags::COLLECTION:ASCENDING|COLLECTION:CONTAINS|COLLECTION:DESCENDING|COLLECTION_GROUP:CONTAINS',
+  );
 });
