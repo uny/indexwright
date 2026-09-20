@@ -13,9 +13,9 @@
       "firebase": "15.7.0"
     },
     "created": {
-      "probe": "gcloud firestore indexes composite create --collection-group probe --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --project demo-fixtures --database '(default)'",
-      "probe_sparse_all": "gcloud firestore indexes composite create --collection-group probe_sparse_all --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --density sparse-all --project demo-fixtures --database '(default)'",
-      "probe_density_unspecified": "gcloud firestore indexes composite create --collection-group probe_density_unspecified --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --density density-unspecified --project demo-fixtures --database '(default)'"
+      "probe": "already listed before this run, not created by it; assumed created as: gcloud firestore indexes composite create --collection-group probe --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --project demo-fixtures --database '(default)'",
+      "probe_sparse_all": "already listed before this run, not created by it; assumed created as: gcloud firestore indexes composite create --collection-group probe_sparse_all --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --density sparse-all --project demo-fixtures --database '(default)'",
+      "probe_density_unspecified": "already listed before this run, not created by it; assumed created as: gcloud firestore indexes composite create --collection-group probe_density_unspecified --field-config field-path=x,order=ascending --field-config field-path=z,order=ascending --density density-unspecified --project demo-fixtures --database '(default)'"
     },
     "readBack": {
       "liveByAdminClient": "v1.FirestoreAdminClient.listIndexesAsync({ parent: 'projects/demo-fixtures/databases/(default)/collectionGroups/-' }, { autoPaginate: false }), constructed with and without `fallback: true`; the two listings were compared equal",
