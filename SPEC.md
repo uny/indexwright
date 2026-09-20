@@ -114,7 +114,9 @@ Firestore connection.
   query with no composite index relies on. So both readiness and reconciliation read both listings.
   The field listing is asked under the filter the Firebase CLI uses —
   `indexConfig.usesAncestorConfig=false OR ttlConfig:*` — which is the set of fields a declaration's
-  `fieldOverrides` corresponds to, including the TTL-only fields that CLI exports as overrides; the
+  `fieldOverrides` corresponds to, including the TTL-only fields that CLI exports as overrides (the
+  CLI's behaviour, read from its source; `@indexwright/record`'s fixture has not yet observed a TTL
+  field); the
   database default, listed under `__default__/*`, is recognised by name and checked against the
   three documented indexes rather than compared, since every override the linter models is a
   departure from it. `ttl` is compared on neither side: it decides when a document is deleted, not

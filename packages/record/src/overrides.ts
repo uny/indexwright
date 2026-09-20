@@ -242,13 +242,21 @@ const DEFAULT_HELD = Symbol('default-held');
  * declaration corresponds to) or because it carries a TTL and inherits the rest; the filter admits
  * both, as the Firebase CLI's does, so that a declaration with `ttl: true` and the default indexes
  * written out — which is how the CLI exports such a field — is matched rather than reported
- * `missing`. An inheriting field normally arrives with the inherited set materialised in
- * `indexConfig.indexes`, and is then read like any other. One that does not is refused: an absent
- * set on a field that owns its configuration is an exemption, and on a field that inherits it is
- * an unknown. So is a field with no `indexConfig` at all, since which of the two it is cannot then
- * be told, and reading it as an exemption would put it in `extra` — a confident divergence about
- * an entry nobody read. An inheriting field's materialised entries may name the ancestor's `*`
- * rather than the field; that spelling is the field's own there, and nowhere else.
+ * `missing`. An inheriting field is expected to arrive with the inherited set materialised in
+ * `indexConfig.indexes` — that is what the CLI's source reads from it — and is then read like any
+ * other. One that does not is refused: an absent set on a field that owns its configuration is an
+ * exemption, and on a field that inherits it is an unknown. So is a field with no `indexConfig` at
+ * all, since which of the two it is cannot then be told, and reading it as an exemption would put
+ * it in `extra` — a confident divergence about an entry nobody read. An inheriting field's
+ * materialised entries may arrive naming the ancestor's `*` rather than the field; that spelling is
+ * accepted there, and nowhere else.
+ *
+ * Everything in the paragraph above about an inheriting field is read from the Firebase CLI's
+ * source and not yet from a listing: `test/fixtures/live-fields.json` carries no TTL field, because
+ * TTL is billed and the disposable project is not (`observations.ttlNotObserved`). The two
+ * expectations — that the set is materialised, and how its entries are spelled — are the first
+ * things to check against a billed project, since a wrong one here declines every run against a
+ * database with a TTL.
  *
  * What is not checked is that `__default__/*` is *present*. The filter admits it and every
  * observed listing carries it (`capture-live-fields.mjs` stops if one does not), but a listing
