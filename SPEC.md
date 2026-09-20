@@ -245,9 +245,11 @@ Any file in the `firestore.indexes.json` shape:
 `fieldOverrides` is the file's other half: single-field index configuration, which Firestore
 otherwise derives for every field. An entry replaces that default for one field of one collection
 group with the *whole* set in `indexes` — an export materialises the defaults an override keeps —
-and an empty set exempts the field from indexing. No rule reads it yet; it is modelled so that the
-one canonical form serves both the linter and `check` (§3), which must reconcile it against a live
-listing.
+and an empty set exempts the field from indexing. A `vectorConfig` entry is accepted for symmetry
+with a composite field, though the Firebase CLI neither writes nor deploys one here — its
+single-field indexes carry `order` or `arrayConfig` only. No rule reads it yet; it is modelled so
+that the one canonical form serves both the linter and `check` (§3), which must reconcile it
+against a live listing.
 
 Multiple files may be passed; each is analysed independently. Rules are not applied across files.
 

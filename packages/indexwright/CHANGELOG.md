@@ -23,6 +23,8 @@ output shape is the stable contract.
 
 ### Changed
 
+- `IndexDocument.fieldOverrides` is typed `FieldOverride[]`, no longer `unknown[]`. A consumer
+  that built one by hand with entries of another shape stops compiling.
 - The package now lives at `packages/indexwright` rather than at the repository root, so that
   `@indexwright/record` can depend on it from the working tree instead of from a published release.
   Nothing about the published package moves: same name, same bin, same `exports`, same
