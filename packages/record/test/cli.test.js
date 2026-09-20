@@ -391,6 +391,7 @@ test('check\'s exit code is the one the CLI returns, for each of the three', asy
       readFile: (path) => (path === 'firestore.indexes.json' ? JSON.stringify(declared) : corpus),
       lister: async () => ({
         listIndexesAsync: () => (async function* () { for (const i of live) yield i; })(),
+        listFieldsAsync: () => (async function* () {})(),
         close: async () => {},
       }),
       replayer: async () => ({ run: async () => status, close: async () => {} }),
