@@ -63,6 +63,23 @@ export {
   type Readiness,
 } from './readiness.js';
 export {
+  DEFAULT_COLLECTION_GROUP,
+  DEFAULT_FIELD_PATH,
+  FIELD_UNREADABLE_REASONS,
+  liveSingleFieldIndexes,
+  OVERRIDE_INCOMPARABLE_REASONS,
+  reconcileOverrides,
+  type ExtraOverride,
+  type FieldUnreadableReason,
+  type IncomparableOverride,
+  type LiveField,
+  type LiveSingleFieldIndex,
+  type MatchedOverride,
+  type OverrideIncomparableReason,
+  type OverrideReconciliation,
+  type UnreadableField,
+} from './overrides.js';
+export {
   INCOMPARABLE_REASONS,
   isVouched,
   reconcile,

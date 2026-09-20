@@ -196,7 +196,7 @@ const RESOURCE_NAME =
  * carries the same consequence — and incidentally covers `multikey` and `searchIndexOptions`, which
  * the key cannot express either and which the API accepts only under that scope.
  */
-const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
+export const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
 
 /**
  * The `density` values this module is willing to compare under.
@@ -238,13 +238,13 @@ const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
  * match against a `SPARSE_ALL` live index on a key that cannot see the difference. See
  * `test/fixtures/live-indexes.json`.
  */
-const COMPARABLE_DENSITIES: ReadonlySet<string> = new Set([
+export const COMPARABLE_DENSITIES: ReadonlySet<string> = new Set([
   'DENSITY_UNSPECIFIED',
   'SPARSE_ALL',
 ]);
 
 /** Absent is always comparable: proto3 JSON omits a field holding its default. */
-function comparableUnder(value: unknown, comparable: ReadonlySet<string>): boolean {
+export function comparableUnder(value: unknown, comparable: ReadonlySet<string>): boolean {
   if (value === undefined || value === null) return true;
   return typeof value === 'string' && comparable.has(value);
 }
@@ -259,7 +259,7 @@ function comparableUnder(value: unknown, comparable: ReadonlySet<string>): boole
  * would key alike and could match each other, so a declared 128-dimension vector index would be
  * vouched for by a live 4096-dimension one. They are refused rather than keyed on.
  */
-const LOSSY_DIRECTIONS: ReadonlySet<string> = new Set(['UNKNOWN', 'VECTOR(?)']);
+export const LOSSY_DIRECTIONS: ReadonlySet<string> = new Set(['UNKNOWN', 'VECTOR(?)']);
 
 /**
  * The identity two sides are matched on.
@@ -416,7 +416,7 @@ function incomparableReason(
  * than returning anything, which is what the `catch` is for. A non-JSON value is therefore not one
  * case but two, landing on opposite branches.
  */
-function describeField(field: unknown): string {
+export function describeField(field: unknown): string {
   try {
     // `field` directly, not `field ?? null`. The coalesce was a reflex and it cost a distinction:
     // it turned an `undefined` element into the string `"null"`, so the two nullish shapes the loop
@@ -582,7 +582,10 @@ export function reconcile(
  *
  * The counterpart of `isReportable` for the presence half. `check` must decline to report on
  * anything else — including `indeterminate`, which is the case where declining is the entire point.
+ *
+ * Typed on the verdict alone so that `overrides.ts`'s reconciliation, which reaches the same three
+ * verdicts by the same rules, is answered by the same function.
  */
-export function isVouched(reconciliation: Reconciliation): boolean {
+export function isVouched(reconciliation: { readonly verdict: ReconciliationVerdict }): boolean {
   return reconciliation.verdict === 'identical';
 }
