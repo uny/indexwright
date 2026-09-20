@@ -444,10 +444,13 @@ test('the nested indexes are flattened for the readiness gate with stable, disti
   assert.deepEqual(liveSingleFieldIndexes([live('posts', 'body', [])]), [
     { name: `${named('posts', 'body')}#exempt`, state: 'READY' },
   ]);
-  // A reverting field is reported as building, whatever its indexes say, so the gate waits.
+  // A reverting field is reported as building and nothing else, whatever its indexes say — the
+  // nested entries are the transition, and an empty set mid-revert is not an exemption either.
   assert.deepEqual(liveSingleFieldIndexes([live('posts', 'a', [asc('a')], { reverting: true })]), [
     { name: `${named('posts', 'a')}#reverting`, state: 'CREATING' },
-    { name: `${named('posts', 'a')}#COLLECTION:ASCENDING`, state: 'READY' },
+  ]);
+  assert.deepEqual(liveSingleFieldIndexes([live('posts', 'a', [], { reverting: true })]), [
+    { name: `${named('posts', 'a')}#reverting`, state: 'CREATING' },
   ]);
   // A field with no `indexConfig` names nothing: there is nothing there to wait for or to key on.
   assert.deepEqual(liveSingleFieldIndexes([{ name: named('posts', 'c') }]), []);

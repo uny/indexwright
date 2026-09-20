@@ -531,7 +531,9 @@ export function liveSingleFieldIndexes(fields: readonly LiveField[]): LiveIndex[
     const config = field.indexConfig;
     if (config === undefined || config === null) continue;
     if (config.reverting === true) {
+      // The one entry, and not the nested ones beside it: they are the transition, not a set.
       flattened.push({ name: `${String(field.name)}#reverting`, state: 'CREATING' });
+      continue;
     }
     const indexes = config.indexes;
     if (!Array.isArray(indexes) || indexes.length === 0) {
