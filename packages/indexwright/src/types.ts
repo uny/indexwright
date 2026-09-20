@@ -115,8 +115,8 @@ export interface AnalysedOverride {
   readonly collectionGroup: string;
   readonly fieldPath: string;
   /**
-   * The declared set, in canonical order: sorted by query scope, then direction, and with an exact
-   * repeat collapsed. Empty for an exemption.
+   * The declared set, in canonical order: sorted by query scope, then direction, with entries alike
+   * in both collapsed to one (`source.indexes` keeps them all). Empty for an exemption.
    */
   readonly indexes: readonly CanonicalSingleFieldIndex[];
   readonly key: string;
