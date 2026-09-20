@@ -759,6 +759,37 @@ test('a declared override this version cannot compare declines the run, and the 
   assert.equal(h.replayed.length, 0);
 });
 
+test('an exemption arriving between two polls restarts the settling period', async () => {
+  // An exemption has no nested index and so no name of its own in the gate's fingerprint unless
+  // one is made for it; without one, a set that gained an exemption between two polls reads as a
+  // set that held still, and replay starts against a configuration that just moved.
+  const bodyExempt = {
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/fields/body',
+    indexConfig: { indexes: [], usesAncestorConfig: false },
+  };
+  const declared = { ...DECLARED, fieldOverrides: [{ collectionGroup: 'orders', fieldPath: 'body', indexes: [] }] };
+  const h = harness({ declared, fieldListings: [NO_OVERRIDES, [DEFAULT_FIELD, bodyExempt], [DEFAULT_FIELD, bodyExempt]] });
+  assert.equal(await h.run(), 0);
+  assert.deepEqual(h.slept, [DEFAULT_SETTLE_MS, DEFAULT_SETTLE_MS]);
+});
+
+test('a field still reverting is waited on before replay, and withdraws the report after it', async () => {
+  const reverting = { ...tagsOverride(), indexConfig: { ...tagsOverride().indexConfig, reverting: true } };
+  const waited = harness({
+    declared: DECLARED_WITH_OVERRIDE,
+    fieldListings: [[DEFAULT_FIELD, reverting], [DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()]],
+  });
+  assert.equal(await waited.run(), 0);
+  assert.match(waited.said(), /waiting: 1 index still building: ".*\/fields\/tags#reverting"/);
+
+  const moved = harness({
+    declared: DECLARED_WITH_OVERRIDE,
+    fieldListings: [[DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, reverting]],
+  });
+  assert.equal(await moved.run(), 2);
+  assert.match(moved.said(), /field could not be read \(reverting\)/);
+});
+
 test('a default field that is not the default declines the run, because the override model assumes it', async () => {
   const changed = {
     ...DEFAULT_FIELD,

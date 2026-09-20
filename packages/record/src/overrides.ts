@@ -98,10 +98,10 @@ export const FIELD_UNREADABLE_REASONS = [
   /** The resource name did not have the shape the collection group and field path are read out of. */
   'name-unparseable',
   /**
-   * The field inherits its configuration (`usesAncestorConfig`) and did not say what it inherited.
-   * The set is then whatever the ancestor holds, which this entry does not tell. Also a field with
-   * no `indexConfig` at all, or an `indexes` that is not an array: which of owning and inheriting
-   * it is cannot then be told either.
+   * The field inherits its configuration (`usesAncestorConfig`) and did not say what it inherited,
+   * and its `ancestorField` is not an exemption in the same listing. The set is then whatever the
+   * ancestor holds, which this entry does not tell. Also a field with no `indexConfig` at all, or
+   * an `indexes` that is not an array: which of owning and inheriting it is cannot then be told.
    */
   'indexes-missing',
   'query-scope-missing',
@@ -116,6 +116,11 @@ export const FIELD_UNREADABLE_REASONS = [
   'density-unrecognised',
   /** `__default__/*` holds a set other than the three indexes every override is a departure from. */
   'default-changed',
+  /**
+   * `indexConfig.reverting`: the field is on its way back to its ancestor's configuration, and
+   * whatever `indexes` it lists meanwhile is the transition, not a set.
+   */
+  'reverting',
 ] as const;
 
 export type FieldUnreadableReason = (typeof FIELD_UNREADABLE_REASONS)[number];
@@ -246,12 +251,21 @@ const DEFAULT_HELD = Symbol('default-held');
  * written out — which is how the CLI exports such a field — is matched rather than reported
  * `missing`. An inheriting field is expected to arrive with the inherited set materialised in
  * `indexConfig.indexes` — that is what the CLI's source reads from it — and is then read like any
- * other. One that does not is refused: an absent set on a field that owns its configuration is an
- * exemption, and on a field that inherits it is an unknown. So is a field with no `indexConfig` at
- * all, since which of the two it is cannot then be told, and reading it as an exemption would put
- * it in `extra` — a confident divergence about an entry nobody read. An inheriting field's
- * materialised entries may arrive naming the ancestor's `*` rather than the field; that spelling is
- * accepted there, and nowhere else.
+ * other. One that does not is refused — with one exception: an absent set on a field that owns its
+ * configuration is an exemption, and on a field that inherits it is an unknown *unless* the
+ * `ancestorField` it names is itself an exemption in the same listing, in which case the inherited
+ * set really is empty. That is the collection-level exemption Firestore documents (`<group>/*`
+ * with no indexes) seen from a TTL field beneath it, and the CLI exports such a field as
+ * `ttl: true, indexes: []`. A field with no `indexConfig` at all is refused too, since which of the
+ * two it is cannot then be told, and reading it as an exemption would put it in `extra` — a
+ * confident divergence about an entry nobody read. An inheriting field's materialised entries may
+ * arrive naming the ancestor's `*` rather than the field; that spelling is accepted there, and
+ * nowhere else.
+ *
+ * A field with `indexConfig.reverting` set is refused whatever else it carries: the API says it is
+ * mid-transition back to its ancestor's configuration, so its `indexes` is not a set that will
+ * hold. `liveSingleFieldIndexes` makes the readiness gate wait it out; this refusal is for the
+ * confirmation after replay, which has no gate and must not vouch for a set that was moving.
  *
  * Everything in the paragraph above about an inheriting field is read from the Firebase CLI's
  * source and not yet from a listing: `test/fixtures/live-fields.json` carries no TTL field, because
@@ -264,7 +278,10 @@ const DEFAULT_HELD = Symbol('default-held');
  * observed listing carries it (`capture-live-fields.mjs` stops if one does not), but a listing
  * without it says nothing false about the overrides, so its absence is not a refusal.
  */
-function readLiveField(live: LiveField): ReadableLiveField | UnreadableField | typeof DEFAULT_HELD {
+function readLiveField(
+  live: LiveField,
+  listing: ReadonlyMap<string, LiveField>,
+): ReadableLiveField | UnreadableField | typeof DEFAULT_HELD {
   const name = String(live.name);
   const matched = FIELD_NAME.exec(name);
   const collectionGroup = matched?.[1];
@@ -276,18 +293,24 @@ function readLiveField(live: LiveField): ReadableLiveField | UnreadableField | t
   if (config === undefined || config === null) {
     return { name, reason: 'indexes-missing', detail: String(config) };
   }
+  if (config.reverting === true) {
+    return { name, reason: 'reverting', detail: `ancestorField ${String(config.ancestorField)}` };
+  }
   const inherits = config.usesAncestorConfig === true;
   let indexes: readonly LiveSingleFieldIndex[];
   if (config.indexes === undefined || config.indexes === null) {
-    if (inherits) return { name, reason: 'indexes-missing', detail: String(config.indexes) };
     indexes = [];
   } else if (!Array.isArray(config.indexes)) {
     return { name, reason: 'indexes-missing', detail: String(config.indexes) };
   } else {
     indexes = config.indexes;
   }
-  if (inherits && indexes.length === 0) {
-    return { name, reason: 'indexes-missing', detail: '[]' };
+  if (inherits && indexes.length === 0 && !inheritsAnExemption(config.ancestorField, listing)) {
+    return {
+      name,
+      reason: 'indexes-missing',
+      detail: `${String(config.indexes)} (ancestorField ${String(config.ancestorField)})`,
+    };
   }
   const declared: SingleFieldIndex[] = [];
   for (const index of indexes) {
@@ -342,6 +365,24 @@ function readLiveField(live: LiveField): ReadableLiveField | UnreadableField | t
 }
 
 /**
+ * Whether the named ancestor is, in this listing, an exemption: present, owning its configuration,
+ * not reverting, and listing no indexes. Only then is an inheriting field's empty set known to be
+ * empty rather than unreported. An ancestor that is absent — the filter admits every owning field,
+ * so an exemption would be there — or is anything else leaves the set unknown.
+ */
+function inheritsAnExemption(
+  ancestorField: string | null | undefined,
+  listing: ReadonlyMap<string, LiveField>,
+): boolean {
+  if (typeof ancestorField !== 'string') return false;
+  const ancestor = listing.get(ancestorField)?.indexConfig;
+  if (ancestor === undefined || ancestor === null) return false;
+  if (ancestor.usesAncestorConfig === true || ancestor.reverting === true) return false;
+  const indexes = ancestor.indexes;
+  return indexes === undefined || indexes === null || (Array.isArray(indexes) && indexes.length === 0);
+}
+
+/**
  * Why a declaration could not be reconciled, or `null` when it can be.
  *
  * The declared half of the guard `readLiveField` applies to the live side, for the same reason
@@ -389,8 +430,15 @@ export function reconcileOverrides(
 ): OverrideReconciliation {
   const unreadable: UnreadableField[] = [];
   const byIdentity = new Map<string, ReadableLiveField[]>();
+  // By resource name, for an inheriting field to find the ancestor it names. The first entry wins
+  // a repeated name; a listing that repeats one is anomalous either way, and is reported as such.
+  const byName = new Map<string, LiveField>();
   for (const entry of live) {
-    const read = readLiveField(entry);
+    const name = String(entry.name);
+    if (!byName.has(name)) byName.set(name, entry);
+  }
+  for (const entry of live) {
+    const read = readLiveField(entry, byName);
     if (read === DEFAULT_HELD) continue;
     if (isUnreadableField(read)) {
       unreadable.push(read);
@@ -468,12 +516,30 @@ export function reconcileOverrides(
  * polls, distinct within a field, and legible in a `waiting:` line. The direction is rendered even
  * when it could not be read — `UNKNOWN` — because this function's job is to name what is building,
  * and refusing what cannot be named is `reconcileOverrides`'s.
+ *
+ * Two entries stand for what a nested index cannot. A field listing no indexes is an exemption,
+ * and an exemption has nothing to build — but it is part of the set, and the gate's fingerprint is
+ * made of names, so one applied between two polls would otherwise leave the fingerprint unchanged
+ * and the settling period unrestarted; `#exempt` gives it a name. A field whose `indexConfig` is
+ * `reverting` is mid-transition whatever its `indexes` say, and `#reverting` is reported
+ * `CREATING` so the gate waits for it as it waits for a building index; when the transition ends
+ * the field leaves the listing (or stops reverting), the fingerprint moves, and settling restarts.
  */
 export function liveSingleFieldIndexes(fields: readonly LiveField[]): LiveIndex[] {
   const flattened: LiveIndex[] = [];
   for (const field of fields) {
-    const indexes = field.indexConfig?.indexes;
-    if (!Array.isArray(indexes)) continue;
+    const config = field.indexConfig;
+    if (config === undefined || config === null) continue;
+    if (config.reverting === true) {
+      flattened.push({ name: `${String(field.name)}#reverting`, state: 'CREATING' });
+    }
+    const indexes = config.indexes;
+    if (!Array.isArray(indexes) || indexes.length === 0) {
+      if (indexes === undefined || indexes === null || Array.isArray(indexes)) {
+        flattened.push({ name: `${String(field.name)}#exempt`, state: 'READY' });
+      }
+      continue;
+    }
     for (const index of indexes) {
       const config = index?.fields?.[0];
       const direction = config === null || config === undefined ? 'UNKNOWN' : fieldDirection(config);

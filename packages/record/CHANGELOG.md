@@ -21,7 +21,12 @@ again, by its own `corpusVersion`.
   the CLI wrote for a TTL-only field reconciles rather than reading as missing); the nested
   single-field indexes go through the gate, so an override still building is waited on; and both
   halves are reconciled in both directions before replay and again after it, on the canonical
-  override key `indexwright` 0.3.0 gives each. `__default__/*` is recognised by name and checked
+  override key `indexwright` 0.3.0 gives each. An exemption is named in the gate's fingerprint too
+  (`<field>#exempt`), so one applied between two polls restarts the settling period as a new index
+  would; a field whose `indexConfig` is `reverting` is waited on before replay and refused after it;
+  and a field inheriting an empty set from a collection-level exemption (`<group>/*` with no
+  indexes, which the CLI exports beneath a TTL field as `ttl: true, indexes: []`) is read as the
+  exemption it inherits, when — and only when — that ancestor is in the same listing saying so. `__default__/*` is recognised by name and checked
   against the three documented indexes rather than compared; a database whose default differs is
   declined on, since the override model assumes it. `ttl` is compared on neither side. New on the JS
   API: `listLiveFields`, `FIELDS_FILTER`, `reconcileOverrides`, `liveSingleFieldIndexes`,

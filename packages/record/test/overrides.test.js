@@ -134,6 +134,47 @@ test('an inheriting field may name the ancestor wildcard as its path; an owning 
   assert.equal(reconcileOverrides(candidate, [owning]).unreadable[0].reason, 'field-unreadable');
 });
 
+test('a field inheriting from a collection-level exemption is an exemption, and only then', () => {
+  // `posts/*` with no indexes is the collection-level exemption Firestore documents; a TTL field
+  // under it inherits an empty set, and the CLI exports it as `ttl: true, indexes: []`. The empty
+  // set is known to be empty because the ancestor is in the same listing, saying so.
+  const candidate = parsed(
+    { collectionGroup: 'posts', fieldPath: '*', indexes: [] },
+    { collectionGroup: 'posts', fieldPath: 'expiresAt', ttl: true, indexes: [] },
+  );
+  const wildcard = live('posts', '*', []);
+  const inheriting = live('posts', 'expiresAt', [], {
+    usesAncestorConfig: true,
+    ancestorField: named('posts', '*'),
+  });
+  assert.equal(reconcileOverrides(candidate, [theDefault(), wildcard, inheriting]).verdict, 'identical');
+
+  // Without the ancestor in the listing, or with an ancestor that is not an exemption, the empty
+  // set is unreported rather than empty.
+  const alone = reconcileOverrides(candidate, [theDefault(), inheriting]);
+  assert.equal(alone.unreadable[0].reason, 'indexes-missing');
+  assert.match(alone.unreadable[0].detail, /ancestorField .*posts\/fields\/\*/);
+  const fromTheDefault = live('posts', 'expiresAt', [], {
+    usesAncestorConfig: true,
+    ancestorField: named(DEFAULT_COLLECTION_GROUP, DEFAULT_FIELD_PATH),
+  });
+  assert.equal(reconcileOverrides(candidate, [theDefault(), fromTheDefault]).unreadable[0].reason, 'indexes-missing');
+  const revertingAncestor = live('posts', '*', [], { reverting: true });
+  const result = reconcileOverrides(candidate, [theDefault(), revertingAncestor, inheriting]);
+  assert.deepEqual(result.unreadable.map((entry) => entry.reason), ['reverting', 'indexes-missing']);
+});
+
+test('a reverting field is refused, whatever its indexes say', () => {
+  // The API says `reverting` is a transition back to the ancestor's configuration in progress.
+  // The gate waits it out before replay; after replay there is no gate, and a confirmation that
+  // matched a set mid-transition would vouch for one that did not hold.
+  const candidate = parsed({ collectionGroup: 'posts', fieldPath: 'a', indexes: [{ order: 'ASCENDING' }] });
+  const result = reconcileOverrides(candidate, [theDefault(), live('posts', 'a', [asc('a')], { reverting: true })]);
+  assert.equal(result.verdict, 'indeterminate');
+  assert.equal(result.unreadable[0].reason, 'reverting');
+  assert.equal(result.missing.length, 1);
+});
+
 test('a TTL-only field with the inherited set materialised matches the declaration the CLI exports for it', () => {
   // `firebase firestore:indexes` writes such a field out as `ttl: true` with the three defaults
   // spelled out. That declaration has to match, or every file the CLI generates reads as diverged.
@@ -361,6 +402,7 @@ test('the unreadable and incomparable reasons are the ones the module can actual
     live('posts', 'a', [asc('a', { apiScope: 'DATASTORE_MODE_API' })]),
     live('posts', 'a', [asc('a', { density: 'DENSE' })]),
     live(DEFAULT_COLLECTION_GROUP, DEFAULT_FIELD_PATH, []),
+    live('posts', 'a', [], { reverting: true }),
   ];
   for (const entry of cases) {
     for (const found of reconcileOverrides(declare(), [entry]).unreadable) produced.add(found.reason);
@@ -395,7 +437,20 @@ test('the nested indexes are flattened for the readiness gate with stable, disti
     { name: `${named('__default__', '*')}#COLLECTION:CONTAINS`, state: 'READY' },
     { name: `${named('posts', 'tags')}#COLLECTION_GROUP:CONTAINS`, state: 'CREATING' },
     { name: `${named('posts', 'tags')}#COLLECTION:ASCENDING`, state: 'READY' },
+    // An exemption has nothing to build and is named all the same, so its arrival moves the
+    // fingerprint; `indexes: []` and no `indexes` at all are the same exemption.
+    { name: `${named('posts', 'body')}#exempt`, state: 'READY' },
   ]);
+  assert.deepEqual(liveSingleFieldIndexes([live('posts', 'body', [])]), [
+    { name: `${named('posts', 'body')}#exempt`, state: 'READY' },
+  ]);
+  // A reverting field is reported as building, whatever its indexes say, so the gate waits.
+  assert.deepEqual(liveSingleFieldIndexes([live('posts', 'a', [asc('a')], { reverting: true })]), [
+    { name: `${named('posts', 'a')}#reverting`, state: 'CREATING' },
+    { name: `${named('posts', 'a')}#COLLECTION:ASCENDING`, state: 'READY' },
+  ]);
+  // A field with no `indexConfig` names nothing: there is nothing there to wait for or to key on.
+  assert.deepEqual(liveSingleFieldIndexes([{ name: named('posts', 'c') }]), []);
   // Named even when unreadable: naming what is building is this function's job, refusing is not.
   const odd = liveSingleFieldIndexes([live('posts', 'a', [{ fields: [{ fieldPath: 'a' }], state: 'READY' }])]);
   assert.equal(odd[0].name, `${named('posts', 'a')}#undefined:UNKNOWN`);
@@ -461,11 +516,13 @@ test('a real listing is readable, whichever tool rendered it, and every nested i
   for (const rendering of ['liveByAdminClient', 'liveByGcloud']) {
     assert.deepEqual(reconcileOverrides(declare(), FIXTURE[rendering]).unreadable, []);
     const gated = liveSingleFieldIndexes(FIXTURE[rendering]);
-    // Three on the default, two on `tags`, none on the exemption; all READY; nameless in the
-    // listing (`nestedIndexesAreNameless`) and named here.
-    assert.equal(gated.length, 5);
+    // Three on the default, two on `tags`, and the exemption's own `#exempt` entry — whether the
+    // rendering says `indexes: []` (admin client) or omits the key (gcloud); all READY; nameless in
+    // the listing (`nestedIndexesAreNameless`) and named here.
+    assert.equal(gated.length, 6);
     assert.ok(gated.every((index) => index.state === 'READY'));
-    assert.equal(new Set(gated.map((index) => index.name)).size, 5);
+    assert.equal(new Set(gated.map((index) => index.name)).size, 6);
+    assert.equal(gated.filter((index) => index.name.endsWith('/fields/body#exempt')).length, 1);
   }
 });
 
