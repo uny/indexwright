@@ -170,6 +170,33 @@ test('the declared set is canonicalised as a set: order-independent, and a repea
   );
 });
 
+test('the collapse reads scope and direction only, and the source keeps what it dropped', () => {
+  const [override] = analyseOverrides({
+    indexes: [],
+    fieldOverrides: [
+      {
+        collectionGroup: 'a',
+        fieldPath: 'x',
+        indexes: [
+          { queryScope: 'COLLECTION', order: 'ASCENDING', density: 'DENSE' },
+          { queryScope: 'COLLECTION', order: 'ASCENDING' },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(override.indexes, [{ queryScope: 'COLLECTION', direction: 'ASCENDING' }]);
+  assert.equal(override.source.indexes.length, 2);
+});
+
+test('the collapse identity is the pair, not its rendering', () => {
+  // Both render as `A:B:C`; they are two entries and the key keeps both.
+  const canonical = canonicalSingleFieldIndexes([
+    { queryScope: 'A:B', order: 'C' },
+    { queryScope: 'A', order: 'B:C' },
+  ]);
+  assert.equal(canonical.length, 2);
+});
+
 test('an exemption keys with an empty set, and a vector single-field index carries its dimension', () => {
   const [exemption, vector] = analyseOverrides({
     indexes: [],
@@ -192,12 +219,19 @@ test('ttl and unknown keys are carried on the source and are not part of the key
   const [withTtl, without] = analyseOverrides({
     indexes: [],
     fieldOverrides: [
-      { collectionGroup: 'a', fieldPath: 'x', ttl: true, indexes: [{ queryScope: 'COLLECTION', order: 'ASCENDING' }] },
+      {
+        collectionGroup: 'a',
+        fieldPath: 'x',
+        ttl: true,
+        extra: 1,
+        indexes: [{ queryScope: 'COLLECTION', order: 'ASCENDING', density: 'DENSE' }],
+      },
       { collectionGroup: 'a', fieldPath: 'x', indexes: [{ queryScope: 'COLLECTION', order: 'ASCENDING' }] },
     ],
   });
   assert.equal(withTtl.key, without.key);
   assert.equal(withTtl.source.ttl, true);
+  assert.equal(withTtl.source.extra, 1);
 });
 
 test('an override as the Firebase CLI exports one — every default materialised — parses and keys', () => {
