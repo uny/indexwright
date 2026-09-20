@@ -223,8 +223,9 @@ declare is a collection-group query served by nothing the file says, and an exem
 declares that the target lacks is a `FAILED_PRECONDITION` waiting to be misread. The nested
 single-field indexes go through the readiness gate beside the composites, so an override applied a
 moment before the run is waited on too. `ttl` is carried and not compared. The database default,
-`__default__/*`, is never declared and is not compared either; `check` checks that it holds the
-three documented indexes, and declines if it does not.
+`__default__/*`, is never declared and is not compared either; when it is listed — and every
+observed listing carries it — `check` checks that it holds the three documented indexes, and
+declines if it does not.
 
 **The target is never inferred.** `GOOGLE_CLOUD_PROJECT`, a `gcloud config` default, and the project
 inside application default credentials are all whatever the person running this last worked against

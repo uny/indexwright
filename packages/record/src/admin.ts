@@ -9,10 +9,10 @@
  *
  * It performs two calls — `projects.databases.collectionGroups.indexes.list` and
  * `projects.databases.collectionGroups.fields.list`, the composite and the single-field halves of
- * the index set (issue #53) — and hands back what came off the wire. It classifies nothing: an entry with a state this version cannot name, an
- * `apiScope` it does not compare under, a field it cannot read are all *conveyed*, because the
- * modules that own those questions answer them by declining, and a decline they never see is a
- * decline that does not happen.
+ * the index set (issue #53) — and hands back what came off the wire. It classifies nothing: an
+ * entry with a state this version cannot name, an `apiScope` it does not compare under, a field it
+ * cannot read are all *conveyed*, because the modules that own those questions answer them by
+ * declining, and a decline they never see is a decline that does not happen.
  *
  * The one thing it does own is the difference between "listed, and empty" and "could not list".
  * `ReadinessGate.observe` reads `[]` as a database with nothing left to build, and SPEC §3 requires

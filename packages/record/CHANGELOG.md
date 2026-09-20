@@ -24,15 +24,18 @@ again, by its own `corpusVersion`.
   override key `indexwright` 0.3.0 gives each. `__default__/*` is recognised by name and checked
   against the three documented indexes rather than compared; a database whose default differs is
   declined on, since the override model assumes it. `ttl` is compared on neither side. New on the JS
-  API: `listLiveFields`, `FIELDS_FILTER`, `reconcileOverrides`, `liveSingleFieldIndexes`, and the
-  `LiveField` / `OverrideReconciliation` family beside `Reconciliation`. `isVouched` now accepts
-  either reconciliation.
+  API: `listLiveFields`, `FIELDS_FILTER`, `reconcileOverrides`, `liveSingleFieldIndexes`,
+  `DEFAULT_COLLECTION_GROUP`, `DEFAULT_FIELD_PATH`, `FIELD_UNREADABLE_REASONS`,
+  `OVERRIDE_INCOMPARABLE_REASONS`, and the `LiveField` / `OverrideReconciliation` family beside
+  `Reconciliation`. `isVouched` now accepts either reconciliation.
 
 ### Changed
 
 - **`IndexLister` gains `listFieldsAsync`**, for the listing above. A fake of the type must now
   yield fields as well as indexes — `(request: { parent; filter }, options?) => AsyncIterable<object>`
-  — or `check` throws on its first poll. The real client satisfies it unchanged. The dependency on
+  — or `check` declines on its first poll (`readiness could not be established`, exit 2), since the
+  `TypeError` of a missing method is wrapped like any other listing failure. The real client
+  satisfies it unchanged. The dependency on
   `indexwright` moves to `>=0.3.0 <1` with the release, which is where `analyseOverrides` and the
   override key live; until then the range still names 0.2.0, which lacks them.
 

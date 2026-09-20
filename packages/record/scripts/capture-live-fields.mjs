@@ -180,7 +180,11 @@ try {
     } else if (result.stderr.includes('billing')) {
       // The status only; gcloud appends the account it authenticated as, which is nobody's business
       // in a fixture, and names the project outside a resource name.
-      const status = result.stderr.trim().split(' This command is authenticated')[0];
+      const marker = ' This command is authenticated';
+      if (!result.stderr.includes(marker)) {
+        fail(`gcloud's billing refusal no longer carries "${marker.trim()}"; the account cannot be stripped from it, so nothing is written`);
+      }
+      const status = result.stderr.trim().split(marker)[0];
       refusals.ttl = { command: shown(issued), stderr: status.replace(`Project ${project} `, `Project ${PLACEHOLDER} `) };
       process.stderr.write('TTL refused (billing); the fixture will not carry a TTL-only field\n');
     } else {

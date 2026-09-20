@@ -3,8 +3,9 @@
  *
  * Every question this verb answers is answered somewhere else. `readiness.ts` decides whether the
  * index set may be reported on, `reconcile.ts` and `overrides.ts` decide whether it is the
- * *candidate* set — the composite and the single-field halves of it — `synthesise.ts` decides what a corpus entry replays as, `replay.ts` asks Firestore — the oracle —
- * whether the set covers it, and `baseline.ts` says which gaps this project has already accepted.
+ * *candidate* set — the composite and the single-field halves of it — `synthesise.ts` decides what
+ * a corpus entry replays as, `replay.ts` asks Firestore — the oracle — whether the set covers it,
+ * and `baseline.ts` says which gaps this project has already accepted.
  * What is left here is the order they are asked in, the two client lifetimes, and the report.
  *
  * The order is a gate rather than a sequence, and the gating is the point. A report that goes out
