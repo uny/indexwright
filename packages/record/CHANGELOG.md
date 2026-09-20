@@ -32,10 +32,10 @@ again, by its own `corpusVersion`.
 - **`test/fixtures/live-indexes.json` can be re-observed** (issue #29). The fixture recorded the
   command that created its index and nothing about how the three renderings were read back, so the
   first refresh would have turned a listing a real database returned into a hand-edited file.
-  `scripts/capture-live-indexes.mjs` now does the reading: it lists through the admin client over
+  `scripts/capture-live-indexes.mjs` now does the reading: it tries the three creations a standard
+  native database refuses and records each refusal verbatim, lists through the admin client over
   gRPC and over `fallback: true` and stops if the two disagree, lists through `gcloud` and the
-  Firebase CLI, tries the three creations a standard native database refuses and records each
-  refusal verbatim, and writes the renderings and a `source` naming every command and version. The
+  Firebase CLI, and writes the renderings and a `source` naming every command and version. The
   prose `observations` stay a maintainer's, as the expected shapes do for `capture-fixtures.mjs`.
   Run by hand against the disposable project, never in CI. The fixture is the 2026-09-20 capture:
   it now carries the `searchIndexOptions: null` the observations already described, and `source`
