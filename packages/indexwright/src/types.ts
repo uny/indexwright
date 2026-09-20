@@ -20,7 +20,10 @@ export interface IndexField {
 /** One entry of the document's `indexes` array. */
 export interface CompositeIndex {
   collectionGroup: string;
-  /** `COLLECTION` or `COLLECTION_GROUP` in practice; not validated against an enumeration. */
+  /**
+   * `COLLECTION` or `COLLECTION_GROUP` in practice; not validated against an enumeration. `parse.ts`
+   * fills in `COLLECTION` when the declaration omits it, as the Firebase CLI does.
+   */
   queryScope: string;
   fields: IndexField[];
   [key: string]: unknown;
@@ -34,7 +37,10 @@ export interface CompositeIndex {
  * one field, so the scope is the only thing that varies from entry to entry besides the direction.
  */
 export interface SingleFieldIndex {
-  /** `COLLECTION` or `COLLECTION_GROUP` in practice; not validated against an enumeration. */
+  /**
+   * `COLLECTION` or `COLLECTION_GROUP` in practice; not validated against an enumeration. `parse.ts`
+   * fills in `COLLECTION` when the declaration omits it, as the Firebase CLI does.
+   */
   queryScope: string;
   order?: string;
   arrayConfig?: string;

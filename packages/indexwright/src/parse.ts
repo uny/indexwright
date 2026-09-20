@@ -118,7 +118,14 @@ function validateSingleFieldIndex(raw: unknown, path: string): SingleFieldIndex 
   if (!isObject(raw)) {
     throw new MalformedInputError(`${path}: must be an object`);
   }
-  const queryScope = requireString(raw['queryScope'], `${path}: "queryScope"`);
+  // Absent, the scope is `COLLECTION`: the Firebase CLI's validator checks `queryScope` only when
+  // it is present and its own exports always write it, so an omission is a hand-written file, and
+  // the CLI supplies this default for a composite index in the same position. A present value is
+  // still held to a string.
+  const queryScope =
+    raw['queryScope'] === undefined
+      ? 'COLLECTION'
+      : requireString(raw['queryScope'], `${path}: "queryScope"`);
   validateConfig(raw, path);
   return { ...raw, queryScope } as SingleFieldIndex;
 }

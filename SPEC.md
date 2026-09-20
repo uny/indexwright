@@ -260,8 +260,9 @@ A file is **malformed** when it is not valid JSON, when the top level is not an 
 non-empty `fields`, or when a field lacks `fieldPath` or declares none — or more than one — of
 `order`, `arrayConfig`, and `vectorConfig`. When `fieldOverrides` is present it is held to the same
 depth: it must be an array, each entry needs `collectionGroup`, `fieldPath`, and an `indexes` array
-(which may be empty), each of its indexes needs `queryScope` and exactly one of the three configs,
-and `ttl`, when present, must be a boolean.
+(which may be empty), each of its indexes needs exactly one of the three configs, and `ttl`, when
+present, must be a boolean. A single-field index that omits `queryScope` is read as `COLLECTION`:
+the Firebase CLI accepts and deploys such a declaration, and its own exports always write the scope.
 
 Nothing beyond that is refused. The *values* of `queryScope` and `order` are not checked against an
 enumeration, unknown keys anywhere are ignored, and a declaration that repeats a `fieldPath` within

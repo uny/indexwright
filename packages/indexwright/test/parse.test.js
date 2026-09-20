@@ -106,10 +106,17 @@ test('an override declaring no indexes is an exemption, not an error', () => {
   assert.deepEqual(document.fieldOverrides[0].indexes, []);
 });
 
-test('a single-field index needs a queryScope and exactly one config, like a composite field', () => {
+test('a single-field index needs exactly one config, like a composite field, and its queryScope defaults', () => {
   const withIndexes = (indexes) =>
     `{ "indexes": [], "fieldOverrides": [{ "collectionGroup": "a", "fieldPath": "x", "indexes": ${indexes} }] }`;
-  rejects(withIndexes('[{ "order": "ASCENDING" }]'), /^fieldOverrides\[0\]\.indexes\[0\]: "queryScope" is missing/);
+  // An absent queryScope is COLLECTION, which is what the Firebase CLI deploys such a file as; a
+  // present one must still be a string.
+  const defaulted = parseDocument(withIndexes('[{ "order": "ASCENDING" }]'));
+  assert.equal(defaulted.fieldOverrides[0].indexes[0].queryScope, 'COLLECTION');
+  rejects(
+    withIndexes('[{ "queryScope": 1, "order": "ASCENDING" }]'),
+    /^fieldOverrides\[0\]\.indexes\[0\]: "queryScope" must be a string/,
+  );
   rejects(
     withIndexes('[{ "queryScope": "COLLECTION" }]'),
     /^fieldOverrides\[0\]\.indexes\[0\]: needs one of "order", "arrayConfig", or "vectorConfig"/,

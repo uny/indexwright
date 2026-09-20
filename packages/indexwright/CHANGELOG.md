@@ -12,8 +12,8 @@ output shape is the stable contract.
 - **`fieldOverrides` is validated and has a canonical form** (issues #53 and #54). The file's other
   half was typed `unknown[]` and read by nothing. It is now held to the same depth as `indexes` —
   an entry needs `collectionGroup`, `fieldPath`, and an `indexes` array (empty for an exemption),
-  each index a `queryScope` and exactly one of `order`, `arrayConfig`, and `vectorConfig`, and `ttl`
-  a boolean when present — and `analyseOverrides` reduces each to an `AnalysedOverride` keyed as
+  each index exactly one of `order`, `arrayConfig`, and `vectorConfig` (and a `queryScope`, read as
+  `COLLECTION` when omitted, as the Firebase CLI does), and `ttl` a boolean when present — and `analyseOverrides` reduces each to an `AnalysedOverride` keyed as
   `<collectionGroup>::<fieldPath>::<queryScope>:<direction>|…`, sorted, with entries alike in scope and
   direction collapsed, as the set it is. No rule reads it yet; the form exists so that `@indexwright/record` can reconcile a
   declaration against a live field listing on the same key the linter will report on, rather than
