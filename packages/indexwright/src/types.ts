@@ -20,10 +20,7 @@ export interface IndexField {
 /** One entry of the document's `indexes` array. */
 export interface CompositeIndex {
   collectionGroup: string;
-  /**
-   * `COLLECTION` or `COLLECTION_GROUP` in practice; not validated against an enumeration. `parse.ts`
-   * fills in `COLLECTION` when the declaration omits it, as the Firebase CLI does.
-   */
+  /** `COLLECTION` or `COLLECTION_GROUP` in practice; not validated against an enumeration. */
   queryScope: string;
   fields: IndexField[];
   [key: string]: unknown;

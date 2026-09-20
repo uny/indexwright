@@ -234,8 +234,8 @@ Any file in the `firestore.indexes.json` shape:
       "collectionGroup": "…",
       "fieldPath": "…",
       "indexes": [ { "queryScope": "COLLECTION" | "COLLECTION_GROUP", "order": "…" }
-                 | { "queryScope": "…", "arrayConfig": "CONTAINS" }
-                 | { "queryScope": "…", "vectorConfig": { … } } ],   // empty: an exemption
+                 | { "queryScope": "…", "arrayConfig": "CONTAINS" }     // queryScope optional here,
+                 | { "queryScope": "…", "vectorConfig": { … } } ],   // read as COLLECTION when omitted; empty: an exemption
       "ttl": true | false     // optional, passed through
     }
   ]

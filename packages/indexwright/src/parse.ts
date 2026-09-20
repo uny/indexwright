@@ -120,8 +120,8 @@ function validateSingleFieldIndex(raw: unknown, path: string): SingleFieldIndex 
   }
   // Absent, the scope is `COLLECTION`: the Firebase CLI's validator checks `queryScope` only when
   // it is present and its own exports always write it, so an omission is a hand-written file, and
-  // the CLI supplies this default for a composite index in the same position. A present value is
-  // still held to a string.
+  // `COLLECTION` is the default the CLI itself supplies when it upgrades an old-format composite
+  // index. A present value is still held to a string.
   const queryScope =
     raw['queryScope'] === undefined
       ? 'COLLECTION'
