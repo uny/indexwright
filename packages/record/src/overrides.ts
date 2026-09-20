@@ -245,7 +245,14 @@ const DEFAULT_HELD = Symbol('default-held');
  * `missing`. An inheriting field normally arrives with the inherited set materialised in
  * `indexConfig.indexes`, and is then read like any other. One that does not is refused: an absent
  * set on a field that owns its configuration is an exemption, and on a field that inherits it is
- * an unknown.
+ * an unknown. So is a field with no `indexConfig` at all, since which of the two it is cannot then
+ * be told, and reading it as an exemption would put it in `extra` — a confident divergence about
+ * an entry nobody read. An inheriting field's materialised entries may name the ancestor's `*`
+ * rather than the field; that spelling is the field's own there, and nowhere else.
+ *
+ * What is not checked is that `__default__/*` is *present*. The filter admits it and every
+ * observed listing carries it (`capture-live-fields.mjs` stops if one does not), but a listing
+ * without it says nothing false about the overrides, so its absence is not a refusal.
  */
 function readLiveField(live: LiveField): ReadableLiveField | UnreadableField | typeof DEFAULT_HELD {
   const name = String(live.name);
@@ -256,16 +263,21 @@ function readLiveField(live: LiveField): ReadableLiveField | UnreadableField | t
     return { name, reason: 'name-unparseable', detail: name };
   }
   const config = live.indexConfig;
+  if (config === undefined || config === null) {
+    return { name, reason: 'indexes-missing', detail: String(config) };
+  }
+  const inherits = config.usesAncestorConfig === true;
   let indexes: readonly LiveSingleFieldIndex[];
-  if (config?.indexes === undefined || config?.indexes === null) {
-    if (config?.usesAncestorConfig === true) {
-      return { name, reason: 'indexes-missing', detail: String(config.indexes) };
-    }
+  if (config.indexes === undefined || config.indexes === null) {
+    if (inherits) return { name, reason: 'indexes-missing', detail: String(config.indexes) };
     indexes = [];
   } else if (!Array.isArray(config.indexes)) {
     return { name, reason: 'indexes-missing', detail: String(config.indexes) };
   } else {
     indexes = config.indexes;
+  }
+  if (inherits && indexes.length === 0) {
+    return { name, reason: 'indexes-missing', detail: '[]' };
   }
   const declared: SingleFieldIndex[] = [];
   for (const index of indexes) {
@@ -288,12 +300,12 @@ function readLiveField(live: LiveField): ReadableLiveField | UnreadableField | t
       return { name, reason: 'field-unreadable', detail: describeField(index.fields) };
     }
     const field = index.fields[0];
-    if (
-      field === null ||
-      field === undefined ||
-      (field.fieldPath !== fieldPath && field.fieldPath !== undefined && field.fieldPath !== null) ||
-      LOSSY_DIRECTIONS.has(fieldDirection(field))
-    ) {
+    const ownPath =
+      field?.fieldPath === undefined ||
+      field?.fieldPath === null ||
+      field.fieldPath === fieldPath ||
+      (inherits && field.fieldPath === DEFAULT_FIELD_PATH);
+    if (field === null || field === undefined || !ownPath || LOSSY_DIRECTIONS.has(fieldDirection(field))) {
       return { name, reason: 'field-unreadable', detail: describeField(field) };
     }
     declared.push({

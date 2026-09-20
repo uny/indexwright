@@ -104,6 +104,34 @@ test('a field that inherits its configuration and does not say what is unreadabl
   assert.equal(result.unreadable[0].reason, 'indexes-missing');
 });
 
+test('an inheriting field with an empty set, or a field with no indexConfig at all, is unreadable too', () => {
+  // Zero readable entries on a field that inherits is not an exemption — the ancestor holds
+  // something — and a field with no `indexConfig` cannot say which of the two it is. Reading either
+  // as an exemption would put it in `extra`, a confident divergence about an entry nobody read.
+  const emptyInheriting = live('posts', 'a', [], { usesAncestorConfig: true });
+  const noConfig = { name: named('posts', 'a'), ttlConfig: { state: 'ACTIVE' } };
+  for (const entry of [emptyInheriting, noConfig]) {
+    const result = reconcileOverrides(declare(), [entry]);
+    assert.equal(result.verdict, 'indeterminate');
+    assert.equal(result.unreadable[0].reason, 'indexes-missing');
+    assert.deepEqual(result.extra, []);
+  }
+});
+
+test('an inheriting field may name the ancestor wildcard as its path; an owning field may not', () => {
+  const candidate = parsed({
+    collectionGroup: 'posts',
+    fieldPath: 'expiresAt',
+    ttl: true,
+    indexes: [{ order: 'ASCENDING' }, { order: 'DESCENDING' }, { arrayConfig: 'CONTAINS' }],
+  });
+  const materialised = [asc('*'), desc('*'), contains('*')];
+  const inheriting = live('posts', 'expiresAt', materialised, { usesAncestorConfig: true });
+  assert.equal(reconcileOverrides(candidate, [inheriting]).verdict, 'identical');
+  const owning = live('posts', 'expiresAt', materialised);
+  assert.equal(reconcileOverrides(candidate, [owning]).unreadable[0].reason, 'field-unreadable');
+});
+
 test('a TTL-only field with the inherited set materialised matches the declaration the CLI exports for it', () => {
   // `firebase firestore:indexes` writes such a field out as `ttl: true` with the three defaults
   // spelled out. That declaration has to match, or every file the CLI generates reads as diverged.

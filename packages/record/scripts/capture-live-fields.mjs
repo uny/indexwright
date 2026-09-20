@@ -132,12 +132,20 @@ try {
   const tagsShown = `v1.FirestoreAdminClient.updateField(${JSON.stringify(tagsRequest)})`;
   if (byName(listing, fieldName('tags')) === undefined) {
     process.stderr.write(`configuring tags\n  ${tagsShown}\n`);
+    // The mask is spelled two ways because the admin API has been seen to want either from a Node
+    // client: canonical snake_case first, then the JSON name. Whichever it took is what is recorded.
+    let sent = tagsRequest;
     try {
-      await grpc.updateField(tagsRequest);
-    } catch (error) {
-      fail(`updateField on tags failed: ${error.message}`);
+      await grpc.updateField(sent);
+    } catch (first) {
+      sent = { ...tagsRequest, updateMask: { paths: ['indexConfig'] } };
+      try {
+        await grpc.updateField(sent);
+      } catch (second) {
+        fail(`updateField on tags failed with both mask spellings:\n  index_config: ${first.message}\n  indexConfig: ${second.message}`);
+      }
     }
-    provenance.tags = tagsShown;
+    provenance.tags = `v1.FirestoreAdminClient.updateField(${JSON.stringify(sent)})`;
   } else {
     provenance.tags = `already listed before this run, not configured by it; assumed configured as: ${tagsShown}`;
   }
