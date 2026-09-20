@@ -8,7 +8,9 @@
 export {
   adminLister,
   AdminError,
+  FIELDS_FILTER,
   indexesParent,
+  listLiveFields,
   listLiveIndexes,
   type IndexLister,
 } from './admin.js';

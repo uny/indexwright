@@ -7,8 +7,9 @@
  * the rules that decide whether a report goes out be tested without a network, a project, or a
  * three-and-a-half-minute index build.
  *
- * It performs one call — `projects.databases.collectionGroups.indexes.list` — and hands back what
- * came off the wire. It classifies nothing: an entry with a state this version cannot name, an
+ * It performs two calls — `projects.databases.collectionGroups.indexes.list` and
+ * `projects.databases.collectionGroups.fields.list`, the composite and the single-field halves of
+ * the index set (issue #53) — and hands back what came off the wire. It classifies nothing: an entry with a state this version cannot name, an
  * `apiScope` it does not compare under, a field it cannot read are all *conveyed*, because the
  * modules that own those questions answer them by declining, and a decline they never see is a
  * decline that does not happen.
@@ -23,6 +24,7 @@
 
 import { render } from './args.js';
 import { loadFirestore, messageOf, redirectRefusal } from './client.js';
+import type { LiveField } from './overrides.js';
 import type { LiveCompositeIndex } from './reconcile.js';
 
 export class AdminError extends Error {
@@ -31,6 +33,10 @@ export class AdminError extends Error {
 
 /**
  * The slice of the admin client this module uses, and the one method it does not.
+ *
+ * Two listings and a `close`. `listFieldsAsync` is the second listing, added for issue #53: a
+ * consumer's fake of this type must now yield fields as well as indexes, which `CHANGELOG.md`
+ * records as the breaking change it is.
  *
  * Declared structurally rather than picked off the client, because the type is public and the
  * client's is not ours to promise. `FirestoreAdminClient` reaches `@indexwright/record` through
@@ -92,6 +98,15 @@ export interface IndexLister {
     request: { parent: string },
     options?: { autoPaginate?: boolean },
   ) => AsyncIterable<object>;
+  /**
+   * `projects.databases.collectionGroups.fields.list`, following its own page tokens. The same
+   * `parent`; `filter` is `FIELDS_FILTER`, and is required here because a listing without it is
+   * the whole field space rather than the overrides — see `listLiveFields`.
+   */
+  listFieldsAsync: (
+    request: { parent: string; filter: string },
+    options?: { autoPaginate?: boolean },
+  ) => AsyncIterable<object>;
   /** Releases the channel the first listing opened. Idempotent; a no-op on a client that never listed. */
   close: () => Promise<void>;
 }
@@ -107,10 +122,25 @@ export interface IndexLister {
  */
 const ALL_COLLECTION_GROUPS = '-';
 
-/** The parent `indexes.list` is called with, built from the target the run announced. */
+/** The parent `indexes.list` and `fields.list` are called with, built from the target the run announced. */
 export function indexesParent(target: string): string {
   return `${target}/collectionGroups/${ALL_COLLECTION_GROUPS}`;
 }
+
+/**
+ * The filter `fields.list` is called with.
+ *
+ * Unfiltered, `fields.list` is the whole field space — every field of every collection group, each
+ * reporting the configuration it inherits — and a declaration's `fieldOverrides` corresponds to
+ * none of that. `usesAncestorConfig=false` narrows it to the fields that stopped inheriting, which
+ * are the overrides; `ttlConfig:*` adds the fields carrying a TTL, which inherit their indexes but
+ * which the Firebase CLI's `firestore:indexes` exports as overrides all the same, with the inherited
+ * set written out. This is that CLI's filter verbatim, and it has to be: a declaration the CLI
+ * generated for a TTL-only field would otherwise be reported `missing` by every run. What the
+ * filter also admits is `__default__/*` itself, which owns its configuration by definition;
+ * `overrides.ts` recognises it by name.
+ */
+export const FIELDS_FILTER = 'indexConfig.usesAncestorConfig=false OR ttlConfig:*';
 
 /**
  * A client for the named project.
@@ -167,7 +197,7 @@ export async function adminLister(project: string): Promise<IndexLister> {
  * string by construction, which is the one property the echo of issue #8 is worth anything for.
  *
  * Single-field indexes are not in the result and are not missing from it: they are a different
- * resource (`collectionGroups.fields`), and SPEC §5's canonical key describes composite indexes.
+ * resource (`collectionGroups.fields`), listed by `listLiveFields`.
  *
  * The iteration is `listIndexesAsync`, which follows the page tokens itself. Doing that by hand is
  * where a partial listing comes from, and a partial listing is the worst answer this function could
@@ -217,4 +247,36 @@ export async function listLiveIndexes(
     });
   }
   return indexes;
+}
+
+/**
+ * Every field override the target holds, or an `AdminError`.
+ *
+ * The sibling of `listLiveIndexes`, for the other half of the index set: what `fields.list`
+ * reports under `FIELDS_FILTER`. The same parent, the same paging, the same conveyance — each
+ * element is the generated `Field` proto, every member optional and nullable, and `overrides.ts`
+ * reads it that defensively, so nothing is coerced here either. The same wrapping too, for the
+ * same reason: a failure must not leave here as an empty listing, because `reconcileOverrides`
+ * would read one as a database with no overrides and vouch for it.
+ *
+ * Whether the two listings are one observation is not this module's to promise. `check` lists both
+ * within one poll and feeds both to the same gate; a set that moved between the two calls is caught
+ * by the next poll, as a set that moved between two polls is.
+ */
+export async function listLiveFields(target: string, lister: IndexLister): Promise<LiveField[]> {
+  const parent = indexesParent(target);
+  const fields: LiveField[] = [];
+  try {
+    for await (const field of lister.listFieldsAsync(
+      { parent, filter: FIELDS_FILTER },
+      { autoPaginate: false },
+    )) {
+      fields.push(field as LiveField);
+    }
+  } catch (error) {
+    throw new AdminError(`could not list the fields of ${parent}: ${render(messageOf(error))}`, {
+      cause: error,
+    });
+  }
+  return fields;
 }
