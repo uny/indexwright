@@ -68,12 +68,17 @@ again, by its own `corpusVersion`.
   it now carries the `searchIndexOptions: null` the observations already described, and `source`
   names the client versions and every command. Not a change to the package.
 - **`test/fixtures/live-fields.json` is its sibling** (issue #53), captured by
-  `scripts/capture-live-fields.mjs`, which configures three fields of a probe collection group — an override with a collection-group scope
-  through the admin client's `updateField`, an exemption through `gcloud`, and a TTL-only field —
-  waits for them, and reads the listing back through the admin client (twice), `gcloud`, and the
-  Firebase CLI. The three claims `overrides.ts` rests on are read from it rather than remembered:
-  the default lists under `__default__/*` with the three documented indexes, an exemption arrives
-  with no `indexes`, and a TTL-only field arrives with the inherited set materialised.
+  `scripts/capture-live-fields.mjs`, which configures three fields of a probe collection group — an
+  override with a collection-group scope through the admin client's `updateField` (`gcloud`'s
+  `--index` cannot name a scope), an exemption through `gcloud`, and a TTL-only field — waits for
+  them, and reads the listing back through the admin client (twice), `gcloud`, and the Firebase CLI.
+  Two of the three claims `overrides.ts` rests on are now read from it rather than remembered: the
+  default lists under `__default__/*` with the three documented indexes, and an exemption arrives
+  with no `indexes`. The third — that a TTL-only field arrives with the inherited set materialised —
+  is not: TTL is a billed feature and the disposable project has no billing, which the script
+  records verbatim and the fixture's `observations.ttlNotObserved` says out loud. Also read from it:
+  a nested index carries `DENSITY_UNSPECIFIED` where a composite carries `SPARSE_ALL`, which is why
+  `COMPARABLE_DENSITIES` holds both.
 
 ## [0.6.0] — 2026-09-13
 
