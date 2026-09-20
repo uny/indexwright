@@ -1,4 +1,10 @@
-import type { CompositeIndex, IndexDocument, IndexField } from './types.js';
+import type {
+  CompositeIndex,
+  FieldOverride,
+  IndexDocument,
+  IndexField,
+  SingleFieldIndex,
+} from './types.js';
 
 /**
  * A file that is not a usable index declaration. Reported per file and mapped to exit code 2;
@@ -32,7 +38,22 @@ export function validateDocument(raw: unknown): IndexDocument {
     throw new MalformedInputError('"indexes" must be an array');
   }
   const validated = indexes.map((entry, i) => validateIndex(entry, `indexes[${i}]`));
-  return { ...raw, indexes: validated } as IndexDocument;
+
+  // Optional, because a hand-written file usually has none and the Firebase CLI omits the key when
+  // an export has none. Present, it is validated to the same depth as `indexes`: an override this
+  // tool cannot read is one it would otherwise pass through *as* read, and the consumer that
+  // reconciles it against a live listing would then vouch for a field it never examined (#53).
+  const overrides = raw['fieldOverrides'];
+  if (overrides === undefined) {
+    return { ...raw, indexes: validated } as IndexDocument;
+  }
+  if (!Array.isArray(overrides)) {
+    throw new MalformedInputError('"fieldOverrides" must be an array');
+  }
+  const validatedOverrides = overrides.map((entry, i) =>
+    validateOverride(entry, `fieldOverrides[${i}]`),
+  );
+  return { ...raw, indexes: validated, fieldOverrides: validatedOverrides } as IndexDocument;
 }
 
 function validateIndex(raw: unknown, path: string): CompositeIndex {
@@ -63,7 +84,57 @@ function validateField(raw: unknown, path: string): IndexField {
     throw new MalformedInputError(`${path}: must be an object`);
   }
   const fieldPath = requireString(raw['fieldPath'], `${path}: "fieldPath"`);
+  validateConfig(raw, path);
+  return { ...raw, fieldPath } as IndexField;
+}
 
+function validateOverride(raw: unknown, path: string): FieldOverride {
+  if (!isObject(raw)) {
+    throw new MalformedInputError(`${path}: must be an object`);
+  }
+  const collectionGroup = requireString(raw['collectionGroup'], `${path}: "collectionGroup"`);
+  const fieldPath = requireString(raw['fieldPath'], `${path}: "fieldPath"`);
+
+  // Empty is not the error it is for a composite index: an override declaring no indexes is an
+  // exemption, which is a configuration Firestore holds and an export writes out.
+  const indexes = raw['indexes'];
+  if (!Array.isArray(indexes)) {
+    throw new MalformedInputError(`${path}: "indexes" must be an array`);
+  }
+  const validatedIndexes = indexes.map((entry, i) =>
+    validateSingleFieldIndex(entry, `${path}.indexes[${i}]`),
+  );
+
+  // Checked for type only. Whether the field has a TTL policy is not something a canonical form
+  // reads, but a value that is not a boolean is not a TTL declaration the Firebase CLI would write.
+  if (raw['ttl'] !== undefined && typeof raw['ttl'] !== 'boolean') {
+    throw new MalformedInputError(`${path}: "ttl" must be a boolean`);
+  }
+
+  return { ...raw, collectionGroup, fieldPath, indexes: validatedIndexes } as FieldOverride;
+}
+
+function validateSingleFieldIndex(raw: unknown, path: string): SingleFieldIndex {
+  if (!isObject(raw)) {
+    throw new MalformedInputError(`${path}: must be an object`);
+  }
+  // Absent, the scope is `COLLECTION`: the Firebase CLI's validator checks `queryScope` only when
+  // it is present and its own exports always write it, so an omission is a hand-written file, and
+  // `COLLECTION` is the default the CLI itself supplies when it upgrades an old-format composite
+  // index. A present value is still held to a string.
+  const queryScope =
+    raw['queryScope'] === undefined
+      ? 'COLLECTION'
+      : requireString(raw['queryScope'], `${path}: "queryScope"`);
+  validateConfig(raw, path);
+  return { ...raw, queryScope } as SingleFieldIndex;
+}
+
+/**
+ * The one-of check a composite index's field and a single-field index share: exactly one of
+ * `order`, `arrayConfig`, and `vectorConfig`, each of the right type.
+ */
+function validateConfig(raw: Record<string, unknown>, path: string): void {
   const configured = (['order', 'arrayConfig', 'vectorConfig'] as const).filter(
     (name) => raw[name] !== undefined,
   );
@@ -85,8 +156,6 @@ function validateField(raw: unknown, path: string): IndexField {
   if (raw['vectorConfig'] !== undefined && !isObject(raw['vectorConfig'])) {
     throw new MalformedInputError(`${path}: "vectorConfig" must be an object`);
   }
-
-  return { ...raw, fieldPath } as IndexField;
 }
 
 function requireString(value: unknown, label: string): string {

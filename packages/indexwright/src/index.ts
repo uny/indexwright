@@ -11,11 +11,16 @@ export { formatJson } from './format/json.js';
 export { formatText } from './format/text.js';
 export {
   analyse,
+  analyseOverrides,
   canonicalFields,
+  canonicalSingleFieldIndexes,
   fieldDirection,
+  formatSingleFieldIndex,
   implicitNameDirection,
   indexKey,
   NAME_FIELD,
+  overrideKey,
+  type IndexConfig,
 } from './key.js';
 export {
   DEFAULT_QUOTA,
@@ -32,8 +37,11 @@ export { getRule, isRuleId, rules } from './rules/index.js';
 export { RULE_IDS } from './types.js';
 export type {
   AnalysedIndex,
+  AnalysedOverride,
   CanonicalField,
+  CanonicalSingleFieldIndex,
   CompositeIndex,
+  FieldOverride,
   Finding,
   IndexDocument,
   IndexField,
@@ -45,5 +53,6 @@ export type {
   RuleContext,
   RuleId,
   RuleOptions,
+  SingleFieldIndex,
 } from './types.js';
 export { VERSION } from './version.js';

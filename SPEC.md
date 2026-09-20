@@ -229,9 +229,27 @@ Any file in the `firestore.indexes.json` shape:
       "density": "…"          // optional, passed through
     }
   ],
-  "fieldOverrides": [ … ]     // parsed, not analysed in v0.1.0
+  "fieldOverrides": [         // optional; validated and canonicalised, read by no rule yet
+    {
+      "collectionGroup": "…",
+      "fieldPath": "…",
+      "indexes": [ { "queryScope": "COLLECTION" | "COLLECTION_GROUP", "order": "…" }
+                 | { "queryScope": "…", "arrayConfig": "CONTAINS" }     // queryScope optional here,
+                 | { "queryScope": "…", "vectorConfig": { … } } ],   // read as COLLECTION when omitted; empty: an exemption
+      "ttl": true | false     // optional, passed through
+    }
+  ]
 }
 ```
+
+`fieldOverrides` is the file's other half: single-field index configuration, which Firestore
+otherwise derives for every field. An entry replaces that default for one field of one collection
+group with the *whole* set in `indexes` — an export materialises the defaults an override keeps —
+and an empty set exempts the field from indexing. A `vectorConfig` entry is accepted for symmetry
+with a composite field, though the Firebase CLI neither writes nor deploys one here — its
+single-field indexes carry `order` or `arrayConfig` only. No rule reads it yet; it is modelled so
+that the one canonical form serves both the linter and `check` (§3), which must reconcile it
+against a live listing.
 
 Multiple files may be passed; each is analysed independently. Rules are not applied across files.
 
@@ -240,7 +258,11 @@ Multiple files may be passed; each is analysed independently. Rules are not appl
 A file is **malformed** when it is not valid JSON, when the top level is not an object, when
 `indexes` is absent or is not an array, when an index lacks `collectionGroup`, `queryScope`, or a
 non-empty `fields`, or when a field lacks `fieldPath` or declares none — or more than one — of
-`order`, `arrayConfig`, and `vectorConfig`.
+`order`, `arrayConfig`, and `vectorConfig`. When `fieldOverrides` is present it is held to the same
+depth: it must be an array, each entry needs `collectionGroup`, `fieldPath`, and an `indexes` array
+(which may be empty), each of its indexes needs exactly one of the three configs, and `ttl`, when
+present, must be a boolean. A single-field index that omits `queryScope` is read as `COLLECTION`:
+the Firebase CLI accepts and deploys such a declaration, and its own exports always write the scope.
 
 Nothing beyond that is refused. The *values* of `queryScope` and `order` are not checked against an
 enumeration, unknown keys anywhere are ignored, and a declaration that repeats a `fieldPath` within
@@ -276,6 +298,19 @@ where `direction` is `ASCENDING`, `DESCENDING`, `CONTAINS`, or — for a `vector
 `VECTOR(<dimension>)`, written `VECTOR(?)` when no dimension is declared. A trailing implicit
 `__name__` entry is stripped before forming the key, so that declarations that differ only in
 whether the document key is written explicitly resolve to the same resource.
+
+### Canonical override key
+
+```
+<collectionGroup>::<fieldPath>::<queryScope>:<direction>|<queryScope>:<direction>|…
+```
+
+The same shape, for a field override. `direction` is as above. A composite index's fields are a
+sequence, so their order is part of its key; an override's `indexes` are a set — Firestore holds at
+most one single-field index per (scope, direction) of a field — so they are sorted by query scope
+and then direction before the key is formed, and entries alike in both are collapsed to one. An
+exemption has an empty final part. `ttl` and any key the tool does not understand are carried on
+the declaration and are not part of the key: they decide no query.
 
 ### The implicit `__name__` direction
 
