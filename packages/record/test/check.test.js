@@ -744,6 +744,21 @@ test('an override still building is waited on, like a composite index', async ()
   assert.match(h.said(), /waiting: 1 index still building: ".*\/fields\/tags#COLLECTION_GROUP:CONTAINS"/);
 });
 
+test('a declared override this version cannot compare declines the run, and the line names it', async () => {
+  // `reconcileOverrides` refuses the declaration; this pins the line `check` prints for it, which
+  // no other test reaches — every other override outcome has a line of its own above.
+  const dense = {
+    ...DECLARED,
+    fieldOverrides: [
+      { collectionGroup: 'orders', fieldPath: 'tags', indexes: [{ queryScope: 'COLLECTION_GROUP', arrayConfig: 'CONTAINS', density: 'DENSE' }] },
+    ],
+  };
+  const h = harness({ declared: dense, fieldListings: [[DEFAULT_FIELD, tagsOverride()]] });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /field override declared in terms this version cannot compare \(density-unrecognised\): "orders::tags::COLLECTION_GROUP:CONTAINS"/);
+  assert.equal(h.replayed.length, 0);
+});
+
 test('a default field that is not the default declines the run, because the override model assumes it', async () => {
   const changed = {
     ...DEFAULT_FIELD,
