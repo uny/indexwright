@@ -33,7 +33,8 @@ again, by its own `corpusVersion`.
 - **`IndexLister` gains `listFieldsAsync`**, for the listing above. A fake of the type must now
   yield fields as well as indexes — `(request: { parent; filter }, options?) => AsyncIterable<object>`
   — or `check` throws on its first poll. The real client satisfies it unchanged. The dependency on
-  `indexwright` moves to `>=0.3.0 <1`, which is where `analyseOverrides` and the override key live.
+  `indexwright` moves to `>=0.3.0 <1` with the release, which is where `analyseOverrides` and the
+  override key live; until then the range still names 0.2.0, which lacks them.
 
 - **`IndexLister` is declared structurally, and no longer names a package this one does not
   control** (issue #40). It was a `Pick` of `@google-cloud/firestore`'s admin client, whose method
