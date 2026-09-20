@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { analyseOverrides, parseDocument } from 'indexwright';
 import {
   DEFAULT_COLLECTION_GROUP,
@@ -394,4 +396,79 @@ test('the nested indexes are flattened for the readiness gate with stable, disti
   // Named even when unreadable: naming what is building is this function's job, refusing is not.
   const odd = liveSingleFieldIndexes([live('posts', 'a', [{ fields: [{ fieldPath: 'a' }], state: 'READY' }])]);
   assert.equal(odd[0].name, `${named('posts', 'a')}#undefined:UNKNOWN`);
+});
+
+// --- against a real listing ---------------------------------------------------------------------
+
+/** What a real database returned, as three tools rendered it. See the fixture's `note`. */
+const FIXTURE = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./fixtures/live-fields.json', import.meta.url)), 'utf8'),
+);
+
+test('the file firebase generates reconciles against the database it was generated from', () => {
+  // The whole point, end to end: `firebase firestore:indexes` read the target, wrote
+  // `fieldOverrides`, and that declaration must be vouched for against the listing it came from —
+  // through either client rendering, since gcloud omits every proto3 default the admin client fills.
+  const candidate = parsed(...FIXTURE.declarationByFirebaseCli);
+  for (const rendering of ['liveByAdminClient', 'liveByGcloud']) {
+    const result = reconcileOverrides(candidate, FIXTURE[rendering]);
+    assert.equal(result.verdict, 'identical', `${rendering}: ${JSON.stringify(result)}`);
+    assert.deepEqual(
+      result.matched.map((entry) => entry.key),
+      ['probe_fields::body::', 'probe_fields::tags::COLLECTION:ASCENDING|COLLECTION_GROUP:CONTAINS'],
+    );
+  }
+});
+
+test('the default is in the filtered listing, holds the three defaults, and is neither matched nor extra', () => {
+  // `defaultIsListedUnderTheFilter`. The CLI drops it, so the declaration above never names it, and
+  // the reconciliation above only passes because this module recognises it by name.
+  const theDefault = FIXTURE.liveByAdminClient.find((field) => field.name.endsWith('/__default__/fields/*'));
+  assert.ok(theDefault);
+  assert.equal(theDefault.indexConfig.usesAncestorConfig, false);
+  assert.deepEqual(
+    theDefault.indexConfig.indexes.map((index) => `${index.queryScope}:${index.fields[0].order ?? index.fields[0].arrayConfig}`),
+    ['COLLECTION:ASCENDING', 'COLLECTION:DESCENDING', 'COLLECTION:CONTAINS'],
+  );
+  assert.ok(!FIXTURE.declarationByFirebaseCli.some((override) => override.collectionGroup === '__default__'));
+});
+
+test('an exemption really does arrive with no indexes, and reads as one', () => {
+  // `exemptionArrivesWithNoIndexes`: `[]` from the client, no key at all from gcloud.
+  const byClient = FIXTURE.liveByAdminClient.find((field) => field.name.endsWith('/fields/body'));
+  const byGcloud = FIXTURE.liveByGcloud.find((field) => field.name.endsWith('/fields/body'));
+  assert.deepEqual(byClient.indexConfig.indexes, []);
+  assert.equal(byGcloud.indexConfig.indexes, undefined);
+  assert.equal(byGcloud.indexConfig.usesAncestorConfig, undefined);
+  const candidate = declare({ collectionGroup: 'probe_fields', fieldPath: 'body', indexes: [] });
+  assert.equal(reconcileOverrides(candidate, [byClient]).verdict, 'identical');
+  assert.equal(reconcileOverrides(candidate, [byGcloud]).verdict, 'identical');
+});
+
+test('the density a nested index actually carries is one this version compares under', () => {
+  // `nestedDensityIsUnspecified`: DENSITY_UNSPECIFIED here, SPARSE_ALL on a composite. Either alone
+  // would let the other set shrink; both fixtures together are what pin `COMPARABLE_DENSITIES`.
+  const densities = new Set(
+    FIXTURE.liveByAdminClient.flatMap((field) => field.indexConfig.indexes.map((index) => index.density)),
+  );
+  assert.deepEqual([...densities], ['DENSITY_UNSPECIFIED']);
+});
+
+test('a real listing is readable, whichever tool rendered it, and every nested index is gated', () => {
+  for (const rendering of ['liveByAdminClient', 'liveByGcloud']) {
+    assert.deepEqual(reconcileOverrides(declare(), FIXTURE[rendering]).unreadable, []);
+    const gated = liveSingleFieldIndexes(FIXTURE[rendering]);
+    // Three on the default, two on `tags`, none on the exemption; all READY; nameless in the
+    // listing (`nestedIndexesAreNameless`) and named here.
+    assert.equal(gated.length, 5);
+    assert.ok(gated.every((index) => index.state === 'READY'));
+    assert.equal(new Set(gated.map((index) => index.name)).size, 5);
+  }
+});
+
+test('the TTL-only case is not in the fixture, and the test suite says so rather than pretending', () => {
+  // `ttlNotObserved`: the disposable project has no billing. What the module does with an
+  // inheriting field rests on the Firebase CLI's source until a billed project re-observes it.
+  assert.match(FIXTURE.source.refusals.ttl.stderr, /billing disabled/);
+  assert.ok(!FIXTURE.liveByAdminClient.some((field) => field.ttlConfig !== null && field.ttlConfig !== undefined));
 });

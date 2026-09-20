@@ -20,8 +20,9 @@
  *      ascending one through the admin client's `updateField` (the one writer here that can name a
  *      query scope — `gcloud`'s `--index` cannot); `body` is exempted with `gcloud firestore indexes
  *      fields update --disable-indexes`; `expiresAt` is made the group's TTL field with `gcloud
- *      firestore fields ttls update --enable-ttl` and is otherwise left inheriting. Then waits for
- *      every nested index to list as READY and the TTL as ACTIVE.
+ *      firestore fields ttls update --enable-ttl` and is otherwise left inheriting — or, on a
+ *      project without billing, is refused, which is recorded and the field left out. Then waits
+ *      for every nested index to list as READY and the TTL, if there is one, as ACTIVE.
  *   2. Reads the listing back four ways: the admin client over gRPC and again over `fallback:
  *      true`, under the filter `admin.ts` sends; `gcloud firestore indexes fields list
  *      --format=json`; and `firebase firestore:indexes`, whose `fieldOverrides` is the declaration
@@ -161,22 +162,37 @@ try {
     provenance.body = `already listed before this run, not configured by it; assumed configured as: ${shown(bodyCommand)}`;
   }
 
-  // `expiresAt`: TTL only, inheriting its indexes.
+  // `expiresAt`: TTL only, inheriting its indexes. TTL is a billed feature, and the disposable
+  // project may not be a billed one; a refusal on that ground is recorded verbatim and the field is
+  // left out, so the fixture says the observation was not made rather than pretending it was.
   const ttlCommand = gcloud('firestore', 'fields', 'ttls', 'update', 'expiresAt', `--collection-group=${GROUP}`, '--enable-ttl');
-  if (byName(listing, fieldName('expiresAt')) === undefined) {
+  const refusals = {};
+  let ttlConfigured = byName(listing, fieldName('expiresAt')) !== undefined;
+  if (ttlConfigured) {
+    provenance.expiresAt = `already listed before this run, not configured by it; assumed configured as: ${shown(ttlCommand)}`;
+  } else {
     const issued = [ttlCommand[0], [...ttlCommand[1], '--async']];
     process.stderr.write(`enabling TTL on expiresAt\n  ${shown(issued)}\n`);
-    must(...issued);
-    provenance.expiresAt = shown(issued);
-  } else {
-    provenance.expiresAt = `already listed before this run, not configured by it; assumed configured as: ${shown(ttlCommand)}`;
+    const result = run(...issued);
+    if (result.status === 0) {
+      provenance.expiresAt = shown(issued);
+      ttlConfigured = true;
+    } else if (result.stderr.includes('billing')) {
+      // The status only; gcloud appends the account it authenticated as, which is nobody's business
+      // in a fixture, and names the project outside a resource name.
+      const status = result.stderr.trim().split(' This command is authenticated')[0];
+      refusals.ttl = { command: shown(issued), stderr: status.replace(`Project ${project} `, `Project ${PLACEHOLDER} `) };
+      process.stderr.write('TTL refused (billing); the fixture will not carry a TTL-only field\n');
+    } else {
+      fail(`${shown(issued)} exited ${result.status}:\n${result.stderr}`);
+    }
   }
 
   const deadline = Date.now() + READY_TIMEOUT_MS;
   for (;;) {
     listing = await listWith(grpc);
     const pending = [];
-    for (const path of ['tags', 'body', 'expiresAt']) {
+    for (const path of ttlConfigured ? ['tags', 'body', 'expiresAt'] : ['tags', 'body']) {
       const field = byName(listing, fieldName(path));
       if (field === undefined) {
         pending.push(`${path} (not yet listed)`);
@@ -250,6 +266,7 @@ try {
     script: 'packages/record/scripts/capture-live-fields.mjs',
     versions,
     configured: provenance,
+    refusals,
     readBack: {
       liveByAdminClient:
         `v1.FirestoreAdminClient.listFieldsAsync({ parent: '${withPlaceholder(parent)}', filter: '${FILTER}' }, { autoPaginate: false }), ` +
