@@ -259,11 +259,14 @@ test('a resource name that is not a collection group field path is unreadable, n
   assert.equal(result.unreadable[0].reason, 'name-unparseable');
 });
 
-test('a nested index that is not exactly one field, or names another, is unreadable', () => {
+test('a nested index that is not exactly one field, or names another or none, is unreadable', () => {
   const twoFields = live('posts', 'a', [{ queryScope: 'COLLECTION', fields: [{ fieldPath: 'a', order: 'ASCENDING' }, { fieldPath: 'b', order: 'ASCENDING' }] }]);
   const otherField = live('posts', 'a', [asc('b')]);
+  // No path is not this field's path: keyed on the field it sits under, it would vouch for whatever
+  // it actually indexes, which is the reading the composite side refuses too.
+  const noPath = live('posts', 'a', [{ queryScope: 'COLLECTION', fields: [{ order: 'ASCENDING' }] }]);
   const noConfig = live('posts', 'a', [{ queryScope: 'COLLECTION', fields: [{ fieldPath: 'a' }] }]);
-  for (const entry of [twoFields, otherField, noConfig]) {
+  for (const entry of [twoFields, otherField, noPath, noConfig]) {
     const result = reconcileOverrides(declare(), [entry]);
     assert.equal(result.verdict, 'indeterminate');
     assert.equal(result.unreadable[0].reason, 'field-unreadable');

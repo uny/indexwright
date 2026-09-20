@@ -99,13 +99,15 @@ export const FIELD_UNREADABLE_REASONS = [
   'name-unparseable',
   /**
    * The field inherits its configuration (`usesAncestorConfig`) and did not say what it inherited.
-   * The set is then whatever the ancestor holds, which this entry does not tell.
+   * The set is then whatever the ancestor holds, which this entry does not tell. Also a field with
+   * no `indexConfig` at all, or an `indexes` that is not an array: which of owning and inheriting
+   * it is cannot then be told either.
    */
   'indexes-missing',
   'query-scope-missing',
   /**
-   * A nested index did not carry exactly one field, or that field was not this one, or it carried
-   * none of `order`, `arrayConfig`, and `vectorConfig`.
+   * A nested index did not carry exactly one field, or that field was not this one (a field with
+   * no path included), or it carried none of `order`, `arrayConfig`, and `vectorConfig`.
    */
   'field-unreadable',
   /** An `apiScope` this version does not compare under. */
@@ -308,12 +310,15 @@ function readLiveField(live: LiveField): ReadableLiveField | UnreadableField | t
       return { name, reason: 'field-unreadable', detail: describeField(index.fields) };
     }
     const field = index.fields[0];
+    if (field === null || field === undefined) {
+      return { name, reason: 'field-unreadable', detail: describeField(field) };
+    }
+    // A field with no path is not read as this one: the composite side refuses the same shape, and
+    // the alternative is keying on the field it sits under, which is the vouching the comment above
+    // rules out.
     const ownPath =
-      field?.fieldPath === undefined ||
-      field?.fieldPath === null ||
-      field.fieldPath === fieldPath ||
-      (inherits && field.fieldPath === DEFAULT_FIELD_PATH);
-    if (field === null || field === undefined || !ownPath || LOSSY_DIRECTIONS.has(fieldDirection(field))) {
+      field.fieldPath === fieldPath || (inherits && field.fieldPath === DEFAULT_FIELD_PATH);
+    if (!ownPath || LOSSY_DIRECTIONS.has(fieldDirection(field))) {
       return { name, reason: 'field-unreadable', detail: describeField(field) };
     }
     declared.push({
