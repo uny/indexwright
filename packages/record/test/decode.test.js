@@ -290,6 +290,21 @@ test('a Listen message that carries no query is null, not a skip', () => {
   assert.equal(decodeListen(Buffer.alloc(0)), null);
 });
 
+test('the last member of a Listen oneof is the one set, in either order', () => {
+  // `add_target` / `remove_target` and `query` / `documents` are oneofs: a message that carries both
+  // has, on the wire, set the later one. Recording the earlier would add a query the emulator did
+  // not run.
+  const query = listenAddQuery(structuredQueryOf('a collection group query'));
+  const remove = Buffer.from([0x18, 0x05]);
+  assert.equal(decodeListen(Buffer.concat([query, remove])), null);
+  assert.ok(decodeListen(Buffer.concat([remove, query]))?.ok);
+
+  const queryTarget = delimited(2, delimited(2, structuredQueryOf('a collection group query')));
+  const documents = delimited(3, delimited(2, Buffer.from('a')));
+  assert.equal(decodeListen(delimited(2, Buffer.concat([queryTarget, documents]))), null);
+  assert.ok(decodeListen(delimited(2, Buffer.concat([documents, queryTarget])))?.ok);
+});
+
 test('a Listen query target with no structured query is an unsupported shape', () => {
   // QueryTarget's `query_type` oneof has one member; a target that set none of it is not a query
   // this vocabulary can name, and not a misread of the wire either.

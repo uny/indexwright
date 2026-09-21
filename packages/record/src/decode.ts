@@ -25,10 +25,12 @@ export type DecodeResult = { readonly ok: true; readonly query: RawQuery } | { r
 /** `RunQueryRequest.structured_query`. */
 const RUN_QUERY_STRUCTURED_QUERY = 2;
 
-/** `ListenRequest.add_target`. `remove_target` is field 3, a varint, and carries no query. */
+/** `ListenRequest.add_target` and `remove_target`, the members of its `target_change` oneof. */
 const LISTEN_ADD_TARGET = 2;
-/** `Target.query`. `Target.documents` is field 3 and names documents rather than a query. */
+const LISTEN_REMOVE_TARGET = 3;
+/** `Target.query` and `Target.documents`, the members of its `target_type` oneof. */
 const TARGET_QUERY = 2;
+const TARGET_DOCUMENTS = 3;
 /** `Target.QueryTarget.structured_query`, the only member of its `query_type` oneof. */
 const QUERY_TARGET_STRUCTURED_QUERY = 2;
 
@@ -150,15 +152,19 @@ function declined(error: unknown): DecodeResult {
 
 /** The `structured_query` bytes an add_target carries, or `null` for a message that holds none. */
 function readListenRequest(message: Uint8Array): Uint8Array | null {
+  // Each level is a oneof, so the member that appears last is the one set: an `add_target`
+  // followed by a `remove_target` is a remove, and a `query` followed by `documents` names documents.
   let target: Uint8Array | null = null;
   for (const field of fields(message)) {
     if (field.number === LISTEN_ADD_TARGET && field.kind === 'bytes') target = field.value;
+    else if (field.number === LISTEN_REMOVE_TARGET && field.kind === 'varint') target = null;
   }
   if (target === null) return null;
 
   let queryTarget: Uint8Array | null = null;
   for (const field of fields(target)) {
     if (field.number === TARGET_QUERY && field.kind === 'bytes') queryTarget = field.value;
+    else if (field.number === TARGET_DOCUMENTS && field.kind === 'bytes') queryTarget = null;
   }
   if (queryTarget === null) return null;
 
