@@ -106,6 +106,23 @@ Firestore connection.
   behaviour this whole subsection exists to rule out at the moment it is most likely to occur, which
   is right after a deploy.
 
+  **The set has two halves, and both are listed.** Composite indexes are
+  `projects.databases.collectionGroups.indexes.list`; single-field configuration — the
+  `fieldOverrides` of §4 — is `projects.databases.collectionGroups.fields.list`, and it decides
+  which replayed queries succeed just as surely: a single-field query at collection-group scope is
+  served only by an override declaring that scope, and an exemption removes the automatic indexes a
+  query with no composite index relies on. So both readiness and reconciliation read both listings.
+  The field listing is asked under the filter the Firebase CLI uses —
+  `indexConfig.usesAncestorConfig=false OR ttlConfig:*` — which is the set of fields a declaration's
+  `fieldOverrides` corresponds to, including the TTL-only fields that CLI exports as overrides (the
+  CLI's behaviour, read from its source; `@indexwright/record`'s fixture has not yet observed a TTL
+  field); the
+  database default, listed under `__default__/*`, is recognised by name and checked against the
+  three documented indexes rather than compared, since every override the linter models is a
+  departure from it. `ttl` is compared on neither side: it decides when a document is deleted, not
+  which queries are served. The field listing accepts the same OAuth scope as the index listing; a
+  principal that can list one and not the other is told so, and `check` declines the same way.
+
   Both halves read the set *once*, before the first replayed query. So a run vouches for a set at one
   moment and reports about queries answered across a window that begins there, and nothing in
   check-then-act notices that those are not the same set. **`check` must list once more after the

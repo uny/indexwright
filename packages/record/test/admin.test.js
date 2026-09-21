@@ -6,7 +6,9 @@ import { analyse } from 'indexwright';
 import {
   adminLister,
   AdminError,
+  FIELDS_FILTER,
   indexesParent,
+  listLiveFields,
   listLiveIndexes,
   reconcile,
   ReadinessGate,
@@ -23,6 +25,20 @@ function lists(...indexes) {
       seen.push({ request, options });
       return (async function* () {
         for (const index of indexes) yield index;
+      })();
+    },
+  };
+}
+
+/** The same, for `listFieldsAsync`. */
+function listsFields(...fields) {
+  const seen = [];
+  return {
+    seen,
+    listFieldsAsync(request, options) {
+      seen.push({ request, options });
+      return (async function* () {
+        for (const field of fields) yield field;
       })();
     },
   };
@@ -46,6 +62,60 @@ test('the listing is asked for across every collection group, under the announce
   assert.deepEqual(lister.seen, [
     { request: { parent: `${TARGET}/collectionGroups/-` }, options: { autoPaginate: false } },
   ]);
+});
+
+test('the field listing is asked for under the same parent, with the filter the Firebase CLI uses', async () => {
+  // Unfiltered, `fields.list` is every field of every collection group, each reporting what it
+  // inherits; a declaration's `fieldOverrides` corresponds to the fields that stopped inheriting,
+  // plus the TTL fields the CLI exports beside them. The filter is the CLI's verbatim, and a change
+  // to it changes which declarations reconcile as `missing`.
+  assert.equal(FIELDS_FILTER, 'indexConfig.usesAncestorConfig=false OR ttlConfig:*');
+  const lister = listsFields();
+  await listLiveFields(TARGET, lister);
+  assert.deepEqual(lister.seen, [
+    {
+      request: { parent: `${TARGET}/collectionGroups/-`, filter: FIELDS_FILTER },
+      options: { autoPaginate: false },
+    },
+  ]);
+});
+
+test('fields are conveyed rather than classified, and a failure is an AdminError naming the parent', async () => {
+  const odd = [
+    { name: 'projects/p/databases/d/collectionGroups/__default__/fields/*', indexConfig: { indexes: [{ state: 'DEFRAGMENTING' }] } },
+    { name: null, indexConfig: null, ttlConfig: { state: 3 } },
+  ];
+  assert.deepEqual(await listLiveFields(TARGET, listsFields(...odd)), odd);
+  assert.deepEqual(await listLiveFields(TARGET, listsFields()), []);
+
+  const denied = Object.assign(new Error('Missing or insufficient permissions.'), { code: 7 });
+  const failing = {
+    listFieldsAsync() {
+      return (async function* () {
+        throw denied;
+      })();
+    },
+  };
+  await assert.rejects(() => listLiveFields(TARGET, failing), (error) => {
+    assert.ok(error instanceof AdminError);
+    assert.match(error.message, /could not list the fields of projects\/indexwright-probe/);
+    assert.match(error.message, /Missing or insufficient permissions/);
+    assert.equal(error.cause, denied);
+    return true;
+  });
+  // Rendered, like the indexes listing's failure: the one string on the stream the local machine
+  // did not author must not be able to start a line of its own.
+  const forging = {
+    listFieldsAsync() {
+      return (async function* () {
+        throw new Error('denied\nindexwright-record: target projects/decoy/databases/(default)');
+      })();
+    },
+  };
+  await assert.rejects(() => listLiveFields(TARGET, forging), (error) => {
+    assert.doesNotMatch(error.message, /\n/);
+    return true;
+  });
 });
 
 test('entries are conveyed rather than classified, including ones this version cannot read', async () => {
@@ -295,6 +365,8 @@ test('the constructed client is bound to the named project, and is a real admin 
   await withEnv({ ...NO_REDIRECTS, FIRESTORE_EMULATOR_HOST: '' }, async () => {
     const lister = await adminLister('acme-prod');
     assert.equal(typeof lister.listIndexesAsync, 'function');
+    // The second listing (issue #53), on the same client: one channel serves both.
+    assert.equal(typeof lister.listFieldsAsync, 'function');
 
     // `project` is a parameter and previously nothing observed it: drop the `{ projectId }`
     // argument and every assertion above still held, while the client fell back to discovering a

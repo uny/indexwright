@@ -2,9 +2,10 @@
  * The `check` verb (SPEC §3, *v0.3 — coverage check*).
  *
  * Every question this verb answers is answered somewhere else. `readiness.ts` decides whether the
- * index set may be reported on, `reconcile.ts` decides whether it is the *candidate* set,
- * `synthesise.ts` decides what a corpus entry replays as, `replay.ts` asks Firestore — the oracle —
- * whether the set covers it, and `baseline.ts` says which gaps this project has already accepted.
+ * index set may be reported on, `reconcile.ts` and `overrides.ts` decide whether it is the
+ * *candidate* set — the composite and the single-field halves of it — `synthesise.ts` decides what
+ * a corpus entry replays as, `replay.ts` asks Firestore — the oracle — whether the set covers it,
+ * and `baseline.ts` says which gaps this project has already accepted.
  * What is left here is the order they are asked in, the two client lifetimes, and the report.
  *
  * The order is a gate rather than a sequence, and the gating is the point. A report that goes out
@@ -18,12 +19,13 @@
 
 import { readFileSync } from 'node:fs';
 import { normalize, resolve } from 'node:path';
-import { analyse, parseDocument, type AnalysedIndex } from 'indexwright';
-import { adminLister, AdminError, listLiveIndexes, type IndexLister } from './admin.js';
+import { analyse, analyseOverrides, parseDocument, type AnalysedIndex, type AnalysedOverride } from 'indexwright';
+import { adminLister, AdminError, listLiveFields, listLiveIndexes, type IndexLister } from './admin.js';
 import { canonicalTarget, REQUIRE_IDENTITY, render, type CheckCommand } from './args.js';
 import { parseBaseline } from './baseline.js';
 import { messageOf } from './client.js';
 import { mergeCorpora, parseCorpus } from './corpus.js';
+import { liveSingleFieldIndexes, reconcileOverrides, type LiveField, type OverrideReconciliation } from './overrides.js';
 import { isReportable, isTransient, ReadinessGate, DEFAULT_SETTLE_MS, type Readiness } from './readiness.js';
 import { isVouched, reconcile, type LiveCompositeIndex, type Reconciliation } from './reconcile.js';
 import { planReplay, ReplayError, type ReplayPlan } from './synthesise.js';
@@ -145,8 +147,11 @@ export async function check(
   // the least — so a mistyped path or an unreplayable corpus should be found on the near side of
   // that wait rather than the far side.
   let candidate: AnalysedIndex[];
+  let overrides: AnalysedOverride[];
   try {
-    candidate = analyse(parseDocument(readFile(command.indexes)));
+    const document = parseDocument(readFile(command.indexes));
+    candidate = analyse(document);
+    overrides = analyseOverrides(document);
   } catch (error) {
     say(`could not read the candidate indexes at ${render(command.indexes)}: ${detail(error)}`);
     return 2;
@@ -305,7 +310,7 @@ export async function check(
     }
   }
 
-  let live: readonly LiveCompositeIndex[];
+  let live: Listing;
   try {
     live = await establishReadiness(target, command.project, say, {
       lister: options.lister ?? adminLister,
@@ -323,14 +328,15 @@ export async function check(
     throw error;
   }
 
-  const reconciliation = reconcile(candidate, live);
-  if (!isVouched(reconciliation)) {
+  const reconciliation = reconcileBoth(candidate, overrides, live);
+  if (!isVouchedBoth(reconciliation)) {
     reportDivergence(reconciliation, command.indexes, say);
     return 2;
   }
   say(
-    `${count(live.length, 'index', 'indexes')} on the target, and the candidate set at ` +
-      `${render(command.indexes)} is the set that is there`,
+    `${count(live.indexes.length, 'index', 'indexes')} and ` +
+      `${count(reconciliation.overrides.matched.length, 'field override', 'field overrides')} on the target, ` +
+      `and the candidate set at ${render(command.indexes)} is the set that is there`,
   );
 
   let replayer: Replayer;
@@ -404,9 +410,9 @@ export async function check(
   // line that was never printed.
   reportUnanswered(invalid, halted, say);
 
-  let held: Reconciliation;
+  let held: Both;
   try {
-    held = await confirmSetHeld(target, command.project, candidate, say, {
+    held = await confirmSetHeld(target, command.project, candidate, overrides, say, {
       lister: options.lister ?? adminLister,
     });
   } catch (error) {
@@ -417,7 +423,7 @@ export async function check(
     say(`cannot report: the target could not be listed again after replay: ${error.message}`);
     return 2;
   }
-  if (!isVouched(held)) {
+  if (!isVouchedBoth(held)) {
     reportDivergence(held, command.indexes, say, withdrawal(held));
     return 2;
   }
@@ -426,7 +432,8 @@ export async function check(
 }
 
 /**
- * List once more, after the last query has been answered, and reconcile again.
+ * List once more, after the last query has been answered, and reconcile again — both listings,
+ * since an override added or removed mid-run moves the set as surely as a composite does.
  *
  * The verb is check-then-act, and this is the only thing that notices when the act happened against
  * something else. A set that moved mid-run fails in both directions: an index removed makes the
@@ -456,15 +463,57 @@ async function confirmSetHeld(
   target: string,
   project: string,
   candidate: readonly AnalysedIndex[],
+  overrides: readonly AnalysedOverride[],
   say: (text: string) => void,
   deps: { lister(project: string): Promise<IndexLister> },
-): Promise<Reconciliation> {
+): Promise<Both> {
   const lister = await deps.lister(project);
   try {
-    return reconcile(candidate, await listLiveIndexes(target, lister));
+    return reconcileBoth(candidate, overrides, await listBoth(target, lister));
   } finally {
     await release('index lister', lister, say);
   }
+}
+
+/** The two listings that together are the index set: composites, and the fields carrying an override. */
+interface Listing {
+  readonly indexes: readonly LiveCompositeIndex[];
+  readonly fields: readonly LiveField[];
+}
+
+/**
+ * Both listings, one after the other on the same client.
+ *
+ * They are two calls and not one observation, and nothing here pretends otherwise. What bounds the
+ * gap is the gate: the pair is observed together, the fingerprint covers both, and a set that moved
+ * between the two calls reads as a set that moved between two polls, which starts the settling
+ * period again.
+ */
+async function listBoth(target: string, lister: IndexLister): Promise<Listing> {
+  const indexes = await listLiveIndexes(target, lister);
+  const fields = await listLiveFields(target, lister);
+  return { indexes, fields };
+}
+
+/** The two reconciliations, which are vouched for together or not at all. */
+interface Both {
+  readonly indexes: Reconciliation;
+  readonly overrides: OverrideReconciliation;
+}
+
+function reconcileBoth(
+  candidate: readonly AnalysedIndex[],
+  overrides: readonly AnalysedOverride[],
+  live: Listing,
+): Both {
+  return {
+    indexes: reconcile(candidate, live.indexes),
+    overrides: reconcileOverrides(overrides, live.fields),
+  };
+}
+
+function isVouchedBoth(both: Both): boolean {
+  return isVouched(both.indexes) && isVouched(both.overrides);
 }
 
 /** A verdict the gate reached that waiting cannot change, carried out of the poll as a message. */
@@ -495,7 +544,7 @@ async function establishReadiness(
   project: string,
   say: (text: string) => void,
   deps: ReadinessDeps,
-): Promise<readonly LiveCompositeIndex[]> {
+): Promise<Listing> {
   // Constructed before the client, not after: `ReadinessGate` rejects a `settleMs` it cannot use,
   // and a throw between building the lister and entering the `try` below is one nothing would close.
   const gate = new ReadinessGate(deps.settleMs);
@@ -508,8 +557,14 @@ async function establishReadiness(
   let last: string | undefined;
   try {
     for (;;) {
-      const live = await listLiveIndexes(target, lister);
-      const verdict = gate.observe(live, deps.now());
+      const live = await listBoth(target, lister);
+      // The single-field indexes go through the gate beside the composites: an override builds
+      // like a composite index and reports the same `state` while it does, so one applied moments
+      // before a run is the readiness window SPEC §3 guards against, by the other listing.
+      const verdict = gate.observe(
+        [...live.indexes, ...liveSingleFieldIndexes(live.fields)],
+        deps.now(),
+      );
       if (isReportable(verdict)) return live;
       if (!isTransient(verdict)) throw new Declined(describe(verdict));
       const waited = deps.now() - started;
@@ -585,19 +640,37 @@ function describe(verdict: Readiness): string {
  * back clean.
  */
 function reportDivergence(
-  reconciliation: Reconciliation,
+  both: Both,
   indexesPath: string,
   say: (text: string) => void,
   lead = `cannot report: the target does not hold the candidate index set at ${render(indexesPath)}`,
 ): void {
   say(lead);
-  for (const index of reconciliation.missing) say(`  declared but not on the target: ${render(index.key)}`);
-  for (const index of reconciliation.extra) say(`  on the target but not declared: ${render(index.key)}`);
-  for (const index of reconciliation.unreadable) {
+  // Composites first, then overrides, each half in the same four orders; the noun says which half
+  // a line is about, since a composite key and an override key are not told apart by shape.
+  const { indexes, overrides } = both;
+  for (const index of indexes.missing) say(`  declared but not on the target: ${render(index.key)}`);
+  for (const index of indexes.extra) say(`  on the target but not declared: ${render(index.key)}`);
+  for (const index of indexes.unreadable) {
     say(`  could not be read (${index.reason}): ${render(index.name)} — ${render(index.detail)}`);
   }
-  for (const index of reconciliation.incomparable) {
+  for (const index of indexes.incomparable) {
     say(`  declared in terms this version cannot compare (${index.reason}): ${render(index.key)}`);
+  }
+  for (const override of overrides.missing) {
+    say(`  field override declared but not on the target: ${render(override.key)}`);
+  }
+  for (const override of overrides.extra) {
+    say(`  field override on the target but not declared: ${render(override.key)}`);
+  }
+  for (const field of overrides.unreadable) {
+    say(`  field could not be read (${field.reason}): ${render(field.name)} — ${render(field.detail)}`);
+  }
+  for (const override of overrides.incomparable) {
+    say(
+      `  field override declared in terms this version cannot compare (${override.reason}): ` +
+        render(override.key),
+    );
   }
 }
 
@@ -639,15 +712,32 @@ function reportUnanswered(
  * `incomparable` is deliberately not consulted: it is derived from the candidate declarations, which
  * are the same array both times, so the first reconciliation would have declined on it long before
  * this is reached.
+ *
+ * Both halves are asked, and the softer lead needs both to say so: an override that changed while
+ * a composite could not be read is a change, and the one line must not understate it.
  */
-function withdrawal(held: Reconciliation): string {
+function withdrawal(held: Both): string {
   const explained =
-    held.unreadable.length > 0 &&
-    held.extra.length === 0 &&
-    held.missing.length <= held.unreadable.length;
+    held.indexes.unreadable.length + held.overrides.unreadable.length > 0 &&
+    explainedByUnreadability(held.indexes) &&
+    explainedByUnreadability(held.overrides);
   return explained
     ? 'cannot report: the index set could not be compared again after the queries were answered'
     : 'cannot report: the index set changed while the queries were being answered';
+}
+
+/**
+ * Whether one half's disagreement is wholly accounted for by entries that could not be read. A
+ * half with nothing unreadable and nothing missing or extra is not "explained" — it did not
+ * disagree — and it is the other half that then decides the lead.
+ */
+function explainedByUnreadability(half: {
+  readonly unreadable: readonly unknown[];
+  readonly extra: readonly unknown[];
+  readonly missing: readonly unknown[];
+}): boolean {
+  if (half.unreadable.length === 0) return half.extra.length === 0 && half.missing.length === 0;
+  return half.extra.length === 0 && half.missing.length <= half.unreadable.length;
 }
 
 /**

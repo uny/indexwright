@@ -52,6 +52,45 @@ const READY = [
   },
 ];
 
+/**
+ * The field listing a standard database returns with no override applied: `__default__/*` alone,
+ * holding the three defaults. What `listLiveFields` yields against a bare target, and what a fake
+ * that never declares an override should yield too, so the default check runs on every test.
+ */
+const DEFAULT_FIELD = {
+  name: 'projects/indexwright-probe/databases/(default)/collectionGroups/__default__/fields/*',
+  indexConfig: {
+    indexes: [
+      { queryScope: 'COLLECTION', fields: [{ fieldPath: '*', order: 'ASCENDING' }], state: 'READY' },
+      { queryScope: 'COLLECTION', fields: [{ fieldPath: '*', order: 'DESCENDING' }], state: 'READY' },
+      { queryScope: 'COLLECTION', fields: [{ fieldPath: '*', arrayConfig: 'CONTAINS' }], state: 'READY' },
+    ],
+  },
+};
+const NO_OVERRIDES = [DEFAULT_FIELD];
+
+/** A live override on `orders.tags`, at collection-group scope, in the state given. */
+const tagsOverride = (state = 'READY') => ({
+  name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/fields/tags',
+  indexConfig: {
+    indexes: [{ queryScope: 'COLLECTION_GROUP', fields: [{ fieldPath: 'tags', arrayConfig: 'CONTAINS' }], state }],
+    usesAncestorConfig: false,
+  },
+});
+/** The declaration `tagsOverride()` reconciles as identical to, beside `DECLARED`'s composite. */
+const DECLARED_WITH_OVERRIDE = {
+  ...DECLARED,
+  fieldOverrides: [
+    { collectionGroup: 'orders', fieldPath: 'tags', indexes: [{ queryScope: 'COLLECTION_GROUP', arrayConfig: 'CONTAINS' }] },
+  ],
+};
+
+/** A lister fake yielding `indexes` and `fields`, for the tests that hand `harness` a lister of their own. */
+const listing = (indexes, fields = NO_OVERRIDES) => ({
+  listIndexesAsync: () => (async function* () { for (const index of indexes) yield index; })(),
+  listFieldsAsync: () => (async function* () { for (const field of fields) yield field; })(),
+});
+
 const equals = (fieldPath) => ({ fieldPath, op: 'EQUAL' });
 
 function corpusOf(...wheres) {
@@ -101,7 +140,7 @@ function keyOf(field) {
   }).key;
 }
 
-function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, corpora, declared = DECLARED, baseline, requireIdentity = false, ...rest } = {}) {
+function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses = [], corpus = ONE_QUERY, corpora, declared = DECLARED, baseline, requireIdentity = false, ...rest } = {}) {
   // `corpora` names several parts as `{ path: text }`; `corpus` is the one-part shorthand every test
   // written before issue #56 uses, and is the same thing with one entry under the default path.
   const files = corpora ?? { [COMMAND.corpus[0]]: corpus };
@@ -112,6 +151,8 @@ function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, corpor
   const slept = [];
   let clock = 0;
   const queue = [...listings];
+  // The field listing, queued the same way: each poll takes one, and the last repeats.
+  const fieldQueue = [...fieldListings];
   const outcomes = [...statuses];
 
   const options = {
@@ -133,6 +174,13 @@ function harness({ listings = [READY], statuses = [], corpus = ONE_QUERY, corpor
         if (live instanceof Error) throw live;
         return (async function* () {
           for (const index of live) yield index;
+        })();
+      },
+      listFieldsAsync() {
+        const live = fieldQueue.length > 1 ? fieldQueue.shift() : fieldQueue[0];
+        if (live instanceof Error) throw live;
+        return (async function* () {
+          for (const field of live) yield field;
         })();
       },
       close: async () => {
@@ -517,9 +565,7 @@ test('a client that will not close does not replace the answer the run reached',
   const damaged = { ...READY[0], state: 'NEEDS_REPAIR' };
   const declining = harness({
     lister: async () => ({
-      listIndexesAsync: () => (async function* () {
-        yield damaged;
-      })(),
+      ...listing([damaged]),
       close: async () => {
         throw new Error('the channel would not close');
       },
@@ -590,12 +636,7 @@ test('a confirmation that could not be made is not a confirmation', async () => 
     lister: async () => {
       built += 1;
       if (built > 1) throw new AdminError('the listing call was refused');
-      return {
-        listIndexesAsync: () => (async function* () {
-          for (const index of READY) yield index;
-        })(),
-        close: async () => {},
-      };
+      return { ...listing(READY), close: async () => {} };
     },
   });
   assert.equal(await h.run(), 2);
@@ -670,6 +711,138 @@ test('a set that could not be compared again is not reported as a set that chang
   assert.match(alsoAdded.said(), /could not be read \(fields-missing\)/);
 });
 
+test('a declared override the target holds is vouched for beside the composites, and counted', async () => {
+  const h = harness({ declared: DECLARED_WITH_OVERRIDE, fieldListings: [[DEFAULT_FIELD, tagsOverride()]] });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /1 index and 1 field override on the target, and the candidate set/);
+  assert.equal(h.replayed.length, 1);
+});
+
+test('a target carrying an override the file does not declare is not replayed against', async () => {
+  // The quiet direction of issue #53: an undeclared `COLLECTION_GROUP` override serves a
+  // collection-group query the candidate set alone would fail, so the run would come back clean.
+  const h = harness({ fieldListings: [[DEFAULT_FIELD, tagsOverride()]] });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /cannot report: the target does not hold the candidate index set/);
+  assert.match(h.said(), /field override on the target but not declared: "orders::tags::COLLECTION_GROUP:CONTAINS"/);
+  assert.equal(h.replayed.length, 0);
+
+  // And the other direction: the file declares one the target does not hold, which is the false
+  // `FAILED_PRECONDITION` §2 forbids acting on, arriving by the single-field route.
+  const missing = harness({ declared: DECLARED_WITH_OVERRIDE });
+  assert.equal(await missing.run(), 2);
+  assert.match(missing.said(), /field override declared but not on the target: "orders::tags::COLLECTION_GROUP:CONTAINS"/);
+  assert.equal(missing.replayed.length, 0);
+});
+
+test('an override still building is waited on, like a composite index', async () => {
+  const h = harness({
+    declared: DECLARED_WITH_OVERRIDE,
+    fieldListings: [[DEFAULT_FIELD, tagsOverride('CREATING')], [DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()]],
+  });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /waiting: 1 index still building: ".*\/fields\/tags#COLLECTION_GROUP:CONTAINS"/);
+});
+
+test('a declared override this version cannot compare declines the run, and the line names it', async () => {
+  // `reconcileOverrides` refuses the declaration; this pins the line `check` prints for it, which
+  // no other test reaches — every other override outcome has a line of its own above.
+  const dense = {
+    ...DECLARED,
+    fieldOverrides: [
+      { collectionGroup: 'orders', fieldPath: 'tags', indexes: [{ queryScope: 'COLLECTION_GROUP', arrayConfig: 'CONTAINS', density: 'DENSE' }] },
+    ],
+  };
+  const h = harness({ declared: dense, fieldListings: [[DEFAULT_FIELD, tagsOverride()]] });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /field override declared in terms this version cannot compare \(density-unrecognised\): "orders::tags::COLLECTION_GROUP:CONTAINS"/);
+  assert.equal(h.replayed.length, 0);
+});
+
+test('an exemption arriving between two polls restarts the settling period', async () => {
+  // An exemption has no nested index and so no name of its own in the gate's fingerprint unless
+  // one is made for it; without one, a set that gained an exemption between two polls reads as a
+  // set that held still, and replay starts against a configuration that just moved.
+  const bodyExempt = {
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/fields/body',
+    indexConfig: { indexes: [], usesAncestorConfig: false },
+  };
+  const declared = { ...DECLARED, fieldOverrides: [{ collectionGroup: 'orders', fieldPath: 'body', indexes: [] }] };
+  const h = harness({ declared, fieldListings: [NO_OVERRIDES, [DEFAULT_FIELD, bodyExempt], [DEFAULT_FIELD, bodyExempt]] });
+  assert.equal(await h.run(), 0);
+  assert.deepEqual(h.slept, [DEFAULT_SETTLE_MS, DEFAULT_SETTLE_MS]);
+});
+
+test('a field still reverting is waited on before replay, and withdraws the report after it', async () => {
+  const reverting = { ...tagsOverride(), indexConfig: { ...tagsOverride().indexConfig, reverting: true } };
+  const waited = harness({
+    declared: DECLARED_WITH_OVERRIDE,
+    fieldListings: [[DEFAULT_FIELD, reverting], [DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()]],
+  });
+  assert.equal(await waited.run(), 0);
+  assert.match(waited.said(), /waiting: 1 index still building: ".*\/fields\/tags#reverting"/);
+
+  const moved = harness({
+    declared: DECLARED_WITH_OVERRIDE,
+    fieldListings: [[DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, reverting]],
+  });
+  assert.equal(await moved.run(), 2);
+  assert.match(moved.said(), /field could not be read \(reverting\)/);
+});
+
+test('a default field that is not the default declines the run, because the override model assumes it', async () => {
+  const changed = {
+    ...DEFAULT_FIELD,
+    indexConfig: { indexes: DEFAULT_FIELD.indexConfig.indexes.slice(0, 2) },
+  };
+  const h = harness({ fieldListings: [[changed]] });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /field could not be read \(default-changed\): ".*__default__\/fields\/\*" — "COLLECTION:ASCENDING\|COLLECTION:DESCENDING"/);
+  assert.equal(h.replayed.length, 0);
+});
+
+test('a field listing that failed is not a listing, and readiness is not established on the other half', async () => {
+  const h = harness({ fieldListings: [new AdminError('could not list the fields of projects/indexwright-probe: denied')] });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /readiness could not be established: could not list the fields/);
+  assert.equal(h.replayed.length, 0);
+});
+
+test('an override that changed while the queries were answered withdraws the report', async () => {
+  // The second listing re-lists fields too: an override added or removed mid-run is the same
+  // window as a composite one, and issue #53 names it as the half the confirmation did not see.
+  const added = harness({ fieldListings: [NO_OVERRIDES, NO_OVERRIDES, [DEFAULT_FIELD, tagsOverride()]] });
+  assert.equal(await added.run(), 2);
+  assert.match(added.said(), /the index set changed while the queries were being answered/);
+  assert.match(added.said(), /field override on the target but not declared:/);
+
+  const removed = harness({
+    declared: DECLARED_WITH_OVERRIDE,
+    fieldListings: [[DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()], NO_OVERRIDES],
+  });
+  assert.equal(await removed.run(), 2);
+  assert.match(removed.said(), /the index set changed while the queries were being answered/);
+  assert.match(removed.said(), /field override declared but not on the target:/);
+
+  // A field that could not be read the second time is the softer lead, as for a composite — and
+  // only when nothing else in either half says the set moved.
+  const unreadable = harness({
+    declared: DECLARED_WITH_OVERRIDE,
+    fieldListings: [[DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, { name: 'nonsense' }]],
+  });
+  assert.equal(await unreadable.run(), 2);
+  assert.match(unreadable.said(), /the index set could not be compared again after the queries were answered/);
+  assert.match(unreadable.said(), /field could not be read \(name-unparseable\)/);
+
+  const unreadableBesideAChange = harness({
+    declared: DECLARED_WITH_OVERRIDE,
+    listings: [READY, READY, []],
+    fieldListings: [[DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, { name: 'nonsense' }]],
+  });
+  assert.equal(await unreadableBesideAChange.run(), 2);
+  assert.match(unreadableBesideAChange.said(), /the index set changed while the queries were being answered/);
+});
+
 test('the confirmation lister is released when the second listing is refused, not only when it is built', async () => {
   // The realistic refusal is PERMISSION_DENIED at list time, which `listLiveIndexes` wraps — and by
   // then the client exists. Pinned separately because the factory-throws case never reaches the
@@ -688,14 +861,7 @@ test('the lister is closed before the replay client is built, so one channel is 
       // Pushed only from the second construction on, so the list reads as the sequence the test is
       // about rather than opening with a step the original invariant never had.
       if (order.length > 0) order.push('lister built');
-      return {
-        listIndexesAsync() {
-          return (async function* () {
-            for (const index of READY) yield index;
-          })();
-        },
-        close: async () => order.push('lister closed'),
-      };
+      return { ...listing(READY), close: async () => order.push('lister closed') };
     },
     replayer: async () => {
       order.push('replayer built');
@@ -770,6 +936,7 @@ test('a run that has reported lets the process exit', async () => {
       sleep: async () => {},
       lister: async () => ({
         listIndexesAsync: () => (async function* () { for (const i of live) yield i; })(),
+        listFieldsAsync: () => (async function* () {})(),
         close: holding(),
       }),
       replayer: async () => ({ run: async () => ({ kind: 'served' }), close: holding() }),

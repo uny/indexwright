@@ -1,0 +1,260 @@
+{
+  "note": "The field overrides of one collection group, as three different tools report them, beside the database default. First observed 2026-09-20 against a standard Firestore-native database, for issue #53. Verbatim except for the project id, which is the placeholder `demo-fixtures`. Regenerate with `scripts/capture-live-fields.mjs`, which records under `source` how each rendering was read back and which configurations the database refused; `note` and `observations` are the parts it leaves to a maintainer.",
+  "source": {
+    "project": "demo-fixtures (placeholder; the observation was made against a disposable project)",
+    "database": "(default)",
+    "edition": "STANDARD, FIRESTORE_NATIVE (from `gcloud firestore databases describe`)",
+    "observed": "2026-09-20",
+    "script": "packages/record/scripts/capture-live-fields.mjs",
+    "versions": {
+      "@google-cloud/firestore": "9.0.0",
+      "@google-cloud/firestore-api": "0.2.0",
+      "gcloud": "583.0.0",
+      "firebase": "15.7.0"
+    },
+    "configured": {
+      "tags": "already listed before this run, not configured by it; assumed configured as: v1.FirestoreAdminClient.updateField({\"field\":{\"name\":\"projects/demo-fixtures/databases/(default)/collectionGroups/probe_fields/fields/tags\",\"indexConfig\":{\"indexes\":[{\"queryScope\":\"COLLECTION_GROUP\",\"fields\":[{\"fieldPath\":\"tags\",\"arrayConfig\":\"CONTAINS\"}]},{\"queryScope\":\"COLLECTION\",\"fields\":[{\"fieldPath\":\"tags\",\"order\":\"ASCENDING\"}]}]}},\"updateMask\":{\"paths\":[\"index_config\"]}})",
+      "body": "already listed before this run, not configured by it; assumed configured as: gcloud firestore indexes fields update body --collection-group=probe_fields --disable-indexes --project demo-fixtures --database '(default)'"
+    },
+    "refusals": {
+      "ttl": {
+        "command": "gcloud firestore fields ttls update expiresAt --collection-group=probe_fields --enable-ttl --project demo-fixtures --database '(default)' --async",
+        "stderr": "ERROR: (gcloud.firestore.fields.ttls.update) PERMISSION_DENIED: Project demo-fixtures has billing disabled. Please enable it."
+      }
+    },
+    "readBack": {
+      "liveByAdminClient": "v1.FirestoreAdminClient.listFieldsAsync({ parent: 'projects/demo-fixtures/databases/(default)/collectionGroups/-', filter: 'indexConfig.usesAncestorConfig=false OR ttlConfig:*' }, { autoPaginate: false }), constructed with and without `fallback: true`; the two listings were compared equal",
+      "liveByGcloud": "gcloud firestore indexes fields list --format=json --project demo-fixtures --database '(default)'",
+      "declarationByFirebaseCli": "firebase firestore:indexes --project demo-fixtures --database '(default)'"
+    }
+  },
+  "observations": {
+    "defaultIsListedUnderTheFilter": "The filter `indexConfig.usesAncestorConfig=false OR ttlConfig:*` returns `__default__/*` beside the overrides: it owns its configuration by definition, so the first half of the filter admits it. It holds exactly ASCENDING, DESCENDING and CONTAINS at COLLECTION scope, which is the set `overrides.ts` checks it against. This is the observation the `default-changed` refusal and the by-name exclusion rest on.",
+    "exemptionArrivesWithNoIndexes": "The exempted field `body` lists with `indexes: []` through the admin client and with no `indexes` key at all through gcloud, `usesAncestorConfig` false (filled in by the client, omitted by gcloud). So an absent set on a field that owns its configuration is an exemption, and `readLiveField` reads it as one. The Firebase CLI exports it as `indexes: []`.",
+    "nestedDensityIsUnspecified": "Every nested index lists `density: DENSITY_UNSPECIFIED` — unlike a composite index, which the same database stamps SPARSE_ALL (see `live-indexes.json`). `COMPARABLE_DENSITIES` has to hold both, and the two fixtures together are why.",
+    "nestedIndexesAreNameless": "A nested index carries `name: \"\"` through the admin client and no `name` through gcloud. The readiness gate keys on names, which is why `liveSingleFieldIndexes` makes one from the field's name and the index's scope and direction.",
+    "collectionGroupScopeNeedsTheApi": "`gcloud firestore indexes fields update --index` accepts `order` and `array-config` only; a `COLLECTION_GROUP` single-field index can be configured through the admin API (`updateField`, recorded under `source.configured.tags`) or the Firebase CLI's deploy. The `snake_case` mask `index_config` was accepted first time.",
+    "ttlNotObserved": "TTL is a billed feature and the disposable project has billing disabled; the refusal is recorded verbatim under `source.refusals.ttl`. So this fixture does not carry a TTL-only field, and the claim `overrides.ts` makes about one — that it lists with `usesAncestorConfig: true` and the inherited set materialised, which is why the CLI's `ttl: true` declaration with the three defaults written out reconciles — rests on the Firebase CLI's source (`src/firestore/api.ts`, which reads `indexConfig.indexes` of every field the filter returns) and not on a listing. Re-observe against a billed project when one is available.",
+    "renderingsDiffer": "Only the admin client fills in the proto3 defaults — `usesAncestorConfig`, `reverting`, `apiScope`, `density`, `name`, `multikey`, `shardCount`, `unique`, and `ttlConfig: null` — and gcloud omits them all, including `usesAncestorConfig: false` on an override. The Firebase CLI writes `ttl: false` explicitly and drops `__default__/*`. `readLiveField` therefore reads an absent `usesAncestorConfig` as ownership, and both renderings reconcile identically against the CLI's declaration (`overrides.test.js`)."
+  },
+  "liveByAdminClient": [
+    {
+      "name": "projects/demo-fixtures/databases/(default)/collectionGroups/__default__/fields/*",
+      "indexConfig": {
+        "indexes": [
+          {
+            "fields": [
+              {
+                "fieldPath": "*",
+                "order": "ASCENDING",
+                "valueMode": "order"
+              }
+            ],
+            "name": "",
+            "queryScope": "COLLECTION",
+            "state": "READY",
+            "apiScope": "ANY_API",
+            "density": "DENSITY_UNSPECIFIED",
+            "multikey": false,
+            "shardCount": 0,
+            "searchIndexOptions": null,
+            "unique": false
+          },
+          {
+            "fields": [
+              {
+                "fieldPath": "*",
+                "order": "DESCENDING",
+                "valueMode": "order"
+              }
+            ],
+            "name": "",
+            "queryScope": "COLLECTION",
+            "state": "READY",
+            "apiScope": "ANY_API",
+            "density": "DENSITY_UNSPECIFIED",
+            "multikey": false,
+            "shardCount": 0,
+            "searchIndexOptions": null,
+            "unique": false
+          },
+          {
+            "fields": [
+              {
+                "fieldPath": "*",
+                "arrayConfig": "CONTAINS",
+                "valueMode": "arrayConfig"
+              }
+            ],
+            "name": "",
+            "queryScope": "COLLECTION",
+            "state": "READY",
+            "apiScope": "ANY_API",
+            "density": "DENSITY_UNSPECIFIED",
+            "multikey": false,
+            "shardCount": 0,
+            "searchIndexOptions": null,
+            "unique": false
+          }
+        ],
+        "usesAncestorConfig": false,
+        "ancestorField": "",
+        "reverting": false
+      },
+      "ttlConfig": null
+    },
+    {
+      "name": "projects/demo-fixtures/databases/(default)/collectionGroups/probe_fields/fields/body",
+      "indexConfig": {
+        "indexes": [],
+        "usesAncestorConfig": false,
+        "ancestorField": "projects/demo-fixtures/databases/(default)/collectionGroups/__default__/fields/*",
+        "reverting": false
+      },
+      "ttlConfig": null
+    },
+    {
+      "name": "projects/demo-fixtures/databases/(default)/collectionGroups/probe_fields/fields/tags",
+      "indexConfig": {
+        "indexes": [
+          {
+            "fields": [
+              {
+                "fieldPath": "tags",
+                "order": "ASCENDING",
+                "valueMode": "order"
+              }
+            ],
+            "name": "",
+            "queryScope": "COLLECTION",
+            "state": "READY",
+            "apiScope": "ANY_API",
+            "density": "DENSITY_UNSPECIFIED",
+            "multikey": false,
+            "shardCount": 0,
+            "searchIndexOptions": null,
+            "unique": false
+          },
+          {
+            "fields": [
+              {
+                "fieldPath": "tags",
+                "arrayConfig": "CONTAINS",
+                "valueMode": "arrayConfig"
+              }
+            ],
+            "name": "",
+            "queryScope": "COLLECTION_GROUP",
+            "state": "READY",
+            "apiScope": "ANY_API",
+            "density": "DENSITY_UNSPECIFIED",
+            "multikey": false,
+            "shardCount": 0,
+            "searchIndexOptions": null,
+            "unique": false
+          }
+        ],
+        "usesAncestorConfig": false,
+        "ancestorField": "projects/demo-fixtures/databases/(default)/collectionGroups/__default__/fields/*",
+        "reverting": false
+      },
+      "ttlConfig": null
+    }
+  ],
+  "liveByGcloud": [
+    {
+      "indexConfig": {
+        "indexes": [
+          {
+            "fields": [
+              {
+                "fieldPath": "*",
+                "order": "ASCENDING"
+              }
+            ],
+            "queryScope": "COLLECTION",
+            "state": "READY"
+          },
+          {
+            "fields": [
+              {
+                "fieldPath": "*",
+                "order": "DESCENDING"
+              }
+            ],
+            "queryScope": "COLLECTION",
+            "state": "READY"
+          },
+          {
+            "fields": [
+              {
+                "arrayConfig": "CONTAINS",
+                "fieldPath": "*"
+              }
+            ],
+            "queryScope": "COLLECTION",
+            "state": "READY"
+          }
+        ]
+      },
+      "name": "projects/demo-fixtures/databases/(default)/collectionGroups/__default__/fields/*"
+    },
+    {
+      "indexConfig": {
+        "ancestorField": "projects/demo-fixtures/databases/(default)/collectionGroups/__default__/fields/*"
+      },
+      "name": "projects/demo-fixtures/databases/(default)/collectionGroups/probe_fields/fields/body"
+    },
+    {
+      "indexConfig": {
+        "ancestorField": "projects/demo-fixtures/databases/(default)/collectionGroups/__default__/fields/*",
+        "indexes": [
+          {
+            "fields": [
+              {
+                "fieldPath": "tags",
+                "order": "ASCENDING"
+              }
+            ],
+            "queryScope": "COLLECTION",
+            "state": "READY"
+          },
+          {
+            "fields": [
+              {
+                "arrayConfig": "CONTAINS",
+                "fieldPath": "tags"
+              }
+            ],
+            "queryScope": "COLLECTION_GROUP",
+            "state": "READY"
+          }
+        ]
+      },
+      "name": "projects/demo-fixtures/databases/(default)/collectionGroups/probe_fields/fields/tags"
+    }
+  ],
+  "declarationByFirebaseCli": [
+    {
+      "collectionGroup": "probe_fields",
+      "fieldPath": "body",
+      "ttl": false,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "probe_fields",
+      "fieldPath": "tags",
+      "ttl": false,
+      "indexes": [
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "arrayConfig": "CONTAINS",
+          "queryScope": "COLLECTION_GROUP"
+        }
+      ]
+    }
+  ]
+}
