@@ -112,9 +112,18 @@ function listenAddTarget(name) {
 /** ListenRequest{ remove_target: id }. */
 const REMOVE_TARGET = Buffer.from([0x18, 0x01]);
 
+/** Poll until `condition` holds. A fixed sleep would assert the scheduler rather than the recorder. */
+async function until(condition, what) {
+  const deadline = Date.now() + 2000;
+  while (!condition()) {
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 /**
- * Open a Listen stream through the proxy and hold it open. `write` sends bytes and resolves once
- * the proxy has had a turn to see them; `finish` ends the request and waits for the response.
+ * Open a Listen stream through the proxy and hold it open. `write` sends bytes and waits until
+ * `expect()` holds on the recorder's side; `finish` ends the request and waits for the response.
  */
 function openListen(address) {
   const client = connect(`http://${address}`);
@@ -133,10 +142,10 @@ function openListen(address) {
     });
   });
   return {
-    write: (bytes) =>
-      new Promise((resolve, reject) => request.write(bytes, (error) => (error ? reject(error) : resolve()))).then(
-        () => new Promise((resolve) => setTimeout(resolve, 20)),
-      ),
+    write: async (bytes, expect) => {
+      await new Promise((resolve, reject) => request.write(bytes, (error) => (error ? reject(error) : resolve())));
+      await until(expect, 'the proxy to see the bytes');
+    },
     finish: () => {
       request.end();
       return closed;
@@ -572,25 +581,26 @@ test('a Listen target is recorded while the stream is still open', async () => {
   const capture = await startCapture({ upstream: upstreamAddress });
   try {
     const stream = openListen(capture.address);
-    await stream.write(frame(listenAddTarget('a collection group query')));
+    await stream.write(frame(listenAddTarget('a collection group query')), () => capture.recorder.observed === 1);
     assert.equal(capture.recorder.shapes.length, 1);
     assert.equal(capture.recorder.shapes[0].key, 'items::COLLECTION_GROUP::AND(sku:EQUAL)::qty:ASCENDING');
     assert.equal(capture.recorder.observed, 1);
 
     // The same target re-sent, as a client does after a reconnect: one key, still.
-    await stream.write(frame(listenAddTarget('a collection group query')));
+    await stream.write(frame(listenAddTarget('a collection group query')), () => capture.recorder.observed === 2);
     assert.equal(capture.recorder.shapes.length, 1);
-    assert.equal(capture.recorder.observed, 2);
 
-    // Control traffic is neither a shape nor a skip.
-    await stream.write(frame(REMOVE_TARGET));
-    assert.equal(capture.recorder.observed, 2);
-    assert.equal(capture.recorder.skips.size, 0);
+    // Control traffic is neither a shape nor a skip. Nothing to wait for, so the next write's
+    // condition is what proves it: if the remove had counted, `observed` would reach 3 too early.
+    await stream.write(frame(REMOVE_TARGET), () => true);
 
     // A second query on the same stream, and the two frames arriving in one write.
-    await stream.write(Buffer.concat([frame(listenAddTarget('no filters and no sort')), frame(REMOVE_TARGET)]));
-    assert.equal(capture.recorder.shapes.length, 2);
+    await stream.write(
+      Buffer.concat([frame(listenAddTarget('no filters and no sort')), frame(REMOVE_TARGET)]),
+      () => capture.recorder.shapes.length === 2,
+    );
     assert.equal(capture.recorder.observed, 3);
+    assert.equal(capture.recorder.skips.size, 0);
 
     await stream.finish();
     assert.equal(capture.recorder.skips.size, 0);
@@ -608,12 +618,10 @@ test('a Listen frame split across writes is read once it completes', async () =>
   try {
     const stream = openListen(capture.address);
     const framed = frame(listenAddTarget('a collection group query'));
-    await stream.write(framed.subarray(0, 3));
+    await stream.write(framed.subarray(0, 3), () => true);
+    await stream.write(framed.subarray(3, 12), () => true);
     assert.equal(capture.recorder.shapes.length, 0);
-    await stream.write(framed.subarray(3, 12));
-    assert.equal(capture.recorder.shapes.length, 0);
-    await stream.write(framed.subarray(12));
-    assert.equal(capture.recorder.shapes.length, 1);
+    await stream.write(framed.subarray(12), () => capture.recorder.shapes.length === 1);
     await stream.finish();
     assert.equal(capture.recorder.skips.size, 0);
   } finally {
@@ -635,7 +643,7 @@ test('a Listen stream that ends mid-frame is counted, and one that ends empty is
     assert.equal(capture.recorder.skips.size, 0);
 
     const truncated = openListen(capture.address);
-    await truncated.write(frame(listenAddTarget('a collection group query')).subarray(0, 9));
+    await truncated.write(frame(listenAddTarget('a collection group query')).subarray(0, 9), () => true);
     await truncated.finish();
     assert.equal(capture.recorder.skips.get('undecodable-message'), 1);
     assert.equal(capture.recorder.shapes.length, 0);

@@ -378,8 +378,8 @@ then discarded without trace would look like coverage:
 | `unsupported-encoding` | a message compressed with something other than gzip or deflate |
 | `undecodable-message` | bytes that did not parse — a defect rather than a boundary |
 
-A corpus written by a release before 0.8.0 may also name `listen-query`, which is how those
-releases counted a snapshot listener. It still reads; nothing writes it now.
+A corpus written by an earlier release may also name `listen-query`, which is how those releases
+counted a snapshot listener. It still reads; nothing writes it now.
 
 One gap is not a skip reason because it is a transport rather than a query: the Firebase **Web
 SDK** talks WebChannel over HTTP/1.1 and carries no gRPC to read. Those requests are forwarded and

@@ -202,7 +202,7 @@ That much is inherent. One further gap is not, and is an implementation gap v0.2
 suite driven through the Firebase Web SDK does not reach a gRPC proxy at all. It narrows what a
 corpus covers without narrowing what it appears to cover, which is why §7 counts it out loud. A
 second gap of the same kind — a query issued as a snapshot listener travels by `Listen` rather than
-`RunQuery` — was closed by record 0.8.0, which reads the query a `Listen` target carries under the
+`RunQuery` — has since been closed: `record` reads the query a `Listen` target carries under the
 same rules as a `RunQuery` (§7).
 
 ## 4. CLI
@@ -833,10 +833,9 @@ the corpus as the same entry a `RunQuery` of that query would — the index requ
 same, so the corpus does not say which of the two carried it — and it is recorded the moment its
 frame is complete rather than when the stream ends, because a listener a suite never detaches has
 a stream that never does. A `remove_target`, or a target that names documents rather than a query,
-is the stream's control traffic and is neither recorded nor counted. Before record 0.8.0 the whole
-stream was counted once as `listen-query`; a corpus committed under those releases still names
-that reason, and a reader accepts it — it is the one member of `skipped` no current recorder
-writes.
+is the stream's control traffic and is neither recorded nor counted. Earlier releases counted the
+whole stream once as `listen-query`; a corpus committed under one of them still names that reason,
+and a reader accepts it — it is the one member of `skipped` no current recorder writes.
 
 Everything else the proxy sees, it counts under one of the reasons below and records nothing:
 

@@ -6,7 +6,7 @@
  * are both field **2**, not 1. Reading them as 1 yields a tree with the right structure and no
  * names at all, which parses cleanly and is silently empty. The `Listen` path is three nested
  * field-2s in a row — `ListenRequest.add_target`, `Target.query`, `QueryTarget.structured_query` —
- * and at every one of those levels field 3 is something else with a different wire type.
+ * and the neighbouring field 3 means something different at each of the first two levels.
  */
 import type {
   CompositeOperator,
