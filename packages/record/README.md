@@ -128,7 +128,10 @@ identified part.
 **The set is checked again after the last query is answered.** Both gates read it once, before the
 first replayed query, so a run vouches for a set at one moment and reports about a window that
 begins there. `check` lists once more at the end and reconciles again; if the set moved, or could
-not be compared again, the run declines with `2` rather than reporting. That second look is strictly
+not be compared again, the run declines with `2` rather than reporting. Reconciliation compares
+declarations, so the same listing is also held against the one the readiness gate settled on: an
+index that regressed to `CREATING` or `NEEDS_REPAIR` mid-run, or one deleted and re-created under a
+new resource name with the same fields, declines the same way. That second look is strictly
 a withdrawal — it examines the index set and not coverage, so it can turn either verdict into a
 decline and neither verdict into the other. On that path the coverage lines and the
 `N queries replayed` summary are not printed at all: there is no report to caveat. The lines naming

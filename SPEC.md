@@ -133,8 +133,11 @@ Firestore connection.
   candidate set does not carry, which is the quiet direction and the one the `extra` half of
   reconciliation exists to catch. The second look is strictly a *withdrawal*: it examines the index
   set and not coverage, so it can turn either verdict into a decline and neither verdict into the
-  other. A confirmation that cannot be made — the second listing refused — is not a confirmation, and
-  declines the same way.
+  other. "Moved" is not only a matter of declarations: an index that regressed from `READY` while the
+  queries were being answered, or one deleted and re-created under a new resource name with the
+  same fields, reconciles as identical and must decline as surely as one removed, since the
+  `FAILED_PRECONDITION` it answered is not a coverage gap. A confirmation that cannot be made — the
+  second listing refused — is not a confirmation, and declines the same way.
 
   This is not an exotic target for it. The database this verb is pointed at is the throwaway one CI
   deploys to, which is exactly where a second job can be deploying while the first is measuring. The
