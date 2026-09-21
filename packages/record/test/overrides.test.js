@@ -29,6 +29,7 @@ const nested = (fieldPath, config, options = {}) => ({
   state: options.state ?? 'READY',
   ...(options.apiScope === undefined ? {} : { apiScope: options.apiScope }),
   ...(options.density === undefined ? {} : { density: options.density }),
+  ...(options.beyond ?? {}),
 });
 const asc = (fieldPath, options) => nested(fieldPath, { order: 'ASCENDING' }, options);
 const desc = (fieldPath, options) => nested(fieldPath, { order: 'DESCENDING' }, options);
@@ -332,6 +333,38 @@ test('an apiScope or density on a nested index is held to the same rule as a com
   assert.equal(reconcileOverrides(candidate, [native]).verdict, 'identical');
 });
 
+test('unique, multikey and shardCount on a nested index are held to the same rule as a composite', () => {
+  // `fields.list` nests the same `Index` proto `indexes.list` returns, and the admin client fills the
+  // three in on every nested index (`test/fixtures/live-fields.json`), so the hole issue #30 names
+  // is reachable here by the same route and closed by the same guard, on both sides.
+  const candidate = declare({ collectionGroup: 'posts', fieldPath: 'a', indexes: [{ queryScope: 'COLLECTION', order: 'ASCENDING' }] });
+  const cases = [
+    [{ unique: true }, 'unique-unrecognised'],
+    [{ multikey: true }, 'multikey-unrecognised'],
+    [{ shardCount: 7 }, 'shard-count-unrecognised'],
+  ];
+  for (const [beyond, reason] of cases) {
+    const observed = reconcileOverrides(candidate, [live('posts', 'a', [asc('a', { beyond })])]);
+    assert.equal(observed.verdict, 'indeterminate', reason);
+    assert.equal(observed.unreadable[0].reason, reason);
+    assert.deepEqual(observed.extra, []);
+
+    const declaredSide = declare({
+      collectionGroup: 'posts',
+      fieldPath: 'a',
+      indexes: [{ queryScope: 'COLLECTION', order: 'ASCENDING', ...beyond }],
+    });
+    const result = reconcileOverrides(declaredSide, [live('posts', 'a', [asc('a')])]);
+    assert.equal(result.verdict, 'indeterminate', reason);
+    assert.equal(result.incomparable[0].reason, reason);
+    assert.deepEqual(result.missing, []);
+    assert.deepEqual(result.extra, []);
+  }
+  // The defaults written out, which is what the admin client returns, are not refused.
+  const atDefaults = live('posts', 'a', [asc('a', { beyond: { unique: false, multikey: false, shardCount: 0 } })]);
+  assert.equal(reconcileOverrides(candidate, [atDefaults]).verdict, 'identical');
+});
+
 test('a declaration setting a density or a non-native apiScope is refused, as the live side is', () => {
   const dense = declare({
     collectionGroup: 'posts',
@@ -401,6 +434,9 @@ test('the unreadable and incomparable reasons are the ones the module can actual
     live('posts', 'a', [asc('b')]),
     live('posts', 'a', [asc('a', { apiScope: 'DATASTORE_MODE_API' })]),
     live('posts', 'a', [asc('a', { density: 'DENSE' })]),
+    live('posts', 'a', [asc('a', { beyond: { unique: true } })]),
+    live('posts', 'a', [asc('a', { beyond: { multikey: true } })]),
+    live('posts', 'a', [asc('a', { beyond: { shardCount: 7 } })]),
     live(DEFAULT_COLLECTION_GROUP, DEFAULT_FIELD_PATH, []),
     live('posts', 'a', [], { reverting: true }),
   ];
@@ -412,6 +448,9 @@ test('the unreadable and incomparable reasons are the ones the module can actual
   const declaredCases = [
     declare({ collectionGroup: 'p', fieldPath: 'a', indexes: [{ queryScope: 'COLLECTION', order: 'ASCENDING', apiScope: 'DATASTORE_MODE_API' }] }),
     declare({ collectionGroup: 'p', fieldPath: 'a', indexes: [{ queryScope: 'COLLECTION', order: 'ASCENDING', density: 'DENSE' }] }),
+    declare({ collectionGroup: 'p', fieldPath: 'a', indexes: [{ queryScope: 'COLLECTION', order: 'ASCENDING', unique: true }] }),
+    declare({ collectionGroup: 'p', fieldPath: 'a', indexes: [{ queryScope: 'COLLECTION', order: 'ASCENDING', multikey: true }] }),
+    declare({ collectionGroup: 'p', fieldPath: 'a', indexes: [{ queryScope: 'COLLECTION', order: 'ASCENDING', shardCount: 7 }] }),
     declare({ collectionGroup: 'p', fieldPath: 'a', indexes: [{ queryScope: 'COLLECTION', vectorConfig: { dimension: 'x' } }] }),
   ];
   const refused = new Set();

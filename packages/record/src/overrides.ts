@@ -50,6 +50,7 @@ import type { LiveIndex } from './readiness.js';
 import {
   COMPARABLE_API_SCOPES,
   COMPARABLE_DENSITIES,
+  comparableAsDefault,
   comparableUnder,
   describeField,
   LOSSY_DIRECTIONS,
@@ -71,6 +72,14 @@ export interface LiveSingleFieldIndex {
   readonly queryScope?: string | null;
   readonly apiScope?: string | null;
   readonly density?: string | null;
+  /**
+   * The same `Index` proto `indexes.list` returns, so the same three fields SPEC §5's key cannot
+   * see arrive here too — `test/fixtures/live-fields.json` shows the admin client filling them in on
+   * every nested index — and are refused on the same terms. See `LiveCompositeIndex`.
+   */
+  readonly unique?: boolean | null;
+  readonly multikey?: boolean | null;
+  readonly shardCount?: number | null;
   readonly fields?: readonly IndexField[] | null;
 }
 
@@ -114,6 +123,10 @@ export const FIELD_UNREADABLE_REASONS = [
   'api-scope-unrecognised',
   /** A `density` this version does not compare under. */
   'density-unrecognised',
+  /** `unique`, `multikey`, or `shardCount` set to something other than its default. Issue #30. */
+  'unique-unrecognised',
+  'multikey-unrecognised',
+  'shard-count-unrecognised',
   /** `__default__/*` holds a set other than the three indexes every override is a departure from. */
   'default-changed',
   /**
@@ -129,6 +142,9 @@ export type FieldUnreadableReason = (typeof FIELD_UNREADABLE_REASONS)[number];
 export const OVERRIDE_INCOMPARABLE_REASONS = [
   'api-scope-unrecognised',
   'density-unrecognised',
+  'unique-unrecognised',
+  'multikey-unrecognised',
+  'shard-count-unrecognised',
   /** A declared single-field index whose direction is one `LOSSY_DIRECTIONS` refuses. */
   'field-unreadable',
 ] as const;
@@ -323,6 +339,15 @@ function readLiveField(
     if (!comparableUnder(index.density, COMPARABLE_DENSITIES)) {
       return { name, reason: 'density-unrecognised', detail: String(index.density) };
     }
+    if (!comparableAsDefault(index.unique, false)) {
+      return { name, reason: 'unique-unrecognised', detail: String(index.unique) };
+    }
+    if (!comparableAsDefault(index.multikey, false)) {
+      return { name, reason: 'multikey-unrecognised', detail: String(index.multikey) };
+    }
+    if (!comparableAsDefault(index.shardCount, 0)) {
+      return { name, reason: 'shard-count-unrecognised', detail: String(index.shardCount) };
+    }
     if (typeof index.queryScope !== 'string' || index.queryScope === '') {
       return { name, reason: 'query-scope-missing', detail: String(index.queryScope) };
     }
@@ -400,6 +425,15 @@ function incomparableOverrideReason(
     }
     if (!comparableUnder(index['density'], COMPARABLE_DENSITIES)) {
       return { reason: 'density-unrecognised', detail: String(index['density']) };
+    }
+    if (!comparableAsDefault(index['unique'], false)) {
+      return { reason: 'unique-unrecognised', detail: String(index['unique']) };
+    }
+    if (!comparableAsDefault(index['multikey'], false)) {
+      return { reason: 'multikey-unrecognised', detail: String(index['multikey']) };
+    }
+    if (!comparableAsDefault(index['shardCount'], 0)) {
+      return { reason: 'shard-count-unrecognised', detail: String(index['shardCount']) };
     }
   }
   const lossy = declared.indexes.find((index) => LOSSY_DIRECTIONS.has(index.direction));
