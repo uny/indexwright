@@ -144,3 +144,70 @@ export function* grpcMessages(body: Uint8Array): Generator<{ compressed: boolean
     offset += 5 + length;
   }
 }
+
+/** One gRPC frame, or the report that one was too large to read and was dropped whole. */
+export type Frame = { readonly compressed: boolean; readonly payload: Uint8Array } | { readonly tooLarge: true };
+
+/**
+ * Split gRPC frames off a request stream as its bytes arrive.
+ *
+ * `grpcMessages` reads a body that has ended, which is right for a unary call and wrong for
+ * `Listen`: that stream stays open for as long as the listener does, and a partial frame is its
+ * normal state at every instant rather than an error. Here a frame is yielded the moment its last
+ * byte lands, and only bytes left over at `end` are a fault.
+ *
+ * Bounded per frame, not per stream. A long-lived stream legitimately carries more than any one
+ * message may, so the cap is on what has to be held to read one frame. A frame past the cap is
+ * dropped by exactly its declared length without being buffered, and is reported so that the
+ * caller can count it; the frames after it still read, which is not true of a splitter that gave
+ * up on the stream.
+ */
+export class FrameSplitter {
+  #buffered: Buffer = Buffer.alloc(0);
+  /** Bytes of an oversized frame still to drop before the next header. */
+  #dropping = 0;
+  readonly #maxFrameBytes: number;
+
+  constructor(maxFrameBytes: number) {
+    this.#maxFrameBytes = maxFrameBytes;
+  }
+
+  /** Feed the next chunk and yield every frame it completes. Throws `WireError` on bad framing. */
+  *push(chunk: Uint8Array): Generator<Frame> {
+    let input = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    if (this.#dropping > 0) {
+      const dropped = Math.min(this.#dropping, input.length);
+      this.#dropping -= dropped;
+      input = input.subarray(dropped);
+    }
+    if (input.length === 0) return;
+    this.#buffered = this.#buffered.length === 0 ? input : Buffer.concat([this.#buffered, input]);
+
+    while (this.#buffered.length >= 5) {
+      const flag = this.#buffered[0] as number;
+      if (flag > 1) throw new WireError(`gRPC compressed flag ${flag} is not valid`);
+      const length = this.#buffered.readUInt32BE(1);
+
+      if (length > this.#maxFrameBytes) {
+        const available = this.#buffered.length - 5;
+        const dropped = Math.min(available, length);
+        this.#dropping = length - dropped;
+        this.#buffered = this.#buffered.subarray(5 + dropped);
+        yield { tooLarge: true };
+        continue;
+      }
+
+      if (this.#buffered.length < 5 + length) return;
+      const payload = this.#buffered.subarray(5, 5 + length);
+      this.#buffered = this.#buffered.subarray(5 + length);
+      yield { compressed: flag === 1, payload };
+    }
+  }
+
+  /** The stream has ended. Bytes that never completed a frame are a fault, as in `grpcMessages`. */
+  end(): void {
+    if (this.#buffered.length > 0 || this.#dropping > 0) {
+      throw new WireError('stream ended mid-frame');
+    }
+  }
+}

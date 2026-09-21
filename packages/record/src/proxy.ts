@@ -256,15 +256,21 @@ function proxyStream(
     return;
   }
 
-  if (intent.kind === 'record') {
+  if (intent.kind === 'record' && intent.method === 'RunQuery') {
     collect(
       stream,
       (body) => recorder.recordRunQuery(body, encoding),
       () => recorder.skip('undecodable-message'),
     );
+  } else if (intent.kind === 'record') {
+    // Teed frame by frame rather than collected: a Listen stream stays open for as long as the
+    // listener does, and a target it carries is a query whether or not the stream ever ends.
+    const listen = recorder.recordListen(encoding, MAX_REQUEST_BYTES);
+    stream.on('data', (chunk: Buffer) => listen.push(chunk));
+    stream.on('end', () => listen.end());
   } else if (intent.kind === 'skip') {
-    // Counted once per invocation rather than per message: a Listen stream is one query-bearing
-    // call however many messages it goes on to exchange.
+    // Counted once per invocation rather than per message: one query-bearing call, however many
+    // messages it goes on to exchange.
     recorder.skip(intent.reason);
   }
 
@@ -310,10 +316,10 @@ function proxyStream(
 }
 
 export type Intent =
-  | { readonly kind: 'record' }
+  | { readonly kind: 'record'; readonly method: 'RunQuery' | 'Listen' }
   | {
       readonly kind: 'skip';
-      readonly reason: 'listen-query' | 'partition-query' | 'aggregation-query' | 'unsupported-rpc';
+      readonly reason: 'partition-query' | 'aggregation-query' | 'unsupported-rpc';
     }
   | { readonly kind: 'ignore' };
 
@@ -327,9 +333,9 @@ export function classify(path: string): Intent {
 
   switch (method) {
     case 'RunQuery':
-      return { kind: 'record' };
+      return { kind: 'record', method: 'RunQuery' };
     case 'Listen':
-      return { kind: 'skip', reason: 'listen-query' };
+      return { kind: 'record', method: 'Listen' };
     case 'PartitionQuery':
       return { kind: 'skip', reason: 'partition-query' };
     case 'RunAggregationQuery':

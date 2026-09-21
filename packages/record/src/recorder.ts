@@ -5,10 +5,11 @@
  * be indexed, so it goes to stderr where it helps triage, and the file stays diff-stable (SPEC §7).
  */
 import { gunzipSync, inflateSync } from 'node:zlib';
-import { decodeRunQuery } from './decode.js';
+import { decodeListen, decodeRunQuery } from './decode.js';
+import type { DecodeResult } from './decode.js';
 import { toQueryShape } from './shape.js';
 import type { QueryShape, SkipReason } from './types.js';
-import { grpcMessages, WireError } from './wire.js';
+import { FrameSplitter, grpcMessages, WireError } from './wire.js';
 
 /**
  * Ceiling on what a compressed message may expand to, matching the proxy's cap on an uncompressed
@@ -38,7 +39,11 @@ export class Recorder {
     return this.#skips;
   }
 
-  /** Every request the proxy saw on a query-bearing RPC, recorded or not. */
+  /**
+   * Every query the proxy saw on a query-bearing RPC, recorded or not: `observed` is the recorded
+   * count plus the sum of `skips`. A `Listen` message that carries no query — a `remove_target`,
+   * a documents target — is neither, and does not move it.
+   */
   get observed(): number {
     return this.#observed;
   }
@@ -81,30 +86,79 @@ export class Recorder {
       return;
     }
 
-    for (const message of messages) {
-      let payload = message.payload;
-      if (message.compressed) {
-        const decompress = DECOMPRESSORS.get(encoding);
-        if (decompress === undefined) {
-          this.skip('unsupported-encoding');
-          continue;
-        }
-        try {
-          payload = decompress(payload);
-        } catch {
-          this.skip('undecodable-message');
-          continue;
-        }
-      }
+    for (const message of messages) this.#record(message, encoding, decodeRunQuery);
+  }
 
-      const result = decodeRunQuery(payload);
-      if (!result.ok) {
-        this.skip(result.reason);
-        continue;
+  /**
+   * Record the targets of one `Listen` stream as its request bytes arrive.
+   *
+   * The stream is bidirectional and lives as long as the listener does, so nothing here waits for
+   * it to end: each frame is decoded the moment it is complete, and a target re-sent after a
+   * reconnect collapses onto the same key as any other repeat. An empty stream counts nothing —
+   * unlike a `RunQuery`, a `Listen` with no message yet is a stream that has only just opened.
+   */
+  recordListen(encoding: string, maxFrameBytes: number): { push(chunk: Uint8Array): void; end(): void } {
+    const splitter = new FrameSplitter(maxFrameBytes);
+    // Once the framing is wrong there is no next frame boundary to find; everything after is bytes.
+    let broken = false;
+    const fault = (): void => {
+      broken = true;
+      this.skip('undecodable-message');
+    };
+    return {
+      push: (chunk) => {
+        if (broken) return;
+        try {
+          for (const frame of splitter.push(chunk)) {
+            if ('tooLarge' in frame) this.skip('undecodable-message');
+            else this.#record(frame, encoding, decodeListen);
+          }
+        } catch (error) {
+          if (!(error instanceof WireError)) throw error;
+          fault();
+        }
+      },
+      end: () => {
+        if (broken) return;
+        try {
+          splitter.end();
+        } catch (error) {
+          if (!(error instanceof WireError)) throw error;
+          fault();
+        }
+      },
+    };
+  }
+
+  /** One framed message: undo its compression, decode it, and count what came of that. */
+  #record(
+    message: { readonly compressed: boolean; readonly payload: Uint8Array },
+    encoding: string,
+    decode: (payload: Uint8Array) => DecodeResult | null,
+  ): void {
+    let payload = message.payload;
+    if (message.compressed) {
+      const decompress = DECOMPRESSORS.get(encoding);
+      if (decompress === undefined) {
+        this.skip('unsupported-encoding');
+        return;
       }
-      this.#observed += 1;
-      const shape = toQueryShape(result.query);
-      this.#shapes.set(shape.key, shape);
+      try {
+        payload = decompress(payload);
+      } catch {
+        this.skip('undecodable-message');
+        return;
+      }
     }
+
+    const result = decode(payload);
+    if (result === null) return;
+    if (!result.ok) {
+      this.skip(result.reason);
+      return;
+    }
+    this.#observed += 1;
+    const shape = toQueryShape(result.query);
+    this.#shapes.set(shape.key, shape);
   }
 }
