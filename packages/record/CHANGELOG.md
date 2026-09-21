@@ -5,7 +5,16 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## Unreleased
+## [0.8.0] — 2026-09-21
+
+The release that closes the gap 0.2.0 named on its first day. Coverage was bounded by what reaches
+the proxy as `RunQuery`, and a snapshot listener never does: its query rides on a `Listen` stream,
+which 0.2.0 through 0.7.0 counted once as `listen-query` and recorded nothing from. A suite whose
+only exercise of a collection was `onSnapshot` produced a corpus with no entry for it, and `check`
+then reported coverage it had never measured. This release reads the query each `Listen` target
+carries, under the rules `RunQuery` already had, and without waiting for a stream that may never
+end. The corpus format does not move; the reason `listen-query` is retired from what the recorder
+writes and kept in what it reads.
 
 ### Added
 
@@ -30,6 +39,17 @@ again, by its own `corpusVersion`.
 - `classify` reports `{ kind: 'record', method: 'RunQuery' | 'Listen' }` for a captured method,
   where it reported `{ kind: 'record' }` before.
 - The barrel exports `decodeListen`, `FrameSplitter`, and `Frame`.
+
+### Notes
+
+- **`Listen` and `RunQuery` are one entry.** Decided rather than left open: their index
+  requirements are the same, so the corpus does not say which carried a query, and `corpusVersion`
+  stays at 2. A consumer that needs the distinction is the observation that would reopen it, and
+  it would be a format bump.
+- **The remaining capture gap is the transport.** A suite driven through the Firebase Web SDK
+  talks WebChannel over HTTP/1.1 and carries no gRPC to read; `indexwright-record` still counts
+  those requests on stderr and records nothing. SPEC §3 names it as the one implementation gap
+  left.
 
 ## [0.7.0] — 2026-09-21
 
@@ -851,6 +871,7 @@ First release. Query capture, specified in [SPEC.md](https://github.com/uny/inde
   stderr. Snapshot listeners carry their query over `Listen` and are counted, not recorded.
   Capturing `Listen` is the first extension worth making.
 
+[0.8.0]: https://github.com/uny/indexwright/releases/tag/record-v0.8.0
 [0.7.0]: https://github.com/uny/indexwright/releases/tag/record-v0.7.0
 [0.6.0]: https://github.com/uny/indexwright/releases/tag/record-v0.6.0
 [0.5.0]: https://github.com/uny/indexwright/releases/tag/record-v0.5.0
