@@ -163,7 +163,9 @@ export type Frame = { readonly compressed: boolean; readonly payload: Uint8Array
  * up on the stream.
  */
 export class FrameSplitter {
-  #buffered: Buffer = Buffer.alloc(0);
+  /** Chunks of the frame in progress, joined once per frame rather than once per chunk. */
+  #chunks: Buffer[] = [];
+  #bufferedLength = 0;
   /** Bytes of an oversized frame still to drop before the next header. */
   #dropping = 0;
   readonly #maxFrameBytes: number;
@@ -181,26 +183,51 @@ export class FrameSplitter {
       input = input.subarray(dropped);
     }
     if (input.length === 0) return;
-    this.#buffered = this.#buffered.length === 0 ? input : Buffer.concat([this.#buffered, input]);
+    this.#chunks.push(input);
+    this.#bufferedLength += input.length;
 
-    while (this.#buffered.length >= 5) {
-      const flag = this.#buffered[0] as number;
+    while (this.#bufferedLength >= 5) {
+      const header = this.#take(5);
+      const flag = header[0] as number;
       if (flag > 1) throw new WireError(`gRPC compressed flag ${flag} is not valid`);
-      const length = this.#buffered.readUInt32BE(1);
+      const length = header.readUInt32BE(1);
 
       if (length > this.#maxFrameBytes) {
-        const available = this.#buffered.length - 5;
+        const available = this.#bufferedLength - 5;
         const dropped = Math.min(available, length);
         this.#dropping = length - dropped;
-        this.#buffered = this.#buffered.subarray(5 + dropped);
+        this.#discard(5 + dropped);
         yield { tooLarge: true };
         continue;
       }
 
-      if (this.#buffered.length < 5 + length) return;
-      const payload = this.#buffered.subarray(5, 5 + length);
-      this.#buffered = this.#buffered.subarray(5 + length);
+      if (this.#bufferedLength < 5 + length) return;
+      const payload = this.#take(5 + length).subarray(5);
+      this.#discard(5 + length);
       yield { compressed: flag === 1, payload };
+    }
+  }
+
+  /** The first `count` buffered bytes, joined only if they span more than one chunk. */
+  #take(count: number): Buffer {
+    const first = this.#chunks[0] as Buffer;
+    if (first.length >= count) return first.subarray(0, count);
+    return Buffer.concat(this.#chunks, count);
+  }
+
+  /** Forget the first `count` buffered bytes. */
+  #discard(count: number): void {
+    this.#bufferedLength -= count;
+    let remaining = count;
+    while (remaining > 0) {
+      const first = this.#chunks[0] as Buffer;
+      if (first.length <= remaining) {
+        remaining -= first.length;
+        this.#chunks.shift();
+      } else {
+        this.#chunks[0] = first.subarray(remaining);
+        remaining = 0;
+      }
     }
   }
 
@@ -210,6 +237,6 @@ export class FrameSplitter {
    * second report would count one message twice.
    */
   end(): void {
-    if (this.#buffered.length > 0) throw new WireError('stream ended mid-frame');
+    if (this.#bufferedLength > 0) throw new WireError('stream ended mid-frame');
   }
 }
