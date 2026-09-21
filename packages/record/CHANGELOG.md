@@ -5,7 +5,18 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## Unreleased
+## [0.7.0] — 2026-09-21
+
+The release that closes the half of the index set `check` was not reading. Since 0.5.0 the verb
+has established readiness and reconciled the target against the candidate file, in both directions
+and twice per run — against `collectionGroups.indexes.list` alone. Single-field configuration is a
+different resource, `collectionGroups.fields`, and it decides which replayed queries succeed as
+surely: a collection-group query on one field is served only by an override declaring that scope,
+and an exemption removes the automatic indexes a query with no composite index relies on. This
+release lists it, gates it, and reconciles it, on the canonical override key `indexwright` 0.3.0
+gives each declaration; that dependency is what moves the range. `IndexLister` gains a member, which
+is the one change here that breaks a consumer's fake. `indexwright-record` still captures exactly
+what it captured in 0.2.0.
 
 ### Added
 
@@ -41,8 +52,7 @@ again, by its own `corpusVersion`.
   — or `check` declines on its first poll (`readiness could not be established`, exit 2), since the
   `TypeError` of a missing method is wrapped like any other listing failure. The real client
   satisfies it unchanged. The dependency on
-  `indexwright` moves to `>=0.3.0 <1` with the release, which is where `analyseOverrides` and the
-  override key live; until then the range still names 0.2.0, which lacks them.
+  `indexwright` moves to `>=0.3.0 <1`, which is where `analyseOverrides` and the override key live.
 
 - **`IndexLister` is declared structurally, and no longer names a package this one does not
   control** (issue #40). It was a `Pick` of `@google-cloud/firestore`'s admin client, whose method
@@ -87,6 +97,15 @@ again, by its own `corpusVersion`.
   records verbatim and the fixture's `observations.ttlNotObserved` says out loud. Also read from it:
   a nested index carries `DENSITY_UNSPECIFIED` where a composite carries `SPARSE_ALL`, which is why
   `COMPARABLE_DENSITIES` holds both.
+- **The rules for an inheriting field are read from the Firebase CLI's source, not yet from a
+  listing.** What `check` does with a field that carries a TTL and inherits its indexes — expects
+  the inherited set materialised, accepts the ancestor's `*` as the field's own path there — is
+  what the CLI's `firestore:indexes` reads from the same listing, and the fixture above could not
+  observe it. A wrong expectation there declines every run against a database with a TTL field
+  rather than misreporting one, which is the safe direction; it is the first thing to re-observe
+  when a billed probe is available.
+- **#50 ships open, as it did in 0.6.0.** The second listing now covers both halves, and neither
+  keys on `state`.
 
 ## [0.6.0] — 2026-09-13
 
@@ -806,6 +825,7 @@ First release. Query capture, specified in [SPEC.md](https://github.com/uny/inde
   stderr. Snapshot listeners carry their query over `Listen` and are counted, not recorded.
   Capturing `Listen` is the first extension worth making.
 
+[0.7.0]: https://github.com/uny/indexwright/releases/tag/record-v0.7.0
 [0.6.0]: https://github.com/uny/indexwright/releases/tag/record-v0.6.0
 [0.5.0]: https://github.com/uny/indexwright/releases/tag/record-v0.5.0
 [0.4.0]: https://github.com/uny/indexwright/releases/tag/record-v0.4.0
