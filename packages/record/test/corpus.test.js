@@ -224,6 +224,7 @@ test('listen-query is read as a legacy reason and never written by capture', () 
   // 0.7.0 wrote version 2, so that is the file this actually protects.
   const current = parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"skipped":["listen-query"]}');
   assert.deepEqual(current.skipped, ['listen-query']);
+  assert.deepEqual(mergeCorpora([current, buildCorpus([], ['vector-query'])]).skipped, ['listen-query', 'vector-query']);
   assert.throws(
     () => parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"skipped":["listen-queries"]}'),
     /skipped\[0\] is not a reason this format defines/,
