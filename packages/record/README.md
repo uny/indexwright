@@ -359,11 +359,11 @@ Stripping values does not make a corpus publishable. Field paths are recorded ve
 `members.alice@example.com` is an ordinary way to query a map. A corpus describes your data model
 and earns the access controls of the repository it lives in.
 
-## What it does not capture
-
-A snapshot listener is captured: its query travels over `Listen` rather than `RunQuery`, and is
+A snapshot listener is captured too: its query travels over `Listen` rather than `RunQuery`, and is
 recorded under the same rules the moment its target is added, whether or not the listener is ever
 detached. `onSnapshot` and `get()` on the same query are one entry.
+
+## What it does not capture
 
 Counted in `skipped` and reported on stderr, never dropped silently — a query that was issued and
 then discarded without trace would look like coverage:
