@@ -833,4 +833,57 @@ test('the default written out means what absent means, on either side', () => {
   assert.equal(stringly.verdict, 'indeterminate');
   assert.equal(stringly.unreadable[0].reason, 'unique-unrecognised');
   assert.equal(stringly.unreadable[0].detail, 'false');
+
+  // The numeric default has the same two renderings a coercing check would let through, and neither
+  // is the default: `'0' == 0` and `false == 0` both hold, which is what strict equality is there
+  // to refuse. Loose equality would pass the boolean case above and still fail here.
+  for (const shardCount of ['0', false]) {
+    const coerced = reconcile(analyse({ indexes: [declared] }), [
+      { ...liveFixture.liveByAdminClient, shardCount },
+    ]);
+    assert.equal(coerced.verdict, 'indeterminate', String(shardCount));
+    assert.equal(coerced.unreadable[0].reason, 'shard-count-unrecognised', String(shardCount));
+  }
+
+  // `null` is the nullable spelling of absent, as it is for `apiScope`, and still compares — on
+  // both sides, since SPEC §4 keeps a `null` a file writes out.
+  const nulls = { unique: null, multikey: null, shardCount: null };
+  assert.equal(
+    reconcile(analyse({ indexes: [declared] }), [{ ...liveFixture.liveByAdminClient, ...nulls }])
+      .verdict,
+    'identical',
+  );
+  assert.equal(
+    reconcile(analyse({ indexes: [{ ...declared, ...nulls }] }), [liveFixture.liveByAdminClient])
+      .verdict,
+    'identical',
+  );
+});
+
+test('a MongoDB-compatible index is refused for its scope, not for the multikey that scope permits', () => {
+  // The ordering `readLive` commits to in its comment: `apiScope` before the three, so the reason an
+  // operator reads names what the index is. Every other case sets one field beyond §5 at a time, so
+  // only a live index carrying both can tell the two orders apart.
+  const declared = {
+    collectionGroup: 'probe',
+    queryScope: 'COLLECTION',
+    fields: [
+      { fieldPath: 'x', order: 'ASCENDING' },
+      { fieldPath: 'z', order: 'ASCENDING' },
+    ],
+  };
+  const result = reconcile(analyse({ indexes: [declared] }), [
+    { ...liveFixture.liveByAdminClient, apiScope: 'MONGODB_COMPATIBLE_API', multikey: true },
+  ]);
+  assert.equal(result.verdict, 'indeterminate');
+  assert.deepEqual(result.unreadable, [
+    { name: liveFixture.liveByAdminClient.name, reason: 'api-scope-unrecognised', detail: 'MONGODB_COMPATIBLE_API' },
+  ]);
+
+  const decl = reconcile(
+    analyse({ indexes: [{ ...declared, apiScope: 'MONGODB_COMPATIBLE_API', multikey: true }] }),
+    [liveFixture.liveByAdminClient],
+  );
+  assert.equal(decl.verdict, 'indeterminate');
+  assert.equal(decl.incomparable[0].reason, 'api-scope-unrecognised');
 });

@@ -25,6 +25,12 @@ again, by its own `corpusVersion`.
   `FIELD_UNREADABLE_REASONS` and `OVERRIDE_INCOMPARABLE_REASONS` gain the same three members.
   `LiveCompositeIndex` and `LiveSingleFieldIndex` model the three fields.
 
+### Changed
+
+- `UnreadableReason`, `IncomparableReason`, `FieldUnreadableReason` and `OverrideIncomparableReason`
+  widen by the three members above. An exhaustive `switch` or `Record` over any of them stops
+  compiling until it names them.
+
 ### Notes
 
 - `shardCount` is refused on §3's rule rather than on an observation. Whether a sharded index serves
