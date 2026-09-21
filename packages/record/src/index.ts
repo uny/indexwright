@@ -60,6 +60,8 @@ export {
   isReportable,
   isTransient,
   ReadinessGate,
+  stillHeld,
+  type Held,
   type IndexState,
   type LiveIndex,
   type Readiness,
