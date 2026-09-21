@@ -204,10 +204,12 @@ export class FrameSplitter {
     }
   }
 
-  /** The stream has ended. Bytes that never completed a frame are a fault, as in `grpcMessages`. */
+  /**
+   * The stream has ended. Bytes that never completed a frame are a fault, as in `grpcMessages`.
+   * A frame still being dropped is not: it was already reported when its header was read, and a
+   * second report would count one message twice.
+   */
   end(): void {
-    if (this.#buffered.length > 0 || this.#dropping > 0) {
-      throw new WireError('stream ended mid-frame');
-    }
+    if (this.#buffered.length > 0) throw new WireError('stream ended mid-frame');
   }
 }

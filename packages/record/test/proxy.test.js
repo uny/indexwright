@@ -647,6 +647,17 @@ test('a Listen stream that ends mid-frame is counted, and one that ends empty is
     await truncated.finish();
     assert.equal(capture.recorder.skips.get('undecodable-message'), 1);
     assert.equal(capture.recorder.shapes.length, 0);
+
+    // A frame past the cap is one message, counted once when its header is read — not again when
+    // the stream ends before the declared length has arrived. Only the header is sent: the cap is
+    // on what is declared, not on what the client goes on to deliver.
+    const oversized = openListen(capture.address);
+    const header = Buffer.alloc(5);
+    header.writeUInt32BE(64 * 1024 * 1024, 1);
+    await oversized.write(Buffer.concat([header, Buffer.alloc(16)]), () => capture.recorder.observed === 2);
+    await oversized.finish();
+    assert.equal(capture.recorder.skips.get('undecodable-message'), 2);
+    assert.equal(capture.recorder.observed, 2);
   } finally {
     await capture.close();
     upstream.server.close();

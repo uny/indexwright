@@ -51,9 +51,10 @@ test('bytes left at the end of the stream are a fault, and so is a bad flag', ()
   assert.deepEqual([...partial.push(frame(Buffer.from('x')).subarray(0, 4))], []);
   assert.throws(() => partial.end(), WireError);
 
+  // A frame past the cap was reported when its header was read; ending inside it is not a second fault.
   const dropping = new FrameSplitter(4);
   assert.deepEqual(payloads([...dropping.push(frame(Buffer.alloc(10)).subarray(0, 8))]), ['tooLarge']);
-  assert.throws(() => dropping.end(), WireError);
+  dropping.end();
 
   const flagged = new FrameSplitter(1024);
   assert.throws(() => [...flagged.push(Buffer.from([0x02, 0, 0, 0, 0]))], WireError);
