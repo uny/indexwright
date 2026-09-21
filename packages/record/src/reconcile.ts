@@ -52,38 +52,35 @@ export interface LiveCompositeIndex extends LiveIndex {
    */
   readonly density?: string | null;
   /**
+   * Whether the index enforces uniqueness over its fields.
+   *
+   * Invisible to SPEC §5's key like `density`, and modelled for the same reason: an index that has
+   * it is a different index from the one a declaration without it asks for, so it is refused rather
+   * than matched on the key and vouched for. See `comparableAsDefault`.
+   */
+  readonly unique?: boolean | null;
+  /**
+   * Whether one of the index's paths may traverse an array. Documented as belonging to the
+   * `MONGODB_COMPATIBLE_API` scope, which `COMPARABLE_API_SCOPES` refuses first; refused here as
+   * well, because the only observation is `false` under `ANY_API`, which does not establish that
+   * `true` is unreachable there.
+   */
+  readonly multikey?: boolean | null;
+  /**
+   * How many shards the index is split over.
+   *
+   * Refused when non-zero, on SPEC §3's rule rather than on an observation: whether a sharded index
+   * serves the same queries as an unsharded one is not something this version has measured, and
+   * until it is, declining is what §3 asks for. A listing showing that it does would move this to
+   * comparable. Issue #30.
+   */
+  readonly shardCount?: number | null;
+  /**
    * The index's fields, including the trailing `__name__` a live index carries — which is exactly
    * why the comparison goes through the canonical form of SPEC §5 rather than field-list equality.
    */
   readonly fields?: readonly IndexField[] | null;
 }
-
-// Three fields are deliberately not modelled above, and were observed arriving at their defaults:
-// `unique`, `multikey`, `shardCount`. Written as line comments rather than a doc block because a
-// `/** */` here would attach to `UNREADABLE_REASONS` and ship as its documentation.
-//
-// Each is invisible to §5's key, so an index setting one is matched on a key that cannot see it —
-// the false vouch the `density` refusal exists to prevent, by another route. Unlike `density`, which
-// is refused on the live side by `readLive` and on the declared side by `incomparableReason`, these
-// are refused by neither, so it runs *both* ways: a declaration without `unique` is vouched for by a
-// live index that has it, and a declaration that went out of its way to ask for `unique` is vouched
-// for by a live index that is not one. SPEC §4 keeps unknown keys, so the declared direction is
-// reachable from any `firestore.indexes.json` that names them — on any database kind, including the
-// one below. Closing only the live half would leave that behind, which is the half-a-guard
-// `INCOMPARABLE_REASONS` exists to warn against.
-//
-// That is measured rather than feared: `reconcile.test.js` puts all three through `reconcile` from
-// both sides and pins the vouch each currently produces, so the hole is executable and closing it
-// fails a test rather than passing unnoticed.
-//
-// They are recorded rather than refused because the *live* direction is out of reach on the database
-// kind this version targets: `unique` is rejected at creation outside the Enterprise edition, and a
-// standard native database returns `false`, `false` and `0` — `test/fixtures/live-indexes.json`.
-// `multikey` is documented as belonging to the `MONGODB_COMPATIBLE_API` scope `COMPARABLE_API_SCOPES`
-// already refuses, but the only observation here is `false` under `ANY_API`, which does not
-// establish that `true` is unreachable there. Refusing all three, on both sides, is what would close
-// it, and the live half needs the Enterprise and MongoDB-compatible observations issue #20 could not
-// reach.
 
 export const UNREADABLE_REASONS = [
   /** The resource name did not have the shape the collection group is read out of. */
@@ -96,6 +93,10 @@ export const UNREADABLE_REASONS = [
   'api-scope-unrecognised',
   /** A `density` this version does not compare under. */
   'density-unrecognised',
+  /** `unique`, `multikey`, or `shardCount` set to something other than its default. Issue #30. */
+  'unique-unrecognised',
+  'multikey-unrecognised',
+  'shard-count-unrecognised',
 ] as const;
 
 export type UnreadableReason = (typeof UNREADABLE_REASONS)[number];
@@ -105,13 +106,17 @@ export type UnreadableReason = (typeof UNREADABLE_REASONS)[number];
  *
  * The mirror of `UnreadableReason`, and it exists because refusing only the live side would be
  * half a guard. §5's canonical key is built from the collection group, the query scope, and the
- * fields; a declaration that also sets `density` or a non-native `apiScope` is asking for an index
- * the key cannot describe, and matching it on the key alone vouches for a live index that differs
- * in exactly the respect the declaration went out of its way to state.
+ * fields; a declaration that also sets `density`, a non-native `apiScope`, or one of `unique`,
+ * `multikey`, `shardCount` is asking for an index the key cannot describe, and matching it on the
+ * key alone vouches for a live index that differs in exactly the respect the declaration went out of
+ * its way to state.
  */
 export const INCOMPARABLE_REASONS = [
   'api-scope-unrecognised',
   'density-unrecognised',
+  'unique-unrecognised',
+  'multikey-unrecognised',
+  'shard-count-unrecognised',
   /** A declared field whose direction is one `LOSSY_DIRECTIONS` refuses. */
   'field-unreadable',
 ] as const;
@@ -193,8 +198,9 @@ const RESOURCE_NAME =
  * not a divergence from a Firestore declaration, it is a thing the canonical key of §5 says nothing
  * about, and reporting it as extra would manufacture a disagreement that stops a correct run. The
  * enum holds a third value, `MONGODB_COMPATIBLE_API`, which is refused on the same grounds and
- * carries the same consequence — and incidentally covers `multikey` and `searchIndexOptions`, which
- * the key cannot express either and which the API accepts only under that scope.
+ * carries the same consequence — and covers `searchIndexOptions`, which the key cannot express either
+ * and which the API accepts only under that scope. `multikey` is documented as belonging to that
+ * scope too, and is refused on its own as well; see `LiveCompositeIndex`.
  */
 export const COMPARABLE_API_SCOPES: ReadonlySet<string> = new Set(['ANY_API']);
 
@@ -247,6 +253,22 @@ export const COMPARABLE_DENSITIES: ReadonlySet<string> = new Set([
 export function comparableUnder(value: unknown, comparable: ReadonlySet<string>): boolean {
   if (value === undefined || value === null) return true;
   return typeof value === 'string' && comparable.has(value);
+}
+
+/**
+ * The same rule for a field whose only comparable value is its proto3 default: `unique` and
+ * `multikey` (`false`), `shardCount` (`0`).
+ *
+ * Absent means the default, as above. The default written out means the same thing as absent, and
+ * is what a declaration that spells it out asks for, so it is comparable too. Anything else — `true`,
+ * `7`, and equally a `"false"` or `"0"` that arrived as a string — is a value SPEC §5's key cannot see,
+ * and is refused rather than coerced: a `"true"` read as truthy is the same false vouch the refusal
+ * exists to prevent, and a `"false"` read as falsy is a guess about a rendering this version has not
+ * observed. Strict equality is what makes the check fail closed.
+ */
+export function comparableAsDefault(value: unknown, fallback: boolean | number): boolean {
+  if (value === undefined || value === null) return true;
+  return value === fallback;
 }
 
 /**
@@ -318,6 +340,19 @@ function readLive(live: LiveCompositeIndex): ReadableLive | UnreadableIndex {
     return { name, reason: 'density-unrecognised', detail: String(live.density) };
   }
 
+  // The three the key cannot see and a native-mode listing returns at their defaults (issue #30).
+  // After `apiScope` and `density`, so a MongoDB-compatible index is refused for its scope, which is
+  // the reason that names what it is, rather than for the `multikey` that scope permits.
+  if (!comparableAsDefault(live.unique, false)) {
+    return { name, reason: 'unique-unrecognised', detail: String(live.unique) };
+  }
+  if (!comparableAsDefault(live.multikey, false)) {
+    return { name, reason: 'multikey-unrecognised', detail: String(live.multikey) };
+  }
+  if (!comparableAsDefault(live.shardCount, 0)) {
+    return { name, reason: 'shard-count-unrecognised', detail: String(live.shardCount) };
+  }
+
   const matched = RESOURCE_NAME.exec(name);
   const collectionGroup = matched?.[1];
   if (collectionGroup === undefined) {
@@ -379,7 +414,7 @@ function readLive(live: LiveCompositeIndex): ReadableLive | UnreadableIndex {
  * Whether a declaration sets something this version does not compare under, and which.
  *
  * The declared side of the same guard `readLive` applies to the live side. SPEC §4 passes `density`
- * through unanalysed and ignores unknown keys, so a declaration can carry either of these and still
+ * through unanalysed and ignores unknown keys, so a declaration can carry any of these and still
  * be a valid, lint-clean document — which is exactly why reconciliation has to notice.
  */
 function incomparableReason(
@@ -391,6 +426,18 @@ function incomparableReason(
   }
   if (!comparableUnder(source['density'], COMPARABLE_DENSITIES)) {
     return { reason: 'density-unrecognised', detail: String(source['density']) };
+  }
+  // The declared half of the three `readLive` refuses above, in the same order. Reachable on any
+  // database kind: §4 passes these through, so a lint-clean file naming one reaches here even where
+  // the live side could never carry it.
+  if (!comparableAsDefault(source['unique'], false)) {
+    return { reason: 'unique-unrecognised', detail: String(source['unique']) };
+  }
+  if (!comparableAsDefault(source['multikey'], false)) {
+    return { reason: 'multikey-unrecognised', detail: String(source['multikey']) };
+  }
+  if (!comparableAsDefault(source['shardCount'], 0)) {
+    return { reason: 'shard-count-unrecognised', detail: String(source['shardCount']) };
   }
   // The declared half of `LOSSY_DIRECTIONS`, which `parse.ts` lets through: it validates that
   // `vectorConfig` is an object, not that its `dimension` is a number. Without this the declaration
@@ -467,8 +514,9 @@ function isUnreadable(read: ReadableLive | UnreadableIndex): read is UnreadableI
  * live index they name rather than producing a spurious `missing`.
  *
  * What it compares is exactly §5's key: collection group, query scope, fields. A set that turns on
- * anything else — `density`, a Datastore-mode `apiScope` — is refused on whichever side carries it,
- * rather than matched on the key and vouched for. See `COMPARABLE_DENSITIES`.
+ * anything else — `density`, a Datastore-mode `apiScope`, `unique`, `multikey`, `shardCount` — is
+ * refused on whichever side carries it, rather than matched on the key and vouched for. See
+ * `COMPARABLE_DENSITIES` and `comparableAsDefault`.
  *
  * `live` must be a listing that succeeded. An empty array here means "observed, and empty", exactly
  * as in `ReadinessGate.observe`; passing `[]` for a listing that failed or came back partial would

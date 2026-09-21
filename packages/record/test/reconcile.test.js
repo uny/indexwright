@@ -650,13 +650,19 @@ test('the unreadable reasons are the ones the module can actually produce', () =
     'density-unrecognised',
     'field-unreadable',
     'fields-missing',
+    'multikey-unrecognised',
     'name-unparseable',
     'query-scope-missing',
+    'shard-count-unrecognised',
+    'unique-unrecognised',
   ]);
   assert.deepEqual([...INCOMPARABLE_REASONS].sort(), [
     'api-scope-unrecognised',
     'density-unrecognised',
     'field-unreadable',
+    'multikey-unrecognised',
+    'shard-count-unrecognised',
+    'unique-unrecognised',
   ]);
 });
 
@@ -729,34 +735,26 @@ test('the density a database actually stamps is one this version compares under'
 });
 
 test('the fields a live index carries beyond SPEC §5 arrive at their defaults', () => {
-  // Half of why the hole below does not bite on the database this was observed against: all three
-  // come back at their defaults, so nothing in the recorded listing reaches it. This much really is
-  // a pin on the fixture rather than on the module — it fails when the file is regenerated against
-  // a database that answers differently, which is the only way an observation can change.
+  // Why the refusal below is not reached by the recorded listing: all three come back at their
+  // defaults on the database this was observed against. This much really is a pin on the fixture
+  // rather than on the module — it fails when the file is regenerated against a database that
+  // answers differently, which is the only way an observation can change.
   assert.equal(liveFixture.liveByAdminClient.unique, false);
   assert.equal(liveFixture.liveByAdminClient.multikey, false);
   assert.equal(liveFixture.liveByAdminClient.shardCount, 0);
 });
 
-test('a field beyond SPEC §5 is vouched for from either side, which is the open hole', () => {
-  // The other half, and it is asserted against `reconcile` rather than against the fixture:
-  // `unique`, `multikey` and `shardCount` are invisible to §5's key, so an index setting one is
-  // matched on a key that cannot see it — the same false vouch the `density` refusal exists to
-  // prevent, arriving by a route nothing refuses. The three assertions above cannot catch that; only
-  // feeding the module a contrary set can, and this is that.
+test('a field beyond SPEC §5 is refused from either side rather than vouched for (issue #30)', () => {
+  // `unique`, `multikey` and `shardCount` are invisible to §5's key, so an index setting one would
+  // be matched on a key that cannot see it — the same false vouch the `density` refusal exists to
+  // prevent, and until #30 it arrived by a route nothing refused. The three assertions above cannot
+  // catch that; only feeding the module a contrary set can, and this is that.
   //
   // Both directions, because refusing only one side would be half a guard — the reason
-  // `INCOMPARABLE_REASONS` exists at all. `density` is refused on the live side by `readLive` and on
-  // the declared side by `incomparableReason`; these three are refused by neither, so the false
-  // vouch runs both ways: a non-unique declaration is vouched for by a `unique` live index, and a
-  // declaration that went out of its way to ask for `unique` is vouched for by a live index that is
-  // not one. SPEC §4 keeps unknown keys, so the declared direction is reachable from any
-  // `firestore.indexes.json` that names them.
-  //
-  // So the expectation here is deliberately the *wrong* answer: `identical`, both ways. It is
-  // pinned rather than fixed because refusing the three needs observations issue #20 could not
-  // reach, and pinned rather than left undocumented so that closing the hole announces itself as a
-  // failure here instead of passing silently — on whichever side it gets closed first.
+  // `INCOMPARABLE_REASONS` exists at all. The live side lands in `unreadable` through `readLive`, the
+  // declared side in `incomparable` through `incomparableReason`, and either makes the verdict
+  // `indeterminate`. SPEC §4 keeps unknown keys, so the declared direction is reachable from any
+  // `firestore.indexes.json` that names them, on any database kind.
   const declared = {
     collectionGroup: 'probe',
     queryScope: 'COLLECTION',
@@ -766,24 +764,126 @@ test('a field beyond SPEC §5 is vouched for from either side, which is the open
     ],
   };
 
-  for (const beyond of [{ unique: true }, { multikey: true }, { shardCount: 7 }]) {
+  const cases = [
+    [{ unique: true }, 'unique-unrecognised', 'true'],
+    [{ multikey: true }, 'multikey-unrecognised', 'true'],
+    [{ shardCount: 7 }, 'shard-count-unrecognised', '7'],
+  ];
+  for (const [beyond, reason, detail] of cases) {
     const what = JSON.stringify(beyond);
 
     // Set on the live side, absent from the declaration.
     const live = reconcile(analyse({ indexes: [declared] }), [
       { ...liveFixture.liveByAdminClient, ...beyond },
     ]);
-    assert.equal(live.verdict, 'identical', `live ${what}`);
-    assert.ok(isVouched(live), `live ${what}`);
-    assert.deepEqual(live.unreadable, [], `live ${what}`);
+    assert.equal(live.verdict, 'indeterminate', `live ${what}`);
+    assert.ok(!isVouched(live), `live ${what}`);
+    assert.deepEqual(
+      live.unreadable,
+      [{ name: liveFixture.liveByAdminClient.name, reason, detail }],
+      `live ${what}`,
+    );
+    // Refused, not also extra: an entry the module declined to read is not one it can call
+    // undeclared. The declaration it may or may not be finds nothing to match and is `missing`,
+    // which the verdict already declines to assert anything about.
+    assert.deepEqual(live.extra, [], `live ${what}`);
 
     // Set on the declaration, absent from the live index — the mirror, and the one a live-side-only
     // refusal would leave behind.
     const decl = reconcile(analyse({ indexes: [{ ...declared, ...beyond }] }), [
       liveFixture.liveByAdminClient,
     ]);
-    assert.equal(decl.verdict, 'identical', `declared ${what}`);
-    assert.ok(isVouched(decl), `declared ${what}`);
-    assert.deepEqual(decl.incomparable, [], `declared ${what}`);
+    assert.equal(decl.verdict, 'indeterminate', `declared ${what}`);
+    assert.ok(!isVouched(decl), `declared ${what}`);
+    assert.equal(decl.incomparable.length, 1, `declared ${what}`);
+    assert.equal(decl.incomparable[0].reason, reason, `declared ${what}`);
+    assert.equal(decl.incomparable[0].detail, detail, `declared ${what}`);
+    assert.equal(decl.incomparable[0].key, 'probe::COLLECTION::x:ASCENDING|z:ASCENDING', `declared ${what}`);
+    // Refused, not also missing, and the live index it names is claimed rather than `extra`: the
+    // file asks for it, so telling the operator to delete it would be wrong.
+    assert.deepEqual(decl.missing, [], `declared ${what}`);
+    assert.deepEqual(decl.extra, [], `declared ${what}`);
   }
+});
+
+test('the default written out means what absent means, on either side', () => {
+  // proto3 JSON omits a field at its default, and the admin client fills it back in — the fixture
+  // carries all three at their defaults. A declaration that spells the default out is asking for the
+  // same index as one that does not, so neither side is refused for it.
+  const declared = {
+    collectionGroup: 'probe',
+    queryScope: 'COLLECTION',
+    fields: [
+      { fieldPath: 'x', order: 'ASCENDING' },
+      { fieldPath: 'z', order: 'ASCENDING' },
+    ],
+    unique: false,
+    multikey: false,
+    shardCount: 0,
+  };
+  const result = reconcile(analyse({ indexes: [declared] }), [liveFixture.liveByAdminClient]);
+  assert.equal(result.verdict, 'identical');
+  assert.ok(isVouched(result));
+
+  // The same value as a string is not the default, it is a rendering this version has not observed,
+  // and reading it as one would be a guess on exactly the field the refusal guards.
+  const stringly = reconcile(analyse({ indexes: [declared] }), [
+    { ...liveFixture.liveByAdminClient, unique: 'false' },
+  ]);
+  assert.equal(stringly.verdict, 'indeterminate');
+  assert.equal(stringly.unreadable[0].reason, 'unique-unrecognised');
+  assert.equal(stringly.unreadable[0].detail, 'false');
+
+  // The numeric default has the same two renderings a coercing check would let through, and neither
+  // is the default: `'0' == 0` and `false == 0` both hold, which is what strict equality is there
+  // to refuse. Loose equality would pass the boolean case above and still fail here.
+  for (const shardCount of ['0', false]) {
+    const coerced = reconcile(analyse({ indexes: [declared] }), [
+      { ...liveFixture.liveByAdminClient, shardCount },
+    ]);
+    assert.equal(coerced.verdict, 'indeterminate', String(shardCount));
+    assert.equal(coerced.unreadable[0].reason, 'shard-count-unrecognised', String(shardCount));
+  }
+
+  // `null` is the nullable spelling of absent, as it is for `apiScope`, and still compares — on
+  // both sides, since SPEC §4 keeps a `null` a file writes out.
+  const nulls = { unique: null, multikey: null, shardCount: null };
+  assert.equal(
+    reconcile(analyse({ indexes: [declared] }), [{ ...liveFixture.liveByAdminClient, ...nulls }])
+      .verdict,
+    'identical',
+  );
+  assert.equal(
+    reconcile(analyse({ indexes: [{ ...declared, ...nulls }] }), [liveFixture.liveByAdminClient])
+      .verdict,
+    'identical',
+  );
+});
+
+test('a MongoDB-compatible index is refused for its scope, not for the multikey that scope permits', () => {
+  // The ordering `readLive` commits to in its comment: `apiScope` before the three, so the reason an
+  // operator reads names what the index is. Every other case sets one field beyond §5 at a time, so
+  // only a live index carrying both can tell the two orders apart.
+  const declared = {
+    collectionGroup: 'probe',
+    queryScope: 'COLLECTION',
+    fields: [
+      { fieldPath: 'x', order: 'ASCENDING' },
+      { fieldPath: 'z', order: 'ASCENDING' },
+    ],
+  };
+  const result = reconcile(analyse({ indexes: [declared] }), [
+    { ...liveFixture.liveByAdminClient, apiScope: 'MONGODB_COMPATIBLE_API', multikey: true },
+  ]);
+  assert.equal(result.verdict, 'indeterminate');
+  assert.deepEqual(result.unreadable, [
+    { name: liveFixture.liveByAdminClient.name, reason: 'api-scope-unrecognised', detail: 'MONGODB_COMPATIBLE_API' },
+  ]);
+
+  const decl = reconcile(
+    analyse({ indexes: [{ ...declared, apiScope: 'MONGODB_COMPATIBLE_API', multikey: true }] }),
+    [liveFixture.liveByAdminClient],
+  );
+  assert.equal(decl.verdict, 'indeterminate');
+  assert.equal(decl.incomparable[0].reason, 'api-scope-unrecognised');
 });

@@ -5,6 +5,44 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## [Unreleased]
+
+### Fixed
+
+- **`unique`, `multikey` and `shardCount` are refused rather than vouched for** (issue #30). All
+  three are invisible to SPEC §5's canonical key, and unlike `density` they were refused on neither
+  side of `reconcile`: a live index that had one was matched on a key that could not see it, and so
+  was a declaration that went out of its way to ask for one, so two sets differing in exactly that
+  respect came back `identical` and `check` vouched for them. They now take the route `density`
+  already takes — the live side through `unreadable`, the candidate side through `incomparable`,
+  either making the verdict `indeterminate` — with `unique-unrecognised`, `multikey-unrecognised`
+  and `shard-count-unrecognised` added to `UNREADABLE_REASONS` and `INCOMPARABLE_REASONS`. Absent
+  and the proto3 default written out (`false`, `0`) are comparable, since both mean what a
+  declaration without them means; anything else, including the default arriving as a string, is
+  refused. The same guard is applied to field overrides, which are beyond the issue's text but not
+  its reasoning: `fields.list` nests the same `Index` proto, the admin client fills the three in on
+  every nested index, and refusing them on composite indexes alone would be half a guard.
+  `FIELD_UNREADABLE_REASONS` and `OVERRIDE_INCOMPARABLE_REASONS` gain the same three members.
+  `LiveCompositeIndex` and `LiveSingleFieldIndex` model the three fields.
+
+### Changed
+
+- `UnreadableReason`, `IncomparableReason`, `FieldUnreadableReason` and `OverrideIncomparableReason`
+  widen by the three members above. An exhaustive `switch` or `Record` over any of them stops
+  compiling until it names them.
+
+### Notes
+
+- `shardCount` is refused on §3's rule rather than on an observation. Whether a sharded index serves
+  the same queries as an unsharded one has not been measured; if it does, refusing it manufactures an
+  `indeterminate` for a set that really is the candidate set, and the member should move to
+  comparable. Until a listing shows that, declining is what §3 asks for. On the database kind this
+  release targets the live side always returns `0`, so the refusal is reachable only from a
+  declaration that writes it.
+- The live half is guarded on the model, not measured: the Enterprise and MongoDB-compatible
+  listings issue #20 could not reach are still unobserved. A non-null `searchIndexOptions` under
+  `ANY_API` — the fourth route the fixture notes mention — is not modelled and not refused.
+
 ## [0.8.0] — 2026-09-21
 
 The release that closes the gap 0.2.0 named on its first day. Coverage was bounded by what reaches
