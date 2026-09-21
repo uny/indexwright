@@ -5,7 +5,14 @@ All notable changes to this project are documented here. The format follows
 versioning. Pre-1.0, rule additions and message changes may land in minor releases; the `json`
 output shape is the stable contract.
 
-## Unreleased
+## [0.3.0] — 2026-09-21
+
+The other half of the file. `fieldOverrides` — single-field index configuration — was typed
+`unknown[]` and read by nothing; it is now validated to the same depth as `indexes` and reduced to
+a canonical form, so that `@indexwright/record` 0.7.0 can reconcile a declaration against a live
+field listing on the one key the linter will report on. No rule reads it yet, and nothing about the
+linter's output or exit codes changes. The package also moves inside the repository, to
+`packages/indexwright`, without moving anything about what is published.
 
 ### Added
 
@@ -35,6 +42,15 @@ output shape is the stable contract.
   under `ignore-scripts=true`; that would make the verified tarball and the published one differ in
   exactly the way `verify-package` exists to catch. The spec is linked from the README and is in the
   repository.
+
+### Notes
+
+- **The override key carries no marker telling it from an index key.** `posts::tags::COLLECTION:…`
+  and `posts::COLLECTION::tags:…` are the same shape read by different rules, and a reader that
+  does not know which listing a key came from cannot tell them apart by the string alone. Decided
+  and left as it is for this release: no rule reports an override key yet and the `json` output
+  does not carry one, so adding a marker later would change nothing that is a contract today, while
+  adding one now would fix a spelling nothing has needed.
 
 ## [0.2.0] — 2026-08-10
 
@@ -84,6 +100,7 @@ First release. Static analysis of `firestore.indexes.json`; no network access, n
   `__name__` to the same resource.
 - A provisional JavaScript API, so the rules can run without spawning a process.
 
+[0.3.0]: https://github.com/uny/indexwright/releases/tag/v0.3.0
 [0.2.0]: https://github.com/uny/indexwright/releases/tag/v0.2.0
 [0.1.1]: https://github.com/uny/indexwright/releases/tag/v0.1.1
 [0.1.0]: https://github.com/uny/indexwright/releases/tag/v0.1.0
