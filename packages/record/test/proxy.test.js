@@ -5,7 +5,7 @@ import { connect, createServer as createHttp2Server } from 'node:http2';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import { classify, parseHostPort, startCapture } from '../dist/index.js';
+import { classify, fields, parseHostPort, startCapture } from '../dist/index.js';
 
 const { cases } = JSON.parse(
   readFileSync(fileURLToPath(new URL('fixtures/run-query.json', import.meta.url)), 'utf8'),
@@ -85,6 +85,74 @@ function call(address, path, body) {
   });
 }
 
+/** Encode a length-delimited protobuf field. */
+function delimited(field, payload) {
+  const varint = (value) => {
+    const out = [];
+    let rest = value;
+    do {
+      const byte = rest & 0x7f;
+      rest >>>= 7;
+      out.push(rest > 0 ? byte | 0x80 : byte);
+    } while (rest > 0);
+    return Buffer.from(out);
+  };
+  return Buffer.concat([varint((field << 3) | 2), varint(payload.length), payload]);
+}
+
+/** ListenRequest{ add_target: Target{ query: QueryTarget{ structured_query } } } for a fixture. */
+function listenAddTarget(name) {
+  let structuredQuery = null;
+  // RunQueryRequest.structured_query is field 2.
+  for (const field of fields(fixtureMessage(name))) if (field.number === 2) structuredQuery = Buffer.from(field.value);
+  assert.ok(structuredQuery, `fixture "${name}" carries no structured_query`);
+  return delimited(2, delimited(2, delimited(2, structuredQuery)));
+}
+
+/** ListenRequest{ remove_target: id }. */
+const REMOVE_TARGET = Buffer.from([0x18, 0x01]);
+
+/** Poll until `condition` holds. A fixed sleep would assert the scheduler rather than the recorder. */
+async function until(condition, what) {
+  const deadline = Date.now() + 2000;
+  while (!condition()) {
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/**
+ * Open a Listen stream through the proxy and hold it open. `write` sends bytes and waits until
+ * `expect()` holds on the recorder's side; `finish` ends the request and waits for the response.
+ */
+function openListen(address) {
+  const client = connect(`http://${address}`);
+  const request = client.request({
+    ':method': 'POST',
+    ':path': '/google.firestore.v1.Firestore/Listen',
+    'content-type': 'application/grpc',
+    te: 'trailers',
+  });
+  request.on('data', () => {});
+  const closed = new Promise((resolve, reject) => {
+    request.on('error', reject);
+    request.on('close', () => {
+      client.close();
+      resolve();
+    });
+  });
+  return {
+    write: async (bytes, expect) => {
+      await new Promise((resolve, reject) => request.write(bytes, (error) => (error ? reject(error) : resolve())));
+      await until(expect, 'the proxy to see the bytes');
+    },
+    finish: () => {
+      request.end();
+      return closed;
+    },
+  };
+}
+
 test('a RunQuery passes through unchanged and is recorded', async () => {
   const upstream = stubUpstream();
   const upstreamAddress = await listen(upstream.server);
@@ -139,14 +207,13 @@ test('query-bearing RPCs that are not RunQuery are counted, and writes are not',
   const capture = await startCapture({ upstream: upstreamAddress });
   try {
     const body = frame(fixtureMessage('no filters and no sort'));
-    for (const method of ['Listen', 'PartitionQuery', 'RunAggregationQuery', 'ExecutePipeline', 'Commit']) {
+    for (const method of ['PartitionQuery', 'RunAggregationQuery', 'ExecutePipeline', 'Commit']) {
       await call(capture.address, `/google.firestore.v1.Firestore/${method}`, body);
     }
     assert.deepEqual(
       [...capture.recorder.skips.entries()].sort(),
       [
         ['aggregation-query', 1],
-        ['listen-query', 1],
         ['partition-query', 1],
         ['unsupported-rpc', 1],
       ],
@@ -257,11 +324,8 @@ test('HTTP/1.1 is forwarded rather than refused, and is reported as uncaptured',
 });
 
 test('classify routes by the gRPC method, and leaves other services alone', () => {
-  assert.deepEqual(classify('/google.firestore.v1.Firestore/RunQuery'), { kind: 'record' });
-  assert.deepEqual(classify('/google.firestore.v1.Firestore/Listen'), {
-    kind: 'skip',
-    reason: 'listen-query',
-  });
+  assert.deepEqual(classify('/google.firestore.v1.Firestore/RunQuery'), { kind: 'record', method: 'RunQuery' });
+  assert.deepEqual(classify('/google.firestore.v1.Firestore/Listen'), { kind: 'record', method: 'Listen' });
   assert.deepEqual(classify('/google.firestore.v1.Firestore/Commit'), { kind: 'ignore' });
   assert.deepEqual(classify('/google.firestore.v1.Firestore/SomethingNew'), {
     kind: 'skip',
@@ -506,4 +570,128 @@ test('closing a pending upstream connection is not reported as an upstream failu
     warnings.filter((message) => message.includes('Socket is closed')),
     [],
   );
+});
+
+test('a Listen target is recorded while the stream is still open', async () => {
+  // Issue #6: the stream lives as long as the listener does, so a recorder that waited for it to
+  // end would hold a suite's every snapshot query until teardown — or forever, for a listener the
+  // suite never detaches. The shape has to be there the moment its frame is.
+  const upstream = stubUpstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress });
+  try {
+    const stream = openListen(capture.address);
+    await stream.write(frame(listenAddTarget('a collection group query')), () => capture.recorder.observed === 1);
+    assert.equal(capture.recorder.shapes.length, 1);
+    assert.equal(capture.recorder.shapes[0].key, 'items::COLLECTION_GROUP::AND(sku:EQUAL)::qty:ASCENDING');
+    assert.equal(capture.recorder.observed, 1);
+
+    // The same target re-sent, as a client does after a reconnect: one key, still.
+    await stream.write(frame(listenAddTarget('a collection group query')), () => capture.recorder.observed === 2);
+    assert.equal(capture.recorder.shapes.length, 1);
+
+    // Control traffic is neither a shape nor a skip. Nothing to wait for, so the next write's
+    // condition is what proves it: if the remove had counted, `observed` would reach 3 too early.
+    await stream.write(frame(REMOVE_TARGET), () => true);
+
+    // A second query on the same stream, and the two frames arriving in one write.
+    await stream.write(
+      Buffer.concat([frame(listenAddTarget('no filters and no sort')), frame(REMOVE_TARGET)]),
+      () => capture.recorder.shapes.length === 2,
+    );
+    assert.equal(capture.recorder.observed, 3);
+    assert.equal(capture.recorder.skips.size, 0);
+
+    await stream.finish();
+    assert.equal(capture.recorder.skips.size, 0);
+    assert.deepEqual(upstream.seen, ['/google.firestore.v1.Firestore/Listen']);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('a Listen frame split across writes is read once it completes', async () => {
+  const upstream = stubUpstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress });
+  try {
+    const stream = openListen(capture.address);
+    const framed = frame(listenAddTarget('a collection group query'));
+    await stream.write(framed.subarray(0, 3), () => true);
+    await stream.write(framed.subarray(3, 12), () => true);
+    assert.equal(capture.recorder.shapes.length, 0);
+    await stream.write(framed.subarray(12), () => capture.recorder.shapes.length === 1);
+    await stream.finish();
+    assert.equal(capture.recorder.skips.size, 0);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('a Listen stream that ends mid-frame is counted, and one that ends empty is not', async () => {
+  const upstream = stubUpstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress });
+  try {
+    const empty = openListen(capture.address);
+    await empty.finish();
+    // Not a RunQuery with no message: a Listen that carried nothing is a stream that opened and
+    // closed, and there is no query it could have been.
+    assert.equal(capture.recorder.observed, 0);
+    assert.equal(capture.recorder.skips.size, 0);
+
+    const truncated = openListen(capture.address);
+    await truncated.write(frame(listenAddTarget('a collection group query')).subarray(0, 9), () => true);
+    await truncated.finish();
+    assert.equal(capture.recorder.skips.get('undecodable-message'), 1);
+    assert.equal(capture.recorder.shapes.length, 0);
+
+    // A frame past the cap is one message, counted once when its header is read — not again when
+    // the stream ends before the declared length has arrived. Only the header is sent: the cap is
+    // on what is declared, not on what the client goes on to deliver.
+    const oversized = openListen(capture.address);
+    const header = Buffer.alloc(5);
+    header.writeUInt32BE(64 * 1024 * 1024, 1);
+    await oversized.write(Buffer.concat([header, Buffer.alloc(16)]), () => capture.recorder.observed === 2);
+    await oversized.finish();
+    assert.equal(capture.recorder.skips.get('undecodable-message'), 2);
+    assert.equal(capture.recorder.observed, 2);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('a gzipped Listen frame is decompressed and recorded', async () => {
+  const upstream = stubUpstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress });
+  try {
+    const compressed = gzipSync(listenAddTarget('a collection group query'));
+    const header = Buffer.alloc(5);
+    header[0] = 1;
+    header.writeUInt32BE(compressed.length, 1);
+    const client = connect(`http://${capture.address}`);
+    const request = client.request({
+      ':method': 'POST',
+      ':path': '/google.firestore.v1.Firestore/Listen',
+      'content-type': 'application/grpc',
+      'grpc-encoding': 'gzip',
+      te: 'trailers',
+    });
+    request.on('data', () => {});
+    await new Promise((resolve, reject) => {
+      request.on('error', reject);
+      request.on('close', resolve);
+      request.end(Buffer.concat([header, compressed]));
+    });
+    client.close();
+    assert.equal(capture.recorder.shapes.length, 1);
+    assert.equal(capture.recorder.skips.size, 0);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
 });

@@ -198,11 +198,12 @@ linter must say where the verb lives, not report an unknown command.
 
 **Known limit of v0.2/v0.3:** coverage is bounded by what actually exercises the proxy. A query that
 no test issues is not observed, and absence of observation is not evidence that an index is unused.
-That much is inherent. Two further gaps are not, and are implementation gaps v0.2 ships with: a
-suite driven through the Firebase Web SDK does not reach a gRPC proxy at all, and a query issued as
-a snapshot listener travels by `Listen` rather than `RunQuery` and is counted rather than recorded
-(§7). Both narrow what a corpus covers without narrowing what it appears to cover, which is why §7
-counts them out loud.
+That much is inherent. One further gap is not, and is an implementation gap v0.2 ships with: a
+suite driven through the Firebase Web SDK does not reach a gRPC proxy at all. It narrows what a
+corpus covers without narrowing what it appears to cover, which is why §7 counts it out loud. A
+second gap of the same kind — a query issued as a snapshot listener travels by `Listen` rather than
+`RunQuery` — has since been closed: `record` reads the query a `Listen` target carries under the
+same rules as a `RunQuery` (§7).
 
 ## 4. CLI
 
@@ -824,15 +825,20 @@ overturn it, and it should be read that way rather than as a bug in replay.
 
 ### What is not captured
 
-`record` captures `RunQuery`. Everything else the proxy sees, it counts under one of the reasons
-below and records nothing:
+`record` captures `RunQuery`, and the query a `Listen` target carries. A snapshot listener issues
+no `RunQuery`: its query rides in `Target.QueryTarget.structured_query` on a `Listen` stream that is
+bidirectional and lives as long as the listener does, with targets added, removed, and re-sent over
+its life. Each `add_target` that names a query is read under exactly the rules above and reaches
+the corpus as the same entry a `RunQuery` of that query would — the index requirements are the
+same, so the corpus does not say which of the two carried it — and it is recorded the moment its
+frame is complete rather than when the stream ends, because a listener a suite never detaches has
+a stream that never does. A `remove_target`, or a target that names documents rather than a query,
+is the stream's control traffic and is neither recorded nor counted. Earlier releases counted the
+whole stream once as `listen-query`; a corpus committed under one of them still names that reason,
+and a reader accepts it — it is the one member of `skipped` no current recorder writes.
 
-- **`Listen`** — a snapshot listener carries its query in `Target.QueryTarget.structured_query` and
-  issues no `RunQuery` at all. Its index requirements are exactly those of the query it holds, so
-  this is the one omission that costs coverage rather than preventing a misreport: a suite whose
-  only exercise of a collection is `onSnapshot` yields a corpus with no entry for it. Counted as
-  `listen-query`, and named in §3 as a gap rather than an inherent limit. Capturing it is the first
-  extension worth making.
+Everything else the proxy sees, it counts under one of the reasons below and records nothing:
+
 - **`PartitionQuery`** — carries a `StructuredQuery` the same way, but as a bulk-read entry point
   rather than an application query. Counted as `partition-query`.
 - **`RunAggregationQuery`** — `count()`, `sum()`, and `average()` carry a `StructuredQuery` and have

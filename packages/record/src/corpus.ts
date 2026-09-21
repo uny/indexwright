@@ -17,6 +17,7 @@ import type {
   Order,
   Producer,
   QueryScope,
+  LegacySkipReason,
   QueryShape,
   SkipReason,
 } from './types.js';
@@ -24,6 +25,7 @@ import {
   CORPUS_VERSION,
   FIELD_OPERATORS,
   isComposite,
+  LEGACY_SKIP_REASONS,
   READABLE_CORPUS_VERSIONS,
   SKIP_REASONS,
   UNARY_OPERATORS,
@@ -35,7 +37,7 @@ export class CorpusError extends Error {
 }
 
 const LEAF_OPERATORS = new Set<string>([...FIELD_OPERATORS, ...UNARY_OPERATORS]);
-const SKIP_REASON_SET = new Set<string>(SKIP_REASONS);
+const SKIP_REASON_SET = new Set<string>([...SKIP_REASONS, ...LEGACY_SKIP_REASONS]);
 
 /**
  * How deep a filter tree in a corpus file may nest before the reader refuses it.
@@ -53,7 +55,7 @@ const MAX_FILTER_DEPTH = 100;
  */
 export function buildCorpus(
   shapes: Iterable<QueryShape>,
-  skipped: Iterable<SkipReason>,
+  skipped: Iterable<SkipReason | LegacySkipReason>,
   producers: Iterable<Producer> = [],
 ): Corpus {
   const byKey = new Map<string, QueryShape>();
@@ -305,7 +307,7 @@ export function parseCorpus(source: string): Corpus {
     if (typeof reason !== 'string' || !SKIP_REASON_SET.has(reason)) {
       throw new CorpusError(`skipped[${index}] is not a reason this format defines`);
     }
-    return reason as SkipReason;
+    return reason as SkipReason | LegacySkipReason;
   });
   if (new Set(skipped).size !== skipped.length) throw new CorpusError('skipped repeats a reason');
   for (let index = 1; index < skipped.length; index += 1) {

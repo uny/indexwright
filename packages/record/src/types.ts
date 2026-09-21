@@ -50,7 +50,6 @@ export interface Producer {
  */
 export const SKIP_REASONS = [
   'aggregation-query',
-  'listen-query',
   'partition-query',
   'undecodable-message',
   'unsupported-encoding',
@@ -59,7 +58,18 @@ export const SKIP_REASONS = [
   'vector-query',
 ] as const;
 
+/**
+ * Reasons a corpus may carry that no current recorder produces.
+ *
+ * `listen-query` was how record ≤ 0.7.0 counted a snapshot listener, before `Listen` was captured
+ * (issue #6). A corpus committed under one of those releases still names it, and a reader that
+ * refused the reason would refuse the file — the outcome §7's "readable by anything that reads
+ * one" exists to rule out. Accepted on read, never written by capture.
+ */
+export const LEGACY_SKIP_REASONS = ['listen-query'] as const;
+
 export type SkipReason = (typeof SKIP_REASONS)[number];
+export type LegacySkipReason = (typeof LEGACY_SKIP_REASONS)[number];
 
 export type QueryScope = 'COLLECTION' | 'COLLECTION_GROUP';
 
@@ -126,7 +136,8 @@ export interface Corpus {
    */
   readonly producers: readonly Producer[];
   readonly queries: readonly QueryShape[];
-  readonly skipped: readonly SkipReason[];
+  /** Sorted set. A legacy reason arrives only by reading a corpus an older release wrote. */
+  readonly skipped: readonly (SkipReason | LegacySkipReason)[];
 }
 
 /** A decoded query before normalisation: the tree as it arrived, with no key yet. */

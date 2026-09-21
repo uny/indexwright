@@ -7,10 +7,12 @@ import {
   buildCorpus,
   CORPUS_VERSION,
   CorpusError,
+  LEGACY_SKIP_REASONS,
   mergeCorpora,
   parseCorpus,
   READABLE_CORPUS_VERSIONS,
   serialiseCorpus,
+  SKIP_REASONS,
   toQueryShape,
   writeCorpus,
 } from '../dist/index.js';
@@ -208,6 +210,24 @@ test('a corpus from a later format is refused by version, not by its members', (
   assert.throws(
     () => parseCorpus('{"corpusVersion":3,"producers":[],"queries":[],"skipped":[],"capturedAt":"2026-08-11"}'),
     (error) => error instanceof CorpusError && /corpusVersion 3 is not readable/.test(error.message),
+  );
+});
+
+test('listen-query is read as a legacy reason and never written by capture', () => {
+  // record ≤ 0.7.0 counted a snapshot listener under `listen-query`; 0.8.0 records it (issue #6).
+  // A corpus those releases committed still names the reason, and refusing it would refuse the
+  // file. The recorder's own vocabulary no longer has it, so a new corpus cannot acquire it.
+  assert.ok(!SKIP_REASONS.includes('listen-query'));
+  assert.deepEqual(LEGACY_SKIP_REASONS, ['listen-query']);
+  const legacy = parseCorpus('{"corpusVersion":1,"queries":[],"skipped":["listen-query"]}');
+  assert.deepEqual(legacy.skipped, ['listen-query']);
+  // 0.7.0 wrote version 2, so that is the file this actually protects.
+  const current = parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"skipped":["listen-query"]}');
+  assert.deepEqual(current.skipped, ['listen-query']);
+  assert.deepEqual(mergeCorpora([current, buildCorpus([], ['vector-query'])]).skipped, ['listen-query', 'vector-query']);
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"skipped":["listen-queries"]}'),
+    /skipped\[0\] is not a reason this format defines/,
   );
 });
 

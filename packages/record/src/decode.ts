@@ -1,10 +1,12 @@
 /**
- * Decode a Firestore `RunQueryRequest` into the shape SPEC §7 records.
+ * Decode a Firestore `RunQueryRequest` or `ListenRequest` into the shape SPEC §7 records.
  *
  * Field numbers are from the published `google.firestore.v1` definitions. Two of them are easy to
  * get wrong and worth naming: `CollectionSelector.collection_id` and `FieldReference.field_path`
  * are both field **2**, not 1. Reading them as 1 yields a tree with the right structure and no
- * names at all, which parses cleanly and is silently empty.
+ * names at all, which parses cleanly and is silently empty. The `Listen` path is three nested
+ * field-2s in a row — `ListenRequest.add_target`, `Target.query`, `QueryTarget.structured_query` —
+ * and the neighbouring field 3 means something different at each of the first two levels.
  */
 import type {
   CompositeOperator,
@@ -22,6 +24,15 @@ export type DecodeResult = { readonly ok: true; readonly query: RawQuery } | { r
 
 /** `RunQueryRequest.structured_query`. */
 const RUN_QUERY_STRUCTURED_QUERY = 2;
+
+/** `ListenRequest.add_target` and `remove_target`, the members of its `target_change` oneof. */
+const LISTEN_ADD_TARGET = 2;
+const LISTEN_REMOVE_TARGET = 3;
+/** `Target.query` and `Target.documents`, the members of its `target_type` oneof. */
+const TARGET_QUERY = 2;
+const TARGET_DOCUMENTS = 3;
+/** `Target.QueryTarget.structured_query`, the only member of its `query_type` oneof. */
+const QUERY_TARGET_STRUCTURED_QUERY = 2;
 
 /** `StructuredQuery` field numbers. `select`, `limit`, `offset`, and the cursors are not read. */
 const QUERY_FROM = 2;
@@ -102,14 +113,67 @@ class VectorQuery extends Error {
 const MAX_FILTER_DEPTH = 100;
 
 export function decodeRunQuery(message: Uint8Array): DecodeResult {
+  return decode(() => readRunQueryRequest(message));
+}
+
+/**
+ * Decode one message of a `Listen` stream.
+ *
+ * `null` when the message carries no query to record: a `remove_target`, or an `add_target` whose
+ * target names documents rather than a query. Those are the stream's control traffic, and neither
+ * a shape nor a skip — counting them would put a `remove_target` in the corpus's account of what
+ * the proxy declined.
+ */
+export function decodeListen(message: Uint8Array): DecodeResult | null {
+  let query: Uint8Array | null;
   try {
-    return { ok: true, query: readRunQueryRequest(message) };
+    query = readListenRequest(message);
   } catch (error) {
-    if (error instanceof VectorQuery) return { ok: false, reason: 'vector-query' };
-    if (error instanceof UnsupportedShape) return { ok: false, reason: 'unsupported-shape' };
-    if (error instanceof WireError) return { ok: false, reason: 'undecodable-message' };
-    throw error;
+    return declined(error);
   }
+  if (query === null) return null;
+  return decode(() => readStructuredQuery(query));
+}
+
+function decode(read: () => RawQuery): DecodeResult {
+  try {
+    return { ok: true, query: read() };
+  } catch (error) {
+    return declined(error);
+  }
+}
+
+function declined(error: unknown): DecodeResult {
+  if (error instanceof VectorQuery) return { ok: false, reason: 'vector-query' };
+  if (error instanceof UnsupportedShape) return { ok: false, reason: 'unsupported-shape' };
+  if (error instanceof WireError) return { ok: false, reason: 'undecodable-message' };
+  throw error;
+}
+
+/** The `structured_query` bytes an add_target carries, or `null` for a message that holds none. */
+function readListenRequest(message: Uint8Array): Uint8Array | null {
+  // Each level is a oneof, so the member that appears last is the one set: an `add_target`
+  // followed by a `remove_target` is a remove, and a `query` followed by `documents` names documents.
+  let target: Uint8Array | null = null;
+  for (const field of fields(message)) {
+    if (field.number === LISTEN_ADD_TARGET && field.kind === 'bytes') target = field.value;
+    else if (field.number === LISTEN_REMOVE_TARGET && field.kind === 'varint') target = null;
+  }
+  if (target === null) return null;
+
+  let queryTarget: Uint8Array | null = null;
+  for (const field of fields(target)) {
+    if (field.number === TARGET_QUERY && field.kind === 'bytes') queryTarget = field.value;
+    else if (field.number === TARGET_DOCUMENTS && field.kind === 'bytes') queryTarget = null;
+  }
+  if (queryTarget === null) return null;
+
+  let query: Uint8Array | null = null;
+  for (const field of fields(queryTarget)) {
+    if (field.number === QUERY_TARGET_STRUCTURED_QUERY && field.kind === 'bytes') query = field.value;
+  }
+  if (query === null) throw new UnsupportedShape('query target carries no structured query');
+  return query;
 }
 
 function readRunQueryRequest(message: Uint8Array): RawQuery {

@@ -359,6 +359,10 @@ Stripping values does not make a corpus publishable. Field paths are recorded ve
 `members.alice@example.com` is an ordinary way to query a map. A corpus describes your data model
 and earns the access controls of the repository it lives in.
 
+A snapshot listener is captured too: its query travels over `Listen` rather than `RunQuery`, and is
+recorded under the same rules the moment its target is added, whether or not the listener is ever
+detached. `onSnapshot` and `get()` on the same query are one entry.
+
 ## What it does not capture
 
 Counted in `skipped` and reported on stderr, never dropped silently — a query that was issued and
@@ -366,7 +370,6 @@ then discarded without trace would look like coverage:
 
 | Reason | What it was |
 |:--|:--|
-| `listen-query` | a snapshot listener; it carries its query over `Listen`, not `RunQuery` |
 | `aggregation-query` | `count()`, `sum()`, `average()` — their index requirements are not the inner query's |
 | `partition-query` | `PartitionQuery`, a bulk-read entry point rather than an application query |
 | `vector-query` | `find_nearest`; served by a `vectorConfig` index this version does not model |
@@ -374,6 +377,9 @@ then discarded without trace would look like coverage:
 | `unsupported-rpc` | a query-bearing method this version does not model, including any added later |
 | `unsupported-encoding` | a message compressed with something other than gzip or deflate |
 | `undecodable-message` | bytes that did not parse — a defect rather than a boundary |
+
+A corpus written by an earlier release may also name `listen-query`, which is how those releases
+counted a snapshot listener. It still reads; nothing writes it now.
 
 One gap is not a skip reason because it is a transport rather than a query: the Firebase **Web
 SDK** talks WebChannel over HTTP/1.1 and carries no gRPC to read. Those requests are forwarded and

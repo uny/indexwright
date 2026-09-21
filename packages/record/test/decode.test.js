@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { decodeRunQuery, toQueryShape } from '../dist/index.js';
+import { decodeListen, decodeRunQuery, toQueryShape } from '../dist/index.js';
 import * as wire from '../dist/wire.js';
 
 /**
@@ -239,4 +239,91 @@ test('a varint that does not fit in 64 bits is refused rather than folded', () =
   // A negative int32 is sign-extended to ten bytes and is still a legal varint.
   const negative = Uint8Array.from([0x10, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]);
   assert.equal([...fields(negative)].length, 1);
+});
+
+/** Encode a length-delimited field: tag, length, payload. Enough protobuf to wrap a fixture. */
+function delimited(field, payload) {
+  const varint = (value) => {
+    const out = [];
+    let rest = value;
+    do {
+      const byte = rest & 0x7f;
+      rest >>>= 7;
+      out.push(rest > 0 ? byte | 0x80 : byte);
+    } while (rest > 0);
+    return Buffer.from(out);
+  };
+  return Buffer.concat([varint((field << 3) | 2), varint(payload.length), payload]);
+}
+
+/** The `structured_query` bytes of a captured RunQueryRequest, so a Listen fixture is the same query. */
+function structuredQueryOf(name) {
+  const found = cases.find((entry) => entry.name === name);
+  assert.ok(found, `fixture "${name}" is missing`);
+  const request = Buffer.from(found.message, 'base64');
+  for (const field of wire.fields(request)) if (field.number === 2) return Buffer.from(field.value);
+  assert.fail(`fixture "${name}" carries no structured_query`);
+}
+
+/** ListenRequest{ add_target: Target{ query: QueryTarget{ structured_query } } }. */
+function listenAddQuery(structuredQuery) {
+  return delimited(2, delimited(2, delimited(2, structuredQuery)));
+}
+
+test('a Listen add_target decodes to the same shape as the RunQuery carrying its query', () => {
+  // Issue #6: the index requirements of a snapshot listener are exactly those of the query it holds,
+  // so the two must reach one key, or a suite that listens where another reads would record two
+  // entries for one query.
+  for (const name of ['equality and inequality with two sorts', 'a collection group query']) {
+    const result = decodeListen(listenAddQuery(structuredQueryOf(name)));
+    assert.ok(result?.ok, `expected "${name}" to decode as a Listen target`);
+    assert.equal(toQueryShape(result.query).key, decodeFixture(name).key);
+  }
+});
+
+test('a Listen message that carries no query is null, not a skip', () => {
+  // ListenRequest{ remove_target: 5 } — field 3, varint.
+  assert.equal(decodeListen(Buffer.from([0x18, 0x05])), null);
+  // ListenRequest{ add_target: Target{ documents: DocumentsTarget{ documents: ["a"] } } }.
+  assert.equal(decodeListen(delimited(2, delimited(3, delimited(2, Buffer.from('a'))))), null);
+  // An empty ListenRequest.
+  assert.equal(decodeListen(Buffer.alloc(0)), null);
+});
+
+test('the last member of a Listen oneof is the one set, in either order', () => {
+  // `add_target` / `remove_target` and `query` / `documents` are oneofs: a message that carries both
+  // has, on the wire, set the later one. Recording the earlier would add a query the emulator did
+  // not run.
+  const query = listenAddQuery(structuredQueryOf('a collection group query'));
+  const remove = Buffer.from([0x18, 0x05]);
+  assert.equal(decodeListen(Buffer.concat([query, remove])), null);
+  assert.ok(decodeListen(Buffer.concat([remove, query]))?.ok);
+
+  const queryTarget = delimited(2, delimited(2, structuredQueryOf('a collection group query')));
+  const documents = delimited(3, delimited(2, Buffer.from('a')));
+  assert.equal(decodeListen(delimited(2, Buffer.concat([queryTarget, documents]))), null);
+  assert.ok(decodeListen(delimited(2, Buffer.concat([documents, queryTarget])))?.ok);
+});
+
+test('a Listen query target with no structured query is an unsupported shape', () => {
+  // QueryTarget's `query_type` oneof has one member; a target that set none of it is not a query
+  // this vocabulary can name, and not a misread of the wire either.
+  const result = decodeListen(delimited(2, delimited(2, delimited(1, Buffer.from('projects/p')))));
+  assert.deepEqual(result, { ok: false, reason: 'unsupported-shape' });
+});
+
+test('Listen bytes that are not a message are undecodable at every level', () => {
+  // A truncated length-delimited field at the request, target, and query-target levels.
+  const bad = Buffer.from([0x12, 0x7f, 0x01]);
+  assert.deepEqual(decodeListen(bad), { ok: false, reason: 'undecodable-message' });
+  assert.deepEqual(decodeListen(delimited(2, bad)), { ok: false, reason: 'undecodable-message' });
+  assert.deepEqual(decodeListen(delimited(2, delimited(2, bad))), { ok: false, reason: 'undecodable-message' });
+});
+
+test('a Listen target reads the vector and shape refusals the RunQuery reader does', () => {
+  // StructuredQuery{ from: [{collection_id: "o"}], find_nearest: {} }
+  const vector = Buffer.concat([delimited(2, delimited(2, Buffer.from('o'))), delimited(9, Buffer.alloc(0))]);
+  assert.deepEqual(decodeListen(listenAddQuery(vector)), { ok: false, reason: 'vector-query' });
+  // StructuredQuery{ from: [] }
+  assert.deepEqual(decodeListen(listenAddQuery(Buffer.alloc(0))), { ok: false, reason: 'unsupported-shape' });
 });

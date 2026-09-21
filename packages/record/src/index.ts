@@ -41,7 +41,7 @@ export {
   type FirestoreModule,
 } from './client.js';
 export { buildCorpus, CorpusError, mergeCorpora, parseCorpus, serialiseCorpus, writeCorpus } from './corpus.js';
-export { decodeRunQuery, type DecodeResult } from './decode.js';
+export { decodeListen, decodeRunQuery, type DecodeResult } from './decode.js';
 export {
   classifyHost,
   EndpointError,
@@ -134,6 +134,7 @@ export {
   CORPUS_VERSION,
   FIELD_OPERATORS,
   isComposite,
+  LEGACY_SKIP_REASONS,
   READABLE_CORPUS_VERSIONS,
   SKIP_REASONS,
   UNARY_OPERATORS,
@@ -145,6 +146,7 @@ export {
   type FilterLeaf,
   type FilterNode,
   type FilterOperator,
+  type LegacySkipReason,
   type Order,
   type Producer,
   type QueryScope,
@@ -154,4 +156,4 @@ export {
   type UnaryOperator,
 } from './types.js';
 export { VERSION } from './version.js';
-export { fields, grpcMessages, WireError } from './wire.js';
+export { fields, FrameSplitter, grpcMessages, WireError, type Frame } from './wire.js';

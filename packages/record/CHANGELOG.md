@@ -5,6 +5,32 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## Unreleased
+
+### Added
+
+- **`Listen` is captured** (issue #6). A snapshot listener carries its query in
+  `Target.QueryTarget.structured_query` and issues no `RunQuery`, so a suite whose only exercise of
+  a collection was `onSnapshot` produced a corpus with no entry for it, and `check` then reported
+  coverage it had never measured. The proxy now reads each `add_target` on a `Listen` stream under
+  the same shape rules as a `RunQuery`, frame by frame as the bytes arrive rather than when the
+  stream ends — the stream is bidirectional and lives as long as the listener does, and a listener
+  the suite never detaches has a stream that never ends. A target re-sent after a reconnect
+  collapses onto the same key; a `remove_target`, or a target naming documents rather than a query,
+  is control traffic and is neither recorded nor counted. `Listen` and `RunQuery` entries are not
+  distinguished in the corpus (their index requirements are the same), so `corpusVersion` stays
+  at 2.
+
+### Changed
+
+- **`listen-query` is no longer a skip reason the recorder produces.** It leaves `SKIP_REASONS` and
+  the `SkipReason` type; `LEGACY_SKIP_REASONS` and `LegacySkipReason` name it as a reason a corpus
+  may still carry, and `parseCorpus` / `mergeCorpora` accept it, so a corpus committed under an
+  earlier release reads as it did. `Corpus.skipped` widens to `(SkipReason | LegacySkipReason)[]`.
+- `classify` reports `{ kind: 'record', method: 'RunQuery' | 'Listen' }` for a captured method,
+  where it reported `{ kind: 'record' }` before.
+- The barrel exports `decodeListen`, `FrameSplitter`, and `Frame`.
+
 ## [0.7.0] — 2026-09-21
 
 The release that closes the half of the index set `check` was not reading. Since 0.5.0 the verb
