@@ -458,6 +458,7 @@ test('classifyHttp1 reads the REST custom method and the WebChannel path, and le
   // A subcollection parent is spelled into the path before the colon.
   assert.deepEqual(classifyHttp1('POST', `${documents}/orders/o1:runQuery`), { kind: 'record', method: 'RestRunQuery' });
   assert.deepEqual(classifyHttp1('POST', `${documents}:runQuery?alt=json`), { kind: 'record', method: 'RestRunQuery' });
+  assert.deepEqual(classifyHttp1('POST', `${documents}/orders/a:b:runQuery`), { kind: 'record', method: 'RestRunQuery' });
   assert.deepEqual(classifyHttp1('POST', `${documents}:runAggregationQuery`), { kind: 'skip', reason: 'aggregation-query' });
   assert.deepEqual(classifyHttp1('POST', `${documents}:partitionQuery`), { kind: 'skip', reason: 'partition-query' });
   assert.deepEqual(classifyHttp1('POST', `${documents}:somethingNew`), { kind: 'skip', reason: 'unsupported-rpc' });

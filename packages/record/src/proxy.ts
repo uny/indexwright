@@ -363,7 +363,8 @@ export function classifyHttp1(method: string | undefined, url: string | undefine
     return intent.method === 'Listen' ? { kind: 'record', method: 'ForwardChannel' } : { kind: 'skip', reason: 'unsupported-rpc' };
   }
 
-  const rest = /^\/v1\/projects\/[^/]+\/databases\/[^/]+\/documents(?:\/[^:]*)?:([A-Za-z]+)$/.exec(path);
+  // Greedy up to the last colon: a document id may hold one, and the custom method is what ends the path.
+  const rest = /^\/v1\/projects\/[^/]+\/databases\/[^/]+\/documents(?:\/.*)?:([A-Za-z]+)$/.exec(path);
   if (rest === null) return { kind: 'ignore' };
   const custom = rest[1] ?? '';
   const intent = classifyMethod(REST_METHOD_NAMES.get(custom) ?? custom.charAt(0).toUpperCase() + custom.slice(1));
