@@ -1,0 +1,161 @@
+{
+  "note": "HTTP/1.1 request bodies as the Firebase Web SDK sends them: a WebChannel forward-channel POST from the browser build of @firebase/firestore, and a REST documents:runQuery from firebase/firestore/lite. Regenerate with packages/record/scripts/capture-web-fixtures.mjs. The shape each one is expected to decode to is written by hand in test/decode-json.test.js.",
+  "cases": [
+    {
+      "name": "equality and inequality with two sorts",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22where%22%3A%7B%22compositeFilter%22%3A%7B%22op%22%3A%22AND%22%2C%22filters%22%3A%5B%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22status%22%7D%2C%22op%22%3A%22EQUAL%22%2C%22value%22%3A%7B%22stringValue%22%3A%22open%22%7D%7D%7D%2C%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22amount%22%7D%2C%22op%22%3A%22GREATER_THAN%22%2C%22value%22%3A%7B%22integerValue%22%3A%221%22%7D%7D%7D%5D%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22amount%22%7D%2C%22direction%22%3A%22DESCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22createdAt%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%2C%22limit%22%3A10%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":[{\"fieldFilter\":{\"field\":{\"fieldPath\":\"status\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"open\"}}},{\"fieldFilter\":{\"field\":{\"fieldPath\":\"amount\"},\"op\":\"GREATER_THAN\",\"value\":{\"integerValue\":\"1\"}}}]}},\"orderBy\":[{\"field\":{\"fieldPath\":\"amount\"},\"direction\":\"DESCENDING\"},{\"field\":{\"fieldPath\":\"createdAt\"},\"direction\":\"ASCENDING\"},{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}],\"limit\":10}}"
+      }
+    },
+    {
+      "name": "a collection group query",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22items%22%2C%22allDescendants%22%3Atrue%7D%5D%2C%22where%22%3A%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22sku%22%7D%2C%22op%22%3A%22EQUAL%22%2C%22value%22%3A%7B%22stringValue%22%3A%22x%22%7D%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22qty%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"items\",\"allDescendants\":true}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"sku\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"x\"}}},\"orderBy\":[{\"field\":{\"fieldPath\":\"qty\"},\"direction\":\"ASCENDING\"},{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "no filters and no sort",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"orderBy\":[{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "a disjunction nested under a conjunction",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22where%22%3A%7B%22compositeFilter%22%3A%7B%22op%22%3A%22AND%22%2C%22filters%22%3A%5B%7B%22compositeFilter%22%3A%7B%22op%22%3A%22OR%22%2C%22filters%22%3A%5B%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22tier%22%7D%2C%22op%22%3A%22EQUAL%22%2C%22value%22%3A%7B%22stringValue%22%3A%22a%22%7D%7D%7D%2C%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22tier%22%7D%2C%22op%22%3A%22EQUAL%22%2C%22value%22%3A%7B%22stringValue%22%3A%22b%22%7D%7D%7D%5D%7D%7D%2C%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22tags%22%7D%2C%22op%22%3A%22ARRAY_CONTAINS%22%2C%22value%22%3A%7B%22stringValue%22%3A%22sale%22%7D%7D%7D%5D%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":[{\"compositeFilter\":{\"op\":\"OR\",\"filters\":[{\"fieldFilter\":{\"field\":{\"fieldPath\":\"tier\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"a\"}}},{\"fieldFilter\":{\"field\":{\"fieldPath\":\"tier\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"b\"}}}]}},{\"fieldFilter\":{\"field\":{\"fieldPath\":\"tags\"},\"op\":\"ARRAY_CONTAINS\",\"value\":{\"stringValue\":\"sale\"}}}]}},\"orderBy\":[{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "every field operator",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22where%22%3A%7B%22compositeFilter%22%3A%7B%22op%22%3A%22AND%22%2C%22filters%22%3A%5B%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22a%22%7D%2C%22op%22%3A%22LESS_THAN%22%2C%22value%22%3A%7B%22integerValue%22%3A%221%22%7D%7D%7D%2C%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22b%22%7D%2C%22op%22%3A%22LESS_THAN_OR_EQUAL%22%2C%22value%22%3A%7B%22integerValue%22%3A%221%22%7D%7D%7D%2C%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22c%22%7D%2C%22op%22%3A%22GREATER_THAN%22%2C%22value%22%3A%7B%22integerValue%22%3A%221%22%7D%7D%7D%2C%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22d%22%7D%2C%22op%22%3A%22GREATER_THAN_OR_EQUAL%22%2C%22value%22%3A%7B%22integerValue%22%3A%221%22%7D%7D%7D%2C%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22e%22%7D%2C%22op%22%3A%22EQUAL%22%2C%22value%22%3A%7B%22integerValue%22%3A%221%22%7D%7D%7D%2C%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22f%22%7D%2C%22op%22%3A%22ARRAY_CONTAINS%22%2C%22value%22%3A%7B%22integerValue%22%3A%221%22%7D%7D%7D%2C%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22g%22%7D%2C%22op%22%3A%22IN%22%2C%22value%22%3A%7B%22arrayValue%22%3A%7B%22values%22%3A%5B%7B%22integerValue%22%3A%221%22%7D%5D%7D%7D%7D%7D%2C%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22h%22%7D%2C%22op%22%3A%22ARRAY_CONTAINS_ANY%22%2C%22value%22%3A%7B%22arrayValue%22%3A%7B%22values%22%3A%5B%7B%22integerValue%22%3A%221%22%7D%5D%7D%7D%7D%7D%5D%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22a%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22b%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22c%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22d%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":[{\"fieldFilter\":{\"field\":{\"fieldPath\":\"a\"},\"op\":\"LESS_THAN\",\"value\":{\"integerValue\":\"1\"}}},{\"fieldFilter\":{\"field\":{\"fieldPath\":\"b\"},\"op\":\"LESS_THAN_OR_EQUAL\",\"value\":{\"integerValue\":\"1\"}}},{\"fieldFilter\":{\"field\":{\"fieldPath\":\"c\"},\"op\":\"GREATER_THAN\",\"value\":{\"integerValue\":\"1\"}}},{\"fieldFilter\":{\"field\":{\"fieldPath\":\"d\"},\"op\":\"GREATER_THAN_OR_EQUAL\",\"value\":{\"integerValue\":\"1\"}}},{\"fieldFilter\":{\"field\":{\"fieldPath\":\"e\"},\"op\":\"EQUAL\",\"value\":{\"integerValue\":\"1\"}}},{\"fieldFilter\":{\"field\":{\"fieldPath\":\"f\"},\"op\":\"ARRAY_CONTAINS\",\"value\":{\"integerValue\":\"1\"}}},{\"fieldFilter\":{\"field\":{\"fieldPath\":\"g\"},\"op\":\"IN\",\"value\":{\"arrayValue\":{\"values\":[{\"integerValue\":\"1\"}]}}}},{\"fieldFilter\":{\"field\":{\"fieldPath\":\"h\"},\"op\":\"ARRAY_CONTAINS_ANY\",\"value\":{\"arrayValue\":{\"values\":[{\"integerValue\":\"1\"}]}}}}]}},\"orderBy\":[{\"field\":{\"fieldPath\":\"a\"},\"direction\":\"ASCENDING\"},{\"field\":{\"fieldPath\":\"b\"},\"direction\":\"ASCENDING\"},{\"field\":{\"fieldPath\":\"c\"},\"direction\":\"ASCENDING\"},{\"field\":{\"fieldPath\":\"d\"},\"direction\":\"ASCENDING\"},{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "a not-equal filter",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22where%22%3A%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22state%22%7D%2C%22op%22%3A%22NOT_EQUAL%22%2C%22value%22%3A%7B%22stringValue%22%3A%22void%22%7D%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22state%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"state\"},\"op\":\"NOT_EQUAL\",\"value\":{\"stringValue\":\"void\"}}},\"orderBy\":[{\"field\":{\"fieldPath\":\"state\"},\"direction\":\"ASCENDING\"},{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "a not-in filter",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22where%22%3A%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22state%22%7D%2C%22op%22%3A%22NOT_IN%22%2C%22value%22%3A%7B%22arrayValue%22%3A%7B%22values%22%3A%5B%7B%22stringValue%22%3A%22void%22%7D%5D%7D%7D%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22state%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"state\"},\"op\":\"NOT_IN\",\"value\":{\"arrayValue\":{\"values\":[{\"stringValue\":\"void\"}]}}}},\"orderBy\":[{\"field\":{\"fieldPath\":\"state\"},\"direction\":\"ASCENDING\"},{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "null and NaN, which reach the wire as unary filters",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22where%22%3A%7B%22compositeFilter%22%3A%7B%22op%22%3A%22AND%22%2C%22filters%22%3A%5B%7B%22unaryFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22deletedAt%22%7D%2C%22op%22%3A%22IS_NULL%22%7D%7D%2C%7B%22unaryFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22score%22%7D%2C%22op%22%3A%22IS_NAN%22%7D%7D%5D%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":[{\"unaryFilter\":{\"field\":{\"fieldPath\":\"deletedAt\"},\"op\":\"IS_NULL\"}},{\"unaryFilter\":{\"field\":{\"fieldPath\":\"score\"},\"op\":\"IS_NAN\"}}]}},\"orderBy\":[{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "not-null",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22where%22%3A%7B%22unaryFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22deletedAt%22%7D%2C%22op%22%3A%22IS_NOT_NULL%22%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22deletedAt%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"where\":{\"unaryFilter\":{\"field\":{\"fieldPath\":\"deletedAt\"},\"op\":\"IS_NOT_NULL\"}},\"orderBy\":[{\"field\":{\"fieldPath\":\"deletedAt\"},\"direction\":\"ASCENDING\"},{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "not-NaN",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22where%22%3A%7B%22unaryFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22score%22%7D%2C%22op%22%3A%22IS_NOT_NAN%22%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22score%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%2C%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"where\":{\"unaryFilter\":{\"field\":{\"fieldPath\":\"score\"},\"op\":\"IS_NOT_NAN\"}},\"orderBy\":[{\"field\":{\"fieldPath\":\"score\"},\"direction\":\"ASCENDING\"},{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "a sort on the document key",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22DESCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"orderBy\":[{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"DESCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "a field path that holds the key delimiters",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22where%22%3A%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22%60weird%3Apath%7Cwith(parens)%60%22%7D%2C%22op%22%3A%22EQUAL%22%2C%22value%22%3A%7B%22integerValue%22%3A%221%22%7D%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"`weird:path|with(parens)`\"},\"op\":\"EQUAL\",\"value\":{\"integerValue\":\"1\"}}},\"orderBy\":[{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    },
+    {
+      "name": "a nested field path",
+      "forwardChannel": {
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "headers=X-Goog-Api-Client%3Agl-js%2F%20fire%2F12.19.0%0D%0AContent-Type%3Atext%2Fplain%0D%0A&count=1&ofs=0&req0___data__=%7B%22database%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%22%2C%22addTarget%22%3A%7B%22query%22%3A%7B%22structuredQuery%22%3A%7B%22from%22%3A%5B%7B%22collectionId%22%3A%22orders%22%7D%5D%2C%22where%22%3A%7B%22fieldFilter%22%3A%7B%22field%22%3A%7B%22fieldPath%22%3A%22profile.city%22%7D%2C%22op%22%3A%22EQUAL%22%2C%22value%22%3A%7B%22stringValue%22%3A%22kyoto%22%7D%7D%7D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%7B%22fieldPath%22%3A%22__name__%22%7D%2C%22direction%22%3A%22ASCENDING%22%7D%5D%7D%2C%22parent%22%3A%22projects%2Fdemo-fixtures%2Fdatabases%2F(default)%2Fdocuments%22%7D%2C%22targetId%22%3A1002%7D%7D"
+      },
+      "rest": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"profile.city\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"kyoto\"}}},\"orderBy\":[{\"field\":{\"fieldPath\":\"__name__\"},\"direction\":\"ASCENDING\"}]}}"
+      }
+    }
+  ]
+}

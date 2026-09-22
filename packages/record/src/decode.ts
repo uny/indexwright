@@ -93,12 +93,12 @@ const UNARY_OPERATORS = new Map<number, UnaryOperator>([
  * through every level of a recursive filter tree, where one forgotten check would record a
  * partially understood query as a complete one.
  */
-class UnsupportedShape extends Error {
+export class UnsupportedShape extends Error {
   override readonly name = 'UnsupportedShape';
 }
 
 /** A `find_nearest` clause anywhere in the query; skipped as `vector-query`, not as a bad shape. */
-class VectorQuery extends Error {
+export class VectorQuery extends Error {
   override readonly name = 'VectorQuery';
 }
 
@@ -110,7 +110,7 @@ class VectorQuery extends Error {
  * `MAX_REQUEST_BYTES` reaches `RangeError`, which is not a `WireError` and would leave the proxy
  * as an uncaught exception rather than a counted skip.
  */
-const MAX_FILTER_DEPTH = 100;
+export const MAX_FILTER_DEPTH = 100;
 
 export function decodeRunQuery(message: Uint8Array): DecodeResult {
   return decode(() => readRunQueryRequest(message));
@@ -143,7 +143,7 @@ function decode(read: () => RawQuery): DecodeResult {
   }
 }
 
-function declined(error: unknown): DecodeResult {
+export function declined(error: unknown): DecodeResult {
   if (error instanceof VectorQuery) return { ok: false, reason: 'vector-query' };
   if (error instanceof UnsupportedShape) return { ok: false, reason: 'unsupported-shape' };
   if (error instanceof WireError) return { ok: false, reason: 'undecodable-message' };

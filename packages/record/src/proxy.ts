@@ -56,6 +56,13 @@ const NON_QUERY_METHODS = new Set([
   'Write',
 ]);
 
+/**
+ * REST custom methods whose name is not the gRPC method's in lowerCamelCase. The one divergence
+ * in the published surface; every other `documents:<method>` is its gRPC name with the first
+ * letter lowered.
+ */
+const REST_METHOD_NAMES = new Map([['batchGet', 'BatchGetDocuments']]);
+
 /** A request body larger than this is not a query anyone wrote; it is a message misread. */
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 
@@ -156,12 +163,10 @@ export async function startCapture(options: CaptureOptions): Promise<Capture> {
   // A cleartext HTTP/2 server cannot negotiate HTTP/1.1 — `allowHTTP1` exists only where ALPN
   // does. Anything pointed at FIRESTORE_EMULATOR_HOST that speaks REST would therefore be refused
   // outright, including the emulator's own data-clearing endpoint, so the two are told apart by
-  // the connection preface and each handed to a server that speaks it. HTTP/1.1 carries no gRPC
-  // and is never captured; §3 names that as a transport gap.
-  const http1 = createHttp1Server((request, response) => {
-    recorder.countHttp1();
-    proxyHttp1(request, response, upstream, warn);
-  });
+  // the connection preface and each handed to a server that speaks it. HTTP/1.1 is the Firebase
+  // Web SDK's transport — REST for `firestore/lite`, WebChannel for the full SDK in a browser — and
+  // is read for the same queries the gRPC side is (issue #58).
+  const http1 = createHttp1Server((request, response) => proxyHttp1(request, response, upstream, recorder, warn));
 
   // Tracked so that closing does not wait on a keep-alive connection the suite left open. The
   // suite has already exited by then; the only thing still holding the socket is politeness.
@@ -316,7 +321,7 @@ function proxyStream(
 }
 
 export type Intent =
-  | { readonly kind: 'record'; readonly method: 'RunQuery' | 'Listen' }
+  | { readonly kind: 'record'; readonly method: 'RunQuery' | 'Listen' | 'RestRunQuery' | 'ForwardChannel' }
   | {
       readonly kind: 'skip';
       readonly reason: 'partition-query' | 'aggregation-query' | 'unsupported-rpc';
@@ -330,7 +335,46 @@ export function classify(path: string): Intent {
   const service = match[1];
   const method = match[2];
   if (service !== FIRESTORE_SERVICE || method === undefined) return { kind: 'ignore' };
+  return classifyMethod(method);
+}
 
+/**
+ * Route an HTTP/1.1 request by method and path, which is where the Web SDK says what it is calling.
+ *
+ * Two forms carry a query (issue #58). REST spells a custom method as `documents…:runQuery`, and the
+ * suffix is the gRPC method under its JSON-mapping name, so it is read by the same switch as a gRPC
+ * `:path`; a standard REST verb — a `GET` of a document, a `PATCH` — is a method on the list known
+ * to carry no query, and is left alone. WebChannel spells a streaming RPC as
+ * `/google.firestore.v1.Firestore/<Method>/channel`, and only its `POST`s carry requests: the `GET`
+ * is the backward channel the server answers on, and an `OPTIONS` is the browser asking first.
+ */
+export function classifyHttp1(method: string | undefined, url: string | undefined): Intent {
+  if (method !== 'POST' || url === undefined) return { kind: 'ignore' };
+  const path = url.split('?', 1)[0] ?? '';
+
+  const channel = /^\/([^/]+)\/([^/]+)\/channel$/.exec(path);
+  if (channel !== null) {
+    if (channel[1] !== FIRESTORE_SERVICE) return { kind: 'ignore' };
+    const intent = classifyMethod(channel[2] ?? '');
+    if (intent.kind !== 'record') return intent;
+    // A `Listen` forward channel carries `ListenRequest`s, and those are read. The only other stream
+    // the Web SDK opens this way is `Write`, which the list of non-query methods already ignores; a
+    // query-bearing method carried this way that this package does not read is counted, not passed.
+    return intent.method === 'Listen' ? { kind: 'record', method: 'ForwardChannel' } : { kind: 'skip', reason: 'unsupported-rpc' };
+  }
+
+  const rest = /^\/v1\/projects\/[^/]+\/databases\/[^/]+\/documents(?:\/[^:]*)?:([A-Za-z]+)$/.exec(path);
+  if (rest === null) return { kind: 'ignore' };
+  const custom = rest[1] ?? '';
+  const intent = classifyMethod(REST_METHOD_NAMES.get(custom) ?? custom.charAt(0).toUpperCase() + custom.slice(1));
+  if (intent.kind !== 'record') return intent;
+  // REST does spell a `documents:listen`, but the Web SDK does not send one — its listeners travel
+  // by WebChannel — and a stream of JSON requests on one POST is not a body this package reads.
+  return intent.method === 'RunQuery' ? { kind: 'record', method: 'RestRunQuery' } : { kind: 'skip', reason: 'unsupported-rpc' };
+}
+
+/** What one method on the Firestore service means to the recorder, however it was carried. */
+function classifyMethod(method: string): Intent {
   switch (method) {
     case 'RunQuery':
       return { kind: 'record', method: 'RunQuery' };
@@ -351,7 +395,7 @@ export function classify(path: string): Intent {
  *
  * The bytes are forwarded by the pipe regardless; this only tees them.
  */
-function collect(stream: ServerHttp2Stream, done: (body: Uint8Array) => void, tooLarge: () => void): void {
+function collect(stream: ServerHttp2Stream | IncomingMessage, done: (body: Uint8Array) => void, tooLarge: () => void): void {
   const chunks: Buffer[] = [];
   let size = 0;
   let overflowed = false;
@@ -403,13 +447,43 @@ function forwardable(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
   return forwarded;
 }
 
-/** HTTP/1.1 is forwarded untouched: it carries no gRPC, so there is nothing here to decode. */
+/**
+ * HTTP/1.1 is forwarded untouched and read on the way past, as the gRPC streams are.
+ *
+ * The response path is not inspected at all: a WebChannel backward channel is a chunked response
+ * that stays open for as long as the listener does, and nothing this package records travels on it.
+ */
 function proxyHttp1(
   request: IncomingMessage,
   response: ServerResponse,
   upstream: { host: string; port: number },
+  recorder: Recorder,
   warn: (message: string) => void,
 ): void {
+  const intent = classifyHttp1(request.method, request.url);
+  if (intent.kind === 'record') {
+    // The Web SDK sends its bodies uncompressed; one that arrives compressed is counted the way a
+    // gRPC message in a codec this package cannot undo is, rather than parsed as if it were plain.
+    const encoding = request.headers['content-encoding'];
+    if (encoding !== undefined && encoding !== 'identity') {
+      recorder.skip('unsupported-encoding');
+    } else if (intent.method === 'RestRunQuery') {
+      collect(
+        request,
+        (body) => recorder.recordRestRunQuery(body),
+        () => recorder.skip('undecodable-message'),
+      );
+    } else if (intent.method === 'ForwardChannel') {
+      collect(
+        request,
+        (body) => recorder.recordForwardChannel(body),
+        () => recorder.skip('undecodable-message'),
+      );
+    }
+  } else if (intent.kind === 'skip') {
+    recorder.skip(intent.reason);
+  }
+
   const headers = { ...request.headers };
   delete headers['host'];
   const forwarded = http1Request(
