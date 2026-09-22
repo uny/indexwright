@@ -184,6 +184,19 @@ test('a field named under both spellings at once is undecodable, because neither
   });
 });
 
+test('a forward channel that declares more messages than it carries is a wire error', () => {
+  // The framing tripwire: a body whose `reqN___data__` keys this reader no longer recognises yields
+  // nothing, and without this it would leave neither a shape nor a skip behind.
+  assert.throws(() => forwardChannelMessages(Buffer.from('count=1&ofs=0', 'utf8')), WireError);
+  assert.throws(
+    () => forwardChannelMessages(Buffer.from('count=2&ofs=0&req0___data__=%7B%7D', 'utf8')),
+    WireError,
+  );
+  assert.throws(() => forwardChannelMessages(Buffer.from('count=one&ofs=0', 'utf8')), WireError);
+  // A body with no `count` at all is still read for what it carries; only a stated one is held.
+  assert.deepEqual(forwardChannelMessages(Buffer.from('req0___data__=%7B%7D', 'utf8')), ['{}']);
+});
+
 test('a remove_target and a documents target carry no query and decode to nothing', () => {
   assert.equal(decodeJsonListen(JSON.stringify({ database: 'd', removeTarget: 1002 })), null);
   assert.equal(

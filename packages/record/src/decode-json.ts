@@ -99,6 +99,12 @@ export function decodeJsonListen(message: string): DecodeResult | null {
  * each `reqN___data__` holding one JSON-encoded request, plus a `headers=` on the first POST of a
  * channel. Nothing here is read but the `reqN___data__` keys, and `N` is what orders them — the
  * client numbers them from zero within one POST.
+ *
+ * `count` is not read for the messages, but it is held against them. It is the body's own statement
+ * of how many it carries, so a body that says one and yields none is a message this reader did not
+ * understand — and, left unchecked, one that would leave no shape and no skip behind. That is the
+ * tripwire: were the `reqN___data__` spelling ever to change under us, the POSTs would come out
+ * empty and the corpus would look complete rather than count them (SPEC §7).
  */
 export function forwardChannelMessages(body: Uint8Array): string[] {
   let params: URLSearchParams;
@@ -112,6 +118,15 @@ export function forwardChannelMessages(body: Uint8Array): string[] {
     const match = /^req(\d+)___data__$/.exec(key);
     if (match === null) continue;
     messages.push({ index: Number(match[1]), data: value });
+  }
+  const stated = params.get('count');
+  if (stated !== null) {
+    // Only what the body itself asserts, and only against how many were found. The numbering is
+    // left alone: a gap in it is the client's business, and modelling more of the framing than is
+    // read would decline bodies this reader has no quarrel with.
+    if (!/^\d+$/.test(stated) || Number(stated) !== messages.length) {
+      throw new WireError(`forward channel declares ${stated} message(s) and carries ${messages.length}`);
+    }
   }
   return messages.sort((a, b) => a.index - b.index).map((entry) => entry.data);
 }
