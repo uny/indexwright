@@ -95,6 +95,11 @@ jobs:
               echo "tarball holds $packed; $dir/package.json says $committed" >&2
               exit 1
             fi
+            # The release notes the `release` job cuts after the publish, cut here for the version
+            # the package currently declares. A version bumped without its changelog section closed
+            # would otherwise pass every PR and fail only on the tag, after npm has the version.
+            version="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).version);' < "$dir/package.json")"
+            node scripts/release-notes.mjs "$dir/CHANGELOG.md" "$version" > /dev/null
             echo "ok: $packed"
             rehearsed=$((rehearsed + 1))
           done
