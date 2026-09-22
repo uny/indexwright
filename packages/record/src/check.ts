@@ -26,7 +26,7 @@ import { parseBaseline } from './baseline.js';
 import { messageOf } from './client.js';
 import { mergeCorpora, parseCorpus } from './corpus.js';
 import { liveSingleFieldIndexes, reconcileOverrides, type LiveField, type OverrideReconciliation } from './overrides.js';
-import { isReportable, isTransient, ReadinessGate, DEFAULT_SETTLE_MS, type Readiness } from './readiness.js';
+import { isReportable, isTransient, ReadinessGate, stillHeld, DEFAULT_SETTLE_MS, type Held, type LiveIndex, type Readiness } from './readiness.js';
 import { isVouched, reconcile, type LiveCompositeIndex, type Reconciliation } from './reconcile.js';
 import { planReplay, ReplayError, type ReplayPlan } from './synthesise.js';
 import { replayClient, TargetError, type Replayer } from './replay.js';
@@ -410,9 +410,9 @@ export async function check(
   // line that was never printed.
   reportUnanswered(invalid, halted, say);
 
-  let held: Both;
+  let held: Confirmation;
   try {
-    held = await confirmSetHeld(target, command.project, candidate, overrides, say, {
+    held = await confirmSetHeld(target, command.project, candidate, overrides, live, say, {
       lister: options.lister ?? adminLister,
     });
   } catch (error) {
@@ -423,8 +423,12 @@ export async function check(
     say(`cannot report: the target could not be listed again after replay: ${error.message}`);
     return 2;
   }
-  if (!isVouchedBoth(held)) {
-    reportDivergence(held, command.indexes, say, withdrawal(held));
+  if (!isVouchedBoth(held.declared)) {
+    reportDivergence(held.declared, command.indexes, say, withdrawal(held.declared));
+    return 2;
+  }
+  if (held.identity.kind !== 'held') {
+    say(`cannot report: ${describeHeld(held.identity)}`);
     return 2;
   }
 
@@ -443,14 +447,20 @@ export async function check(
  * exactly what the `extra` half of `reconcile` exists to catch. Caught before replay, missed during
  * it, until here.
  *
- * What it does not cover is the *state* half of the same window, and the boundary is worth naming
- * rather than leaving to be discovered: `reconcile` compares declarations and does not consult
- * `state` (that is `readiness.ts`'s question), and it keys on fields rather than on the resource
- * name. So an index deleted and re-created under a new name with the same fields, or one that
- * regressed to `CREATING` or `NEEDS_REPAIR` while the queries were being answered, reconciles as
- * `identical` and is vouched for here — and the `FAILED_PRECONDITION` it caused is still reported as
- * a coverage gap. Closing that would mean running the readiness gate a second time, at the cost of a
- * second settling period on every run, which is a trade this change does not make.
+ * `reconcile` compares declarations: it does not consult `state` (that is `readiness.ts`'s
+ * question), and it keys on fields rather than on the resource name. So the same listing is asked a
+ * second question, against the listing the gate settled on before replay (issue #50): is every
+ * index still `READY`, and is it still the same set of names? An index that regressed to `CREATING`
+ * or `NEEDS_REPAIR` while the queries were being answered, or one deleted and re-created under a
+ * new name with the same fields, reconciles as `identical` and would otherwise be vouched for here —
+ * with the `FAILED_PRECONDITION` it caused reported as a coverage gap. The two questions are asked
+ * of the same flattened set the gate observes, composites and the overrides' nested indexes alike,
+ * and without a second settling period: `stillHeld` says why.
+ *
+ * The declarations are compared first and the identity second, because a set that moved in
+ * membership is better described by `reportDivergence` — which names the declaration — than by a
+ * list of resource names, and only a set that still reconciles has anything left for the second
+ * question to find.
  *
  * Whatever this finds can only *withdraw* a verdict. It never turns a `1` into a `0` or the reverse,
  * because it does not look at coverage at all — either the report stands or there is no report.
@@ -464,15 +474,49 @@ async function confirmSetHeld(
   project: string,
   candidate: readonly AnalysedIndex[],
   overrides: readonly AnalysedOverride[],
+  before: Listing,
   say: (text: string) => void,
   deps: { lister(project: string): Promise<IndexLister> },
-): Promise<Both> {
+): Promise<Confirmation> {
   const lister = await deps.lister(project);
+  let after: Listing;
   try {
-    return reconcileBoth(candidate, overrides, await listBoth(target, lister));
+    after = await listBoth(target, lister);
   } finally {
     await release('index lister', lister, say);
   }
+  return {
+    declared: reconcileBoth(candidate, overrides, after),
+    identity: stillHeld(flatten(before), flatten(after)),
+  };
+}
+
+/** What the confirmation after replay establishes: the two reconciliations, and the second look. */
+interface Confirmation {
+  readonly declared: Both;
+  readonly identity: Held;
+}
+
+/** The one set the gate observes, from the two listings that carry it. */
+function flatten(listing: Listing): LiveIndex[] {
+  return [...listing.indexes, ...liveSingleFieldIndexes(listing.fields)];
+}
+
+/**
+ * The second look, as the withdrawal line. The state kinds are worded by `describe`, so a
+ * regression reads the way the gate would have read it had it been there; `replaced` says which
+ * names went and which arrived, since the declarations — already vouched for — cannot tell them
+ * apart.
+ */
+function describeHeld(held: Exclude<Held, { kind: 'held' }>): string {
+  const lead = 'the index set changed while the queries were being answered';
+  if (held.kind === 'replaced') {
+    const parts: string[] = [];
+    if (held.gone.length > 0) parts.push(`no longer listed: ${names(held.gone)}`);
+    if (held.appeared.length > 0) parts.push(`newly listed: ${names(held.appeared)}`);
+    return `${lead}: ${count(Math.max(held.gone.length, held.appeared.length), 'index', 'indexes')} re-created (${parts.join('; ')})`;
+  }
+  return `${lead}: ${describe(held)}`;
 }
 
 /** The two listings that together are the index set: composites, and the fields carrying an override. */
@@ -561,10 +605,7 @@ async function establishReadiness(
       // The single-field indexes go through the gate beside the composites: an override builds
       // like a composite index and reports the same `state` while it does, so one applied moments
       // before a run is the readiness window SPEC §3 guards against, by the other listing.
-      const verdict = gate.observe(
-        [...live.indexes, ...liveSingleFieldIndexes(live.fields)],
-        deps.now(),
-      );
+      const verdict = gate.observe(flatten(live), deps.now());
       if (isReportable(verdict)) return live;
       if (!isTransient(verdict)) throw new Declined(describe(verdict));
       const waited = deps.now() - started;

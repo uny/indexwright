@@ -6,9 +6,11 @@ import {
   isReportable,
   isTransient,
   ReadinessGate,
+  stillHeld,
 } from '../dist/index.js';
 
 const ready = (name) => ({ name, state: 'READY' });
+const building = (name) => ({ name, state: 'CREATING' });
 
 test('a single all-READY observation is never enough', () => {
   // The failure this gate exists to prevent is a set that looks ready at one instant, so one
@@ -323,4 +325,29 @@ test('the default settling period errs long', () => {
   // shortening it has to be a deliberate edit rather than a drift.
   assert.equal(DEFAULT_SETTLE_MS, 60_000);
   assert.equal(new ReadinessGate().observe([ready('a')], 0).remainingMs, DEFAULT_SETTLE_MS);
+});
+
+test('a second look at a settled set reports a regression before an identity change, and a change before nothing (#50)', () => {
+  const settled = [ready('a'), ready('b')];
+  assert.deepEqual(stillHeld(settled, [ready('b'), ready('a')]), { kind: 'held' });
+  // The state half is answered in the gate's terms, so a caller words it the same way.
+  assert.deepEqual(stillHeld(settled, [ready('a'), building('b')]), { kind: 'building', indexes: ['b'] });
+  assert.deepEqual(stillHeld(settled, [{ name: 'a', state: 'NEEDS_REPAIR' }, ready('b')]), { kind: 'damaged', indexes: ['a'] });
+  // An index re-created carries a new name; the fields it carries are `reconcile`'s question.
+  assert.deepEqual(stillHeld(settled, [ready('a'), ready('c')]), { kind: 'replaced', gone: ['b'], appeared: ['c'] });
+  // State first: a re-created index still building is reported as building, which is what waiting
+  // would have resolved, rather than as replaced, which nothing would.
+  assert.deepEqual(stillHeld(settled, [ready('a'), building('c')]), { kind: 'building', indexes: ['c'] });
+  // A state the gate would not have recognised is not recognised here either, and outranks a rename.
+  assert.deepEqual(stillHeld(settled, [{ name: 'a', state: 'DEFRAGMENTING' }, ready('c')]), {
+    kind: 'unrecognised',
+    indexes: ['a'],
+    states: ['DEFRAGMENTING'],
+  });
+  // The two halves of `replaced` are independent: a name can arrive without one leaving, or leave
+  // without one arriving, and each is reported on its own side.
+  assert.deepEqual(stillHeld(settled, [ready('a'), ready('b'), ready('c')]), { kind: 'replaced', gone: [], appeared: ['c'] });
+  assert.deepEqual(stillHeld(settled, [ready('a')]), { kind: 'replaced', gone: ['b'], appeared: [] });
+  // An empty set that stayed empty held.
+  assert.deepEqual(stillHeld([], []), { kind: 'held' });
 });

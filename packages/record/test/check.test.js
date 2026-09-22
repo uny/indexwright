@@ -628,6 +628,48 @@ test('the confirmation withdraws a verdict and never replaces one, so it cannot 
   assert.doesNotMatch(moved.said(), /not served by the candidate set/);
 });
 
+test('the confirmation declines on an index that regressed or was re-created, not only on one that left (#50)', async () => {
+  // `reconcile` compares declarations: it does not consult `state` and keys on fields rather than
+  // on the resource name. Both of these reconcile as `identical` to the settled listing, and both
+  // are the false positive §2 forbids: the query answered `FAILED_PRECONDITION` because the index
+  // was rebuilding, not because the candidate set lacks it.
+  const uncovered = { kind: 'uncovered', message: '"needs an index"' };
+
+  // Deleted and re-created under a new name, still building when the confirmation looks.
+  const recreated = [{ ...READY[0], name: `${READY[0].name}2`, state: 'CREATING' }];
+  const rebuilding = harness({ listings: [READY, READY, recreated], statuses: [uncovered] });
+  assert.equal(await rebuilding.run(), 2);
+  assert.match(rebuilding.said(), /cannot report: the index set changed while the queries were being answered: 1 index still building: ".*\/indexes\/ix2"/);
+  assert.doesNotMatch(rebuilding.said(), /not served by the candidate set/);
+
+  // The same index, regressed in place.
+  const damaged = harness({ listings: [READY, READY, [{ ...READY[0], state: 'NEEDS_REPAIR' }]], statuses: [uncovered] });
+  assert.equal(await damaged.run(), 2);
+  assert.match(damaged.said(), /cannot report: the index set changed while the queries were being answered: 1 index in NEEDS_REPAIR/);
+
+  // Re-created and already `READY` again: every field the same, a different resource name. The
+  // replay ran against something else, and that is what the line says.
+  const finished = [{ ...READY[0], name: `${READY[0].name}2` }];
+  const renamed = harness({ listings: [READY, READY, finished], statuses: [uncovered] });
+  assert.equal(await renamed.run(), 2);
+  assert.match(renamed.said(), /cannot report: the index set changed while the queries were being answered: 1 index re-created \(no longer listed: ".*\/indexes\/ix"; newly listed: ".*\/indexes\/ix2"\)/);
+
+  // The overrides' nested indexes go through the same look, since they build like composites and
+  // regress like them. This one is `identical` to `reconcileOverrides` and `CREATING` to the gate.
+  const override = harness({
+    declared: DECLARED_WITH_OVERRIDE,
+    fieldListings: [[DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride('CREATING')]],
+    statuses: [uncovered],
+  });
+  assert.equal(await override.run(), 2);
+  assert.match(override.said(), /cannot report: the index set changed while the queries were being answered: 1 index still building: ".*\/fields\/tags#COLLECTION_GROUP:CONTAINS"/);
+
+  // And a set that held — same names, all `READY` — is left alone: the verdict stands, as before.
+  const held = harness({ listings: [READY, READY, READY], statuses: [uncovered] });
+  assert.equal(await held.run(), 1);
+  assert.match(held.said(), /1 query replayed, 1 not served/);
+});
+
 test('a confirmation that could not be made is not a confirmation', async () => {
   // Declining here costs a run that was probably fine. Not declining reports a verdict nothing
   // stands behind, and §2 ranks those the other way round.

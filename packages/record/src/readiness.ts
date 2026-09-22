@@ -126,6 +126,84 @@ function fingerprint(indexes: readonly LiveIndex[]): string {
   return JSON.stringify(namesOf(indexes));
 }
 
+type Blocked = Extract<Readiness, { kind: 'building' | 'damaged' | 'unrecognised' }>;
+
+/**
+ * The state half of the rule, over one observation: the verdict that stops a set being all-`READY`,
+ * or `null` when nothing does.
+ *
+ * Precedence is by what the caller should do next, not by severity. `unrecognised` comes first
+ * because it says this version may be misreading the API, which is a reason to distrust the
+ * classification of every other index in the same response.
+ *
+ * Shared by the gate and by the confirmation after replay (issue #50), which asks the same question
+ * of a single listing and has no settling period to attach it to.
+ */
+function blocking(indexes: readonly LiveIndex[]): Blocked | null {
+  const unrecognised = indexes.filter((index) => !ACTIONABLE.has(index.state));
+  const damaged = indexes.filter((index) => index.state === 'NEEDS_REPAIR');
+  const building = indexes.filter((index) => index.state === 'CREATING');
+
+  if (unrecognised.length > 0) {
+    // Coerced, because `states` is declared `readonly string[]` and the values reaching here are
+    // whatever the API sent: the gRPC admin client types `Index.state` as a numeric enum or
+    // `null`, and proto3 JSON omits the field entirely when it is `STATE_UNSPECIFIED`. Those all
+    // classify as unrecognised either way — coercing only keeps the declared type honest for a
+    // caller that builds a message out of it.
+    //
+    // The numeric case is a possibility the *types* allow rather than one measured coming back:
+    // issue #20 observed `v1.FirestoreAdminClient` returning enum names, identically over gRPC and
+    // over `fallback: true`. The coercion stays, since the type is what a caller compiles against.
+    const states = [...new Set(unrecognised.map((index) => String(index.state)))].sort(
+      compareByCodePoint,
+    );
+    return { kind: 'unrecognised', indexes: namesOf(unrecognised), states };
+  }
+  if (damaged.length > 0) return { kind: 'damaged', indexes: namesOf(damaged) };
+  if (building.length > 0) return { kind: 'building', indexes: namesOf(building) };
+  return null;
+}
+
+/**
+ * What a second look at a settled set can find (issue #50).
+ *
+ * `held` is the only verdict a report may go out on. The three `Readiness` kinds are the state
+ * half: an index that regressed while the queries were being answered. `replaced` is the identity
+ * half: the same *number* of indexes may be there, reconciling to the same declarations, and still
+ * not be the ones the run was vouched for — an index deleted and re-created carries a new resource
+ * name, and a query answered `FAILED_PRECONDITION` while it was rebuilding is not a coverage gap.
+ */
+export type Held =
+  | { readonly kind: 'held' }
+  | Blocked
+  | { readonly kind: 'replaced'; readonly gone: readonly string[]; readonly appeared: readonly string[] };
+
+/**
+ * Whether the set observed `before` — all `READY`, and settled, or the gate would not have let the
+ * run past it — is still that set `after`.
+ *
+ * This is deliberately not a second pass through `ReadinessGate`. The gate answers "may a report
+ * go out *now*", and needs two observations a settling period apart to say yes; that period is
+ * what protects the first query of the replay from an index that reports `READY` before it serves.
+ * The question here is narrower — did anything move between the listing the gate settled on and
+ * this one — and a single listing answers it, at no cost in wall-clock. What one listing cannot see
+ * is a regression that began and finished inside the window, which the gate could not see either
+ * without polling through it, and `check` has already paid for that once.
+ *
+ * `before` is compared by name, not by state: it was all-`READY` by construction, so a state
+ * difference is a state in `after`, and `blocking` names it in the terms the gate would have.
+ */
+export function stillHeld(before: readonly LiveIndex[], after: readonly LiveIndex[]): Held {
+  const regressed = blocking(after);
+  if (regressed !== null) return regressed;
+  const was = new Set(namesOf(before));
+  const now = new Set(namesOf(after));
+  const gone = [...was].filter((name) => !now.has(name));
+  const appeared = [...now].filter((name) => !was.has(name));
+  if (gone.length === 0 && appeared.length === 0) return { kind: 'held' };
+  return { kind: 'replaced', gone, appeared };
+}
+
 /**
  * The settling half of the rule, as a state machine over observations.
  *
@@ -172,36 +250,10 @@ export class ReadinessGate {
       throw new RangeError(`at must be a finite number, got ${at}`);
     }
 
-    const unrecognised = indexes.filter((index) => !ACTIONABLE.has(index.state));
-    const damaged = indexes.filter((index) => index.state === 'NEEDS_REPAIR');
-    const building = indexes.filter((index) => index.state === 'CREATING');
-
-    // Precedence is by what the caller should do next, not by severity. `unrecognised` comes first
-    // because it says this version may be misreading the API, which is a reason to distrust the
-    // classification of every other index in the same response.
-    if (unrecognised.length > 0) {
+    const blocked = blocking(indexes);
+    if (blocked !== null) {
       this.#reset();
-      // Coerced, because `states` is declared `readonly string[]` and the values reaching here are
-      // whatever the API sent: the gRPC admin client types `Index.state` as a numeric enum or
-      // `null`, and proto3 JSON omits the field entirely when it is `STATE_UNSPECIFIED`. Those all
-      // classify as unrecognised either way — coercing only keeps the declared type honest for a
-      // caller that builds a message out of it.
-      //
-      // The numeric case is a possibility the *types* allow rather than one measured coming back:
-      // issue #20 observed `v1.FirestoreAdminClient` returning enum names, identically over gRPC and
-      // over `fallback: true`. The coercion stays, since the type is what a caller compiles against.
-      const states = [...new Set(unrecognised.map((index) => String(index.state)))].sort(
-        compareByCodePoint,
-      );
-      return { kind: 'unrecognised', indexes: namesOf(unrecognised), states };
-    }
-    if (damaged.length > 0) {
-      this.#reset();
-      return { kind: 'damaged', indexes: namesOf(damaged) };
-    }
-    if (building.length > 0) {
-      this.#reset();
-      return { kind: 'building', indexes: namesOf(building) };
+      return blocked;
     }
 
     const seen = fingerprint(indexes);

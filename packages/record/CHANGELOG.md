@@ -24,6 +24,22 @@ again, by its own `corpusVersion`.
   every nested index, and refusing them on composite indexes alone would be half a guard.
   `FIELD_UNREADABLE_REASONS` and `OVERRIDE_INCOMPARABLE_REASONS` gain the same three members.
   `LiveCompositeIndex` and `LiveSingleFieldIndex` model the three fields.
+- **`check` declines on an index that regressed or was re-created while the queries were being
+  answered** (issue #50). The confirmation #49 added after replay reconciles declarations only:
+  `reconcile` does not consult `state` and keys on fields rather than on the resource name, so an
+  index that fell back to `CREATING` or `NEEDS_REPAIR` mid-run, or one deleted and re-created under
+  a new name with the same fields, reconciled as `identical` and the `FAILED_PRECONDITION` it caused
+  was reported as a coverage gap — exit 1 for a gap the candidate set does not have. The second
+  listing is now also compared with the one the readiness gate settled on, over the same flattened
+  set the gate observes (composites and the overrides' nested indexes): every index must still be
+  `READY`, and the set of resource names must be the same. Either failing withdraws the verdict
+  (exit 2) with a line naming what changed, in the gate's own words for a regression. No extra
+  listing and no second settling period; the trade #49 declined to make is not made here either.
+
+### Added
+
+- `stillHeld` and `Held` are exported from the readiness module: the second look at a settled set,
+  as a pure function over two observations, so the rule is testable without an index build.
 
 ### Changed
 
@@ -42,6 +58,12 @@ again, by its own `corpusVersion`.
 - The live half is guarded on the model, not measured: the Enterprise and MongoDB-compatible
   listings issue #20 could not reach are still unobserved. A non-null `searchIndexOptions` under
   `ANY_API` — the fourth route the fixture notes mention — is not modelled and not refused.
+- What the second look cannot see is a change that began and finished inside the window. A composite
+  index is named by a server-generated id, so a re-create always changes the name and is caught even
+  once it is `READY` again. An override's nested index is not: it is named here from field, scope and
+  direction, so one dropped and re-applied that reached `READY` before the confirmation reads as
+  held. Seeing that would take the gate's polling through the window, which is the cost #50 chose
+  not to pay.
 
 ## [0.8.0] — 2026-09-21
 
