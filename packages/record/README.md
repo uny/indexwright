@@ -131,7 +131,10 @@ begins there. `check` lists once more at the end and reconciles again; if the se
 not be compared again, the run declines with `2` rather than reporting. Reconciliation compares
 declarations, so the same listing is also held against the one the readiness gate settled on: an
 index that regressed to `CREATING` or `NEEDS_REPAIR` mid-run, or one deleted and re-created under a
-new resource name with the same fields, declines the same way. That second look is strictly
+new resource name with the same fields, declines the same way. Only a composite index carries a
+server-generated name, though: an override's nested index is named from field, scope and direction,
+so one dropped and re-applied that is `READY` again by the time of the second look is not
+distinguishable from one that held. That second look is strictly
 a withdrawal — it examines the index set and not coverage, so it can turn either verdict into a
 decline and neither verdict into the other. On that path the coverage lines and the
 `N queries replayed` summary are not printed at all: there is no report to caveat. The lines naming
