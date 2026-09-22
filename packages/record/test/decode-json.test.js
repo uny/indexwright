@@ -122,6 +122,68 @@ test('a forward channel that is not UTF-8 is a wire error, which the recorder co
   assert.throws(() => forwardChannelMessages(Buffer.from([0xff, 0xfe])), WireError);
 });
 
+test('the original proto field names read as the same query the lowerCamelCase ones do', () => {
+  // Not a fixture: no Firebase SDK writes this spelling, and the fixtures hold what a client sent.
+  // A conforming proto3 JSON writer may, though, and the proxy reads the wire rather than the
+  // source. Written out in full so that a field read under only one spelling fails here — three of
+  // them (`all_descendants`, `order_by`, `find_nearest`) used to fall through as unknown keys and
+  // record the query under the wrong shape rather than decline it.
+  const camel = {
+    structuredQuery: {
+      from: [{ collectionId: 'items', allDescendants: true }],
+      where: {
+        compositeFilter: {
+          op: 'AND',
+          filters: [
+            { fieldFilter: { field: { fieldPath: 'sku' }, op: 'EQUAL' } },
+            { unaryFilter: { field: { fieldPath: 'deletedAt' }, op: 'IS_NULL' } },
+          ],
+        },
+      },
+      orderBy: [{ field: { fieldPath: 'qty' }, direction: 'DESCENDING' }],
+    },
+  };
+  const snake = {
+    structured_query: {
+      from: [{ collection_id: 'items', all_descendants: true }],
+      where: {
+        composite_filter: {
+          op: 'AND',
+          filters: [
+            { field_filter: { field: { field_path: 'sku' }, op: 'EQUAL' } },
+            { unary_filter: { field: { field_path: 'deletedAt' }, op: 'IS_NULL' } },
+          ],
+        },
+      },
+      order_by: [{ field: { field_path: 'qty' }, direction: 'DESCENDING' }],
+    },
+  };
+  const read = (body) => decodeJsonRunQuery(Buffer.from(JSON.stringify(body), 'utf8'));
+  // Conjuncts sorted, as `toQueryShape` sorts them; the sort order is not.
+  const expected = 'items::COLLECTION_GROUP::AND(deletedAt:IS_NULL|sku:EQUAL)::qty:DESCENDING';
+  assert.equal(toQueryShape(read(camel).query).key, expected);
+  assert.equal(toQueryShape(read(snake).query).key, expected);
+});
+
+test('a find_nearest under either spelling is a vector query, not a shape recorded without it', () => {
+  const vector = { vectorField: { fieldPath: 'embedding' }, limit: 5 };
+  for (const query of [{ findNearest: vector }, { find_nearest: vector }]) {
+    const body = { structuredQuery: { from: [{ collectionId: 'docs' }], ...query } };
+    assert.deepEqual(decodeJsonRunQuery(Buffer.from(JSON.stringify(body), 'utf8')), {
+      ok: false,
+      reason: 'vector-query',
+    });
+  }
+});
+
+test('a field named under both spellings at once is undecodable, because neither one wins', () => {
+  const body = { structuredQuery: { from: [{ collectionId: 'i', allDescendants: true, all_descendants: false }] } };
+  assert.deepEqual(decodeJsonRunQuery(Buffer.from(JSON.stringify(body), 'utf8')), {
+    ok: false,
+    reason: 'undecodable-message',
+  });
+});
+
 test('a remove_target and a documents target carry no query and decode to nothing', () => {
   assert.equal(decodeJsonListen(JSON.stringify({ database: 'd', removeTarget: 1002 })), null);
   assert.equal(

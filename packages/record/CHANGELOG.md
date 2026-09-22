@@ -26,6 +26,14 @@ again, by its own `corpusVersion`.
   it — `__name__` is appended to the sort order and an inequality field promoted into it — and the
   corpus records what was sent, as SPEC §7 already said it would.
 
+- **A field is read under either name the proto3 JSON mapping gives it.** The Firebase SDKs write
+  lowerCamelCase, and reading only that spelling was not merely a missing field: `all_descendants`,
+  `order_by` and `find_nearest` fell through as unknown keys, so a client writing the original proto
+  names would have had a collection-group query recorded as a collection one, a sort order dropped,
+  and a vector query recorded as a plain shape — recorded wrongly rather than declined. The proxy
+  reads the wire rather than the source, so the client that wrote those bytes need not be a Firebase
+  SDK. A message naming one field under both spellings is `undecodable-message`.
+
 ### Changed
 
 - **The HTTP/1.1 count is gone from stderr, and `Recorder.http1` with it.** The line said those
