@@ -126,6 +126,8 @@ function fingerprint(indexes: readonly LiveIndex[]): string {
   return JSON.stringify(namesOf(indexes));
 }
 
+type Blocked = Extract<Readiness, { kind: 'building' | 'damaged' | 'unrecognised' }>;
+
 /**
  * The state half of the rule, over one observation: the verdict that stops a set being all-`READY`,
  * or `null` when nothing does.
@@ -137,8 +139,6 @@ function fingerprint(indexes: readonly LiveIndex[]): string {
  * Shared by the gate and by the confirmation after replay (issue #50), which asks the same question
  * of a single listing and has no settling period to attach it to.
  */
-type Blocked = Extract<Readiness, { kind: 'building' | 'damaged' | 'unrecognised' }>;
-
 function blocking(indexes: readonly LiveIndex[]): Blocked | null {
   const unrecognised = indexes.filter((index) => !ACTIONABLE.has(index.state));
   const damaged = indexes.filter((index) => index.state === 'NEEDS_REPAIR');

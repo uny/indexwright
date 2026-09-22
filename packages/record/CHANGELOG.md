@@ -36,13 +36,16 @@ again, by its own `corpusVersion`.
   (exit 2) with a line naming what changed, in the gate's own words for a regression. No extra
   listing and no second settling period; the trade #49 declined to make is not made here either.
 
+### Added
+
+- `stillHeld` and `Held` are exported from the readiness module: the second look at a settled set,
+  as a pure function over two observations, so the rule is testable without an index build.
+
 ### Changed
 
 - `UnreadableReason`, `IncomparableReason`, `FieldUnreadableReason` and `OverrideIncomparableReason`
   widen by the three members above. An exhaustive `switch` or `Record` over any of them stops
   compiling until it names them.
-- `stillHeld` and `Held` are exported from the readiness module: the second look at a settled set,
-  as a pure function over two observations, so the rule is testable without an index build.
 
 ### Notes
 

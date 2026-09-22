@@ -652,7 +652,7 @@ test('the confirmation declines on an index that regressed or was re-created, no
   const finished = [{ ...READY[0], name: `${READY[0].name}2` }];
   const renamed = harness({ listings: [READY, READY, finished], statuses: [uncovered] });
   assert.equal(await renamed.run(), 2);
-  assert.match(renamed.said(), /1 index re-created \(no longer listed: ".*\/indexes\/ix"; newly listed: ".*\/indexes\/ix2"\)/);
+  assert.match(renamed.said(), /cannot report: the index set changed while the queries were being answered: 1 index re-created \(no longer listed: ".*\/indexes\/ix"; newly listed: ".*\/indexes\/ix2"\)/);
 
   // The overrides' nested indexes go through the same look, since they build like composites and
   // regress like them. This one is `identical` to `reconcileOverrides` and `CREATING` to the gate.
@@ -662,7 +662,7 @@ test('the confirmation declines on an index that regressed or was re-created, no
     statuses: [uncovered],
   });
   assert.equal(await override.run(), 2);
-  assert.match(override.said(), /1 index still building: ".*\/fields\/tags#COLLECTION_GROUP:CONTAINS"/);
+  assert.match(override.said(), /cannot report: the index set changed while the queries were being answered: 1 index still building: ".*\/fields\/tags#COLLECTION_GROUP:CONTAINS"/);
 
   // And a set that held — same names, all `READY` — is left alone: the verdict stands, as before.
   const held = harness({ listings: [READY, READY, READY], statuses: [uncovered] });
