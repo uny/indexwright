@@ -499,6 +499,18 @@ function proxyHttp1(
     if (!response.headersSent) response.writeHead(502);
     response.end();
   });
+  // The downstream half going away has to take the upstream half with it, the way a failed
+  // `ServerHttp2Stream` destroys the stream it opened. A pipe does not do this: neither
+  // `request.pipe` nor `upstreamResponse.pipe` destroys its source when the destination dies, so a
+  // request still in flight is left holding a socket on the global agent that nothing owns —
+  // `close` below tears down what it opened, and this is not among it.
+  //
+  // A WebChannel backward channel is exactly that request: a chunked GET the emulator holds open
+  // for as long as the listener lives. A run that captured the Web SDK therefore ended with one in
+  // flight, and `indexwright-record` kept the event loop alive after the suite had finished and the
+  // corpus was written — the same hang the upstream socket above is owned to avoid, reached by the
+  // other transport.
+  response.on('close', () => forwarded.destroy());
   request.pipe(forwarded);
 }
 

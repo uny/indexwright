@@ -34,6 +34,13 @@ again, by its own `corpusVersion`.
   reads the wire rather than the source, so the client that wrote those bytes need not be a Firebase
   SDK. A message naming one field under both spellings is `undecodable-message`.
 
+- **A capture closes an HTTP/1.1 request still in flight.** A WebChannel backward channel is a
+  chunked `GET` the emulator holds open for as long as the listener lives, so a run that captured
+  the Web SDK ended with one in flight — and the upstream half of it, which nothing owned, kept the
+  event loop alive after the suite had finished and the corpus was written. `indexwright-record`
+  appeared to hang after a capture that in fact succeeded. The downstream half going away now takes
+  the upstream half with it, as a failed gRPC stream already destroyed the stream it opened.
+
 ### Changed
 
 - **The HTTP/1.1 count is gone from stderr, and `Recorder.http1` with it.** The line said those

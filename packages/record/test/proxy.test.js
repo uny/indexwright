@@ -438,6 +438,47 @@ test('a forward-channel body the reader cannot take apart is counted, not passed
   }
 });
 
+test('closing releases an upstream request still in flight, so a captured run can exit', async () => {
+  // A WebChannel backward channel is a chunked GET the emulator holds open for as long as the
+  // listener lives, so a run that captured the Web SDK ends with one in flight. Left holding a
+  // socket on the global agent, it keeps the event loop alive after the corpus is written and
+  // `indexwright-record` appears to hang after a capture that in fact succeeded.
+  const sockets = new Set();
+  const upstream = createHttp1Server((request, response) => {
+    response.writeHead(200, { 'content-type': 'text/plain' });
+    response.write('[[0,["c","SID",,8]]]\n'); // and never ends, as the backward channel does not
+  });
+  upstream.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  const upstreamAddress = await listen(upstream);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: () => {} });
+  const channel = `http://${capture.address}/google.firestore.v1.Firestore/Listen/channel?VER=8&SID=a&RID=rpc&TYPE=xmlhttp`;
+  const aborter = new AbortController();
+  try {
+    const response = await fetch(channel, { signal: aborter.signal });
+    // Read one chunk, so the request is established rather than merely sent.
+    await response.body.getReader().read();
+    assert.equal(sockets.size, 1, 'the proxy opened the backward channel upstream');
+
+    await capture.close();
+    // Both destroys are asynchronous — the downstream socket's close is what reaches the response,
+    // and the upstream socket's close follows it — so this waits for the state rather than for a
+    // fixed number of turns. Unfixed it never arrives, and the test fails on the deadline instead
+    // of on the assertion.
+    const deadline = Date.now() + 2000;
+    while (sockets.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(sockets.size, 0, 'closing the capture released the upstream request');
+  } finally {
+    aborter.abort();
+    for (const socket of sockets) socket.destroy();
+    upstream.close();
+  }
+});
+
 test('REST calls the corpus cannot model are counted under the reasons gRPC calls are', async () => {
   const upstream = stubHttp1Upstream();
   const upstreamAddress = await listen(upstream.server);
