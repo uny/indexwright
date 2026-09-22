@@ -415,6 +415,29 @@ test('a WebChannel forward channel is recorded message by message, and its other
   }
 });
 
+test('a forward-channel body the reader cannot take apart is counted, not passed over', async () => {
+  // The POST was a query-bearing call whatever came of its body. Recording nothing for it without
+  // saying so is how a dropped query comes to look like one that was never issued (SPEC §7) — the
+  // same rule the gRPC side keeps for a RunQuery that carries no frame.
+  const upstream = stubHttp1Upstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: () => {} });
+  try {
+    const channel = '/google.firestore.v1.Firestore/Listen/channel?VER=8&RID=1&t=1';
+    const form = { 'content-type': 'application/x-www-form-urlencoded' };
+    // Not UTF-8 at all, and a body whose stated count nothing answers: both leave no message.
+    await post(capture.address, channel, Buffer.from([0xff, 0xfe]), form);
+    await post(capture.address, channel, 'count=1&ofs=0', form);
+    assert.equal(upstream.seen.length, 2, 'both still reached the upstream');
+    assert.equal(capture.recorder.observed, 2);
+    assert.equal(capture.recorder.skips.get('undecodable-message'), 2);
+    assert.equal(capture.recorder.shapes.length, 0);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
 test('REST calls the corpus cannot model are counted under the reasons gRPC calls are', async () => {
   const upstream = stubHttp1Upstream();
   const upstreamAddress = await listen(upstream.server);
