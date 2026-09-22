@@ -5,7 +5,16 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## [Unreleased]
+## [0.9.0] — 2026-09-22
+
+The release about what `check` vouches for. Two ways a set that was not the candidate set could
+come back `identical` are closed: a declaration or a live index carrying `unique`, `multikey` or
+`shardCount` — invisible to the canonical key, and until now compared as if absent — is refused on
+either side, the way `density` already was; and the confirmation after replay, which #49 added to
+notice a set that moved, now also notices one that regressed from `READY` or was re-created under a
+new name while the queries were being answered, so the `FAILED_PRECONDITION` it answered is
+declined rather than reported as a coverage gap. Neither adds a listing or a settling period. Minor
+rather than patch because the reason unions widen and the readiness module gains an export.
 
 ### Fixed
 
@@ -931,6 +940,7 @@ First release. Query capture, specified in [SPEC.md](https://github.com/uny/inde
   stderr. Snapshot listeners carry their query over `Listen` and are counted, not recorded.
   Capturing `Listen` is the first extension worth making.
 
+[0.9.0]: https://github.com/uny/indexwright/releases/tag/record-v0.9.0
 [0.8.0]: https://github.com/uny/indexwright/releases/tag/record-v0.8.0
 [0.7.0]: https://github.com/uny/indexwright/releases/tag/record-v0.7.0
 [0.6.0]: https://github.com/uny/indexwright/releases/tag/record-v0.6.0
