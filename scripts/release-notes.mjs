@@ -7,14 +7,15 @@
 // file it was cut from are one text rather than two that drift. The heading itself is left out:
 // the release carries the version in its name.
 //
-// A version the changelog does not have a section for is an error, not an empty body. The release
-// workflows run this on the tag, after the publish, and a tag whose changelog was not closed is
-// the mistake worth failing on rather than shipping a blank release page over.
+// A version the changelog does not have a section for is an error, and so is a section with
+// nothing under its heading. The release workflows run this on the tag, after the publish, and a
+// tag whose changelog was not closed is the mistake worth failing on rather than shipping a blank
+// release page over.
 //
 // Node's own modules only, so the release job that runs it installs nothing.
 
 import { readFileSync } from 'node:fs';
-import { basename, dirname, relative } from 'node:path';
+import { relative } from 'node:path';
 
 const [changelog, version] = process.argv.slice(2);
 if (!changelog || !version) {
@@ -33,6 +34,10 @@ if (start === -1) {
 const bodyStart = start + text.match(heading)[0].length;
 const next = text.slice(bodyStart).search(/^## /m);
 const body = (next === -1 ? text.slice(bodyStart) : text.slice(bodyStart, bodyStart + next)).trim();
+if (body === '') {
+  console.error(`${changelog}'s "## [${version}]" section is empty`);
+  process.exit(1);
+}
 
 // The anchor GitHub gives a `## [0.9.0] — 2026-09-22` heading: lowercased, punctuation dropped,
 // spaces to hyphens. The em dash is punctuation and goes; its surrounding spaces stay as hyphens.
