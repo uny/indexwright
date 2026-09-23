@@ -1,0 +1,13 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    { "collectionGroup": "users", "fieldPath": "bio", "indexes": [] },
+    { "collectionGroup": "users", "fieldPath": "email", "indexes": [] },
+    {
+      "collectionGroup": "users",
+      "fieldPath": "bio",
+      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }]
+    },
+    { "collectionGroup": "users", "fieldPath": "bio", "indexes": [] }
+  ]
+}

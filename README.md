@@ -10,7 +10,7 @@ client is already resolved. [SPEC.md](SPEC.md) §3 states the split and what it 
 
 | Package | What it does |
 |:--|:--|
-| [`indexwright`](packages/indexwright) | Lints `firestore.indexes.json` — four rules, no network, no credentials |
+| [`indexwright`](packages/indexwright) | Lints `firestore.indexes.json` — five rules, no network, no credentials |
 | [`@indexwright/record`](packages/record) | Captures the query shapes a suite issues, as a corpus |
 
 [SPEC.md](SPEC.md) is the specification for both, and is the document the code cites: a comment

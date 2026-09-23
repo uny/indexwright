@@ -75,7 +75,7 @@ withInstalledTarball(root, ({ files, consumer }) => {
       probe,
       "import { lintTexts, rules } from 'indexwright';\n" +
         "const result = lintTexts([{ file: 'x.json', text: '{\"indexes\":[]}' }]);\n" +
-        'if (rules.length !== 4) throw new Error("expected four rules");\n' +
+        'if (rules.length !== 5) throw new Error("expected five rules");\n' +
         'if (result.summary.warnings !== 0) throw new Error("expected a clean result");\n' +
         'console.log("api ok");\n',
     );

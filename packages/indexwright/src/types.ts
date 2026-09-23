@@ -130,6 +130,7 @@ export const RULE_IDS = [
   'field-order-variant',
   'explicit-name-field',
   'quota-headroom',
+  'repeated-field-override',
 ] as const;
 
 export type RuleId = (typeof RULE_IDS)[number];
@@ -138,7 +139,10 @@ export type RuleId = (typeof RULE_IDS)[number];
 export interface Finding {
   rule: RuleId;
   file: string;
-  /** `null` when the finding is about the file rather than about one index. */
+  /**
+   * The canonical key of the index the finding concerns, or — for a rule over `fieldOverrides` — of
+   * the override. `null` when the finding is about the file rather than about one declaration.
+   */
   key: string | null;
   message: string;
   /** Other keys in the same finding group, sorted ascending. `[]` when there are none. */
@@ -177,6 +181,7 @@ export interface RuleContext {
   file: string;
   document: IndexDocument;
   indexes: readonly AnalysedIndex[];
+  overrides: readonly AnalysedOverride[];
   options: RuleOptions;
 }
 

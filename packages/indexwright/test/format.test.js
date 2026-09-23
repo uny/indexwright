@@ -20,7 +20,7 @@ test('text output groups findings by rule and states the disclaimer', () => {
 
 test('text output says so plainly when there is nothing to report', () => {
   const output = formatText(lintFixtures(['clean.json']));
-  assert.match(output, /^No findings \(1 file, 4 rules\)\.$/m);
+  assert.match(output, /^No findings \(1 file, 5 rules\)\.$/m);
 });
 
 test('json output carries the specified shape', () => {

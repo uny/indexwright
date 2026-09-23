@@ -21,7 +21,7 @@ test('defaults match the specified CLI surface', () => {
   assert.equal(command.maxWarnings, Number.POSITIVE_INFINITY);
   assert.equal(command.quota, 1000);
   assert.equal(command.quotaThreshold, 0.8);
-  assert.equal(command.rules.length, 4);
+  assert.equal(command.rules.length, 5);
 });
 
 test('options accept both spellings', () => {
@@ -48,6 +48,7 @@ test('--rule selects and --disable subtracts, in canonical order', () => {
     'field-order-variant',
     'explicit-name-field',
     'quota-headroom',
+    'repeated-field-override',
   ]);
 });
 

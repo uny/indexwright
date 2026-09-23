@@ -256,7 +256,7 @@ Any file in the `firestore.indexes.json` shape:
       "density": "…"          // optional, passed through
     }
   ],
-  "fieldOverrides": [         // optional; validated and canonicalised, read by no rule yet
+  "fieldOverrides": [         // optional; validated and canonicalised, read by R5
     {
       "collectionGroup": "…",
       "fieldPath": "…",
@@ -274,9 +274,8 @@ otherwise derives for every field. An entry replaces that default for one field 
 group with the *whole* set in `indexes` — an export materialises the defaults an override keeps —
 and an empty set exempts the field from indexing. A `vectorConfig` entry is accepted for symmetry
 with a composite field, though the Firebase CLI neither writes nor deploys one here — its
-single-field indexes carry `order` or `arrayConfig` only. No rule reads it yet; it is modelled so
-that the one canonical form serves both the linter and `check` (§3), which must reconcile it
-against a live listing.
+single-field indexes carry `order` or `arrayConfig` only. It is modelled so that the one canonical
+form serves both the linter (R5) and `check` (§3), which must reconcile it against a live listing.
 
 Multiple files may be passed; each is analysed independently. Rules are not applied across files.
 
@@ -305,9 +304,11 @@ the files that were fine.
 
 ## 5. Rules
 
-Every rule emits **warnings**, never errors. Each finding carries: rule id, file, a canonical index
-key, and a one-line reason. A finding that concerns the file as a whole rather than any particular
-index carries a **null** key.
+Every rule emits **warnings**, never errors. Each finding carries: rule id, file, a canonical key,
+and a one-line reason. The key is a canonical index key, or — for a rule over `fieldOverrides` — a
+canonical override key; the two share the `::`-separated shape but not the meaning of its second
+part. A finding that concerns the file as a whole rather than any particular declaration carries a
+**null** key.
 
 A rule whose subject is a *set* of indexes emits one grouped finding for that set, not one finding
 per member. The finding's `key` is the lexicographically smallest member key and `related` holds the
@@ -436,6 +437,42 @@ depends on the rate of index growth.
 
 **Output.** The finding is about the file, not about any one index, so its `key` is `null` and its
 `related` is empty. One finding per file at most.
+
+---
+
+### R5 · `repeated-field-override`
+
+**Detects.** Two or more `fieldOverrides` entries that name the same `collectionGroup` and
+`fieldPath` and do not declare the same configuration. One finding is emitted per such field.
+
+Two entries declare the same configuration when their canonical override keys are equal and their
+`ttl` is the same — omitted, `true`, or `false`. `ttl` is not part of the key (§5, *Canonical
+override key*), but it is part of what a deploy does: the Firebase CLI leaves a field's TTL policy
+alone when `ttl` is omitted, removes it on `false`, and sets it on `true`. `collectionGroup` and
+`fieldPath` are compared as written, as the Firebase CLI compares them, so two spellings of one
+path are not grouped.
+
+**Rationale.** Firestore keeps one configuration per field, and one entry can state any of them —
+the whole index set and the TTL policy — so a second entry is never needed to say something. When
+the entries disagree, the file does not say which one applies. The Firebase CLI checks none of
+this: it applies the entries in its own sort order, skipping any the live field already matches
+when the deploy begins, so which entry takes effect depends on the deploying tool and on the
+database's state, and can change between two deploys of an unchanged file. `check` (§3) meets the
+same fact from the other side: when the entries differ in their index sets, only one can match the
+live field, and the others reconcile as missing.
+
+**False positives.** None that the file can distinguish: no configuration needs two entries to be
+stated. The rule warns rather than fails for the reason every rule does (§8), and the finding asks
+for the field's configuration to be declared in one entry — which changes nothing in Firestore — not
+for an override to be removed.
+
+Entries that agree decide nothing between them and do not fire the rule, as byte-identical indexes
+do not fire R2. That leaves an exact copy — the likely residue of a merge — unreported; it is
+redundant but not ambiguous.
+
+**Output.** The finding's `key` is the smallest distinct override key among the entries and
+`related` holds the rest. Entries that differ only in `ttl` share a key, so the message states the
+number of entries and their positions in `fieldOverrides`, which the keys alone cannot.
 
 ## 6. Output formats
 

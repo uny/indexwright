@@ -26,7 +26,7 @@ test('a file-wide finding sorts before the index findings of the same file', () 
 test('byRule lists every rule that ran, including the silent ones', () => {
   const result = lintFixtures(['clean.json']);
   assert.deepEqual(Object.keys(result.summary.byRule).sort(), [...RULE_IDS].sort());
-  assert.deepEqual(Object.values(result.summary.byRule), [0, 0, 0, 0]);
+  assert.deepEqual(Object.values(result.summary.byRule), [0, 0, 0, 0, 0]);
 });
 
 test('byRule omits rules that did not run', () => {

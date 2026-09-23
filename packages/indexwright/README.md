@@ -86,6 +86,7 @@ measured your own noise level.
 | `field-order-variant` | Indexes over the same field set, declared in different field orders. |
 | `explicit-name-field` | A trailing `__name__` that restates the direction Firestore appends anyway. |
 | `quota-headroom` | The declared index count is close to the per-database limit. |
+| `repeated-field-override` | One field configured by more than one `fieldOverrides` entry, and the entries disagree. |
 
 Each rule's rationale, its known false positives, and the exact detection condition are in
 [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md) §5.
