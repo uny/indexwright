@@ -223,7 +223,7 @@ test('every line an operator reads is emitted by the branch that owns it', () =>
   assert.equal(lines[2], 'S2 number answered OTHER, so it did not enter the comparison: DEADLINE_EXCEEDED');
 });
 
-test('the real shape set takes part in the comparison, all eight of it', () => {
+test('the real shape set takes part in the comparison, every shape of it', () => {
   // The fixture above is two hand-rolled shapes; nothing else here ever sees `shapes.mjs`. The
   // regression that guards against actually shipped: S5 carried `varies: 'nothing'`, which dropped
   // one shape in eight out of the experiment the instrument exists to run, printed `has no operand
@@ -234,7 +234,7 @@ test('the real shape set takes part in the comparison, all eight of it', () => {
   ]);
   const { findings, exitCode } = summarise(answered, REAL_SHAPES);
   assert.equal(exitCode, 0);
-  assert.equal(findings.length, 8);
+  assert.equal(findings.length, REAL_SHAPES.length);
   assert.deepEqual(
     findings.filter((f) => f.kind !== 'constant').map((f) => `${f.shape} ${f.kind}`),
     [],

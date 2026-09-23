@@ -10,6 +10,8 @@
  * the run can falsify it. It is not consulted by either instrument.
  */
 
+import { Filter } from '@google-cloud/firestore';
+
 /**
  * A shape's value slots are filled by a provider rather than by literals, because the differential
  * probe's whole purpose is to fill them differently each time. `suite.mjs` passes a provider that
@@ -82,6 +84,62 @@ export const SHAPES = [
     describe: 'an equality ordered by a second field descending',
     covered: false,
     build: (c, v) => c.where('a', '==', v.scalar()).orderBy('b', 'desc'),
+  },
+  // S9–S12 are the classes S1–S8 do not reach (issue #69): every shape above is a conjunction
+  // against a single collection, and replay also sends a disjunction and a `COLLECTION_GROUP` scope
+  // with `limit(1)` on. Each class gets a shape predicted served and one predicted uncovered, because
+  // the direction §2 cares about is the second: a limit that rescued an uncovered query into served
+  // is the false clean verdict, and only an uncovered shape can show it happening.
+  //
+  // The collection-group shapes query the group of the same id, so the seeded root collection is a
+  // member of it and `seed.mjs` needs no second location. Built from `c` rather than from a second
+  // parameter, so the three instruments that call `build` need not know which scope a shape has.
+  {
+    id: 'S9',
+    describe: 'an array-contains and an equality at COLLECTION_GROUP scope',
+    covered: true,
+    // Served, if at all, by the `COLLECTION_GROUP` entry in `firestore.indexes.json` and nothing
+    // else: Firestore creates no collection-group single-field indexes by default, so the merge
+    // that serves S3 without a composite has nothing to merge here. A single-field shape is
+    // deliberately not used — it would be served by a `fieldOverrides` entry, the half of the
+    // declaration #53 says `check` cannot see.
+    build: (c, v) =>
+      c.firestore.collectionGroup(c.id).where('tags', 'array-contains', v.scalar()).where('a', '==', v.scalar()),
+  },
+  {
+    id: 'S10',
+    describe: "S1 at COLLECTION_GROUP scope, where only S1's COLLECTION-scope index is declared",
+    covered: false,
+    // The pair S1 is served by is declared at `COLLECTION` scope only, so this is uncovered unless
+    // an index of one scope serves a query of the other — which is itself worth seeing refused.
+    build: (c, v) =>
+      c.firestore.collectionGroup(c.id).where('a', '==', v.scalar()).where('b', '>', v.scalar()).orderBy('b'),
+  },
+  {
+    id: 'S11',
+    describe: 'a disjunction whose disjuncts the declared (a, b) index serves',
+    covered: true,
+    build: (c, v) =>
+      c.where(
+        Filter.or(
+          Filter.and(Filter.where('a', '==', v.scalar()), Filter.where('b', '>', v.scalar())),
+          Filter.and(Filter.where('a', '==', v.scalar()), Filter.where('b', '<', v.scalar())),
+        ),
+      ),
+  },
+  {
+    id: 'S12',
+    describe: "a disjunction one of whose disjuncts is S6's undeclared pair",
+    covered: false,
+    // Negations and the array operators are kept out of both disjunctions: some of their
+    // combinations with `or` are rejected as `INVALID_ARGUMENT`, which never reaches the question.
+    build: (c, v) =>
+      c.where(
+        Filter.or(
+          Filter.and(Filter.where('a', '==', v.scalar()), Filter.where('b', '>', v.scalar())),
+          Filter.and(Filter.where('a', '==', v.scalar()), Filter.where('n', '>', v.scalar())),
+        ),
+      ),
   },
 ];
 
