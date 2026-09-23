@@ -7,8 +7,8 @@ again, by its own `corpusVersion`.
 
 ## [0.10.1] — 2026-09-23
 
-A patch for a path the JS API left unbounded. A corpus built by hand is now held to the filter depth a
-corpus file is, so `serialiseCorpus`, `writeCorpus` and `mergeCorpora` fail with the `CorpusError`
+A patch for a path the JS API left unbounded. A corpus built by hand is now held to the filter depth
+a corpus file is, so `serialiseCorpus`, `writeCorpus` and `mergeCorpora` fail with the `CorpusError`
 they are documented to fail with, and this package can no longer write a corpus it refuses to read.
 Nothing changes for a corpus that `record` captured or `parseCorpus` read. `corpusVersion` stays 2.
 
