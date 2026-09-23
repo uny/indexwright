@@ -494,7 +494,13 @@ function proxyHttp1(
       upstreamResponse.pipe(response);
     },
   );
+  // Set before the destroy below, and read by the error handler: destroying a request that has not
+  // been answered yet makes it report ECONNRESET, and warning about that would name a teardown this
+  // handler performed itself — "socket hang up" as the last line of a capture that succeeded. The
+  // upstream HTTP/2 session is destroyed ahead of its socket for the same reason; see `close`.
+  let closing = false;
   forwarded.on('error', (error) => {
+    if (closing) return;
     warn(`http/1.1 ${request.url ?? ''}: ${error.message}`);
     if (!response.headersSent) response.writeHead(502);
     response.end();
@@ -510,7 +516,10 @@ function proxyHttp1(
   // flight, and `indexwright-record` kept the event loop alive after the suite had finished and the
   // corpus was written — the same hang the upstream socket above is owned to avoid, reached by the
   // other transport.
-  response.on('close', () => forwarded.destroy());
+  response.on('close', () => {
+    closing = true;
+    forwarded.destroy();
+  });
   request.pipe(forwarded);
 }
 

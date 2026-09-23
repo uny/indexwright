@@ -479,6 +479,43 @@ test('closing releases an upstream request still in flight, so a captured run ca
   }
 });
 
+test('closing an unanswered request is silent, because the teardown is the proxy\'s own', async () => {
+  // The other half of releasing an in-flight request: destroying one the emulator has not answered
+  // makes it report a reset, and warning about that would name a teardown this proxy performed
+  // itself — "socket hang up" printed as the last line of a capture that in fact succeeded.
+  const warnings = [];
+  const sockets = new Set();
+  const upstream = createHttp1Server((request) => request.resume()); // accepts the POST, never answers
+  upstream.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  const upstreamAddress = await listen(upstream);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: (message) => warnings.push(message) });
+  try {
+    const { forwardChannel } = webFixture('a not-equal filter');
+    const pending = post(capture.address, '/google.firestore.v1.Firestore/Listen/channel?VER=8&RID=1&t=1', forwardChannel.body, {
+      'content-type': forwardChannel.contentType,
+    }).catch(() => {}); // the client's own request dies with the proxy; that is not what is asserted
+    // Recorded on the way past, so the assertion is about a POST that really was in flight.
+    while (capture.recorder.observed === 0) await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await capture.close();
+    await pending;
+    // Settled before the assertion: the reset reaches the request's 'error' a turn or two after
+    // `close` resolves, so asserting straight away passes whether or not the warning is coming.
+    for (let turn = 0; turn < 50; turn += 1) await new Promise((resolve) => setTimeout(resolve, 4));
+    assert.deepEqual(
+      warnings.filter((message) => message.startsWith('http/1.1')),
+      [],
+      'closing warned about its own teardown',
+    );
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    upstream.close();
+  }
+});
+
 test('REST calls the corpus cannot model are counted under the reasons gRPC calls are', async () => {
   const upstream = stubHttp1Upstream();
   const upstreamAddress = await listen(upstream.server);
