@@ -91,17 +91,35 @@ bare can, which is why `readProblems` in `summarise.mjs` requires at least one a
 shape supplies it — a run against an unseeded collection otherwise agrees with itself perfectly while
 measuring nothing.
 
-> **S1's 0 is not consistent with this same file and should not be relied on until it is re-run.**
-> S1 is `a == <sentinel> AND b > <sentinel>`. `seed.mjs` cycles `b` over
-> `['alpha','beta',42,true,null,{k:1},[1,2]]`, and a map and an array both sort *above* every string
-> in Firestore's value-type ordering, so for a 500-document seed 142 documents satisfy `b > <sentinel>`
-> — 71 if an array in an ASC slot is indexed per element rather than whole, but never 0. The same
-> file's S4 confirms it arithmetically: `b != <sentinel>` read 429, which decomposes exactly as 287
-> below the sentinel plus 142 above it, and those 142 are S1's filter. Whichever indexing model holds,
-> S1 cannot read 0 on the collection S3=500, S4=429 and S5=71 prove was seeded. The verdict half of
-> the run is unaffected — S1 answered `served` both ways — and so is the `limit(1)` conclusion; what
-> is in doubt is only S1's document count, and with it whether the sentence above should read *four*
-> shapes falling to 1 rather than three.
+> **S1's 0 is correct, and this note used to say it could not be.** It argued that a map and an
+> array sort above every string, so `b > <sentinel>` must match 142 of the seeded documents. That
+> assumes a range filter compares across types; Firestore's does not — `<`, `<=`, `>` and `>=` match
+> only values of the operand's type. Step 5c measured it directly: on the seeded collection
+> `a == <sentinel> AND b < <sentinel>` counts 144 and `b > <sentinel>` counts 0, because the only
+> strings in `b` are `alpha` and `beta` (two of every seven documents, 72 + 72) and both sort below
+> `indexwright_replay_sentinel`. So S1 reads 0 on a healthy seed, and three shapes falling to 1 is
+> the right count. S4's 429 does not contradict it: `!=` is not type-bounded, which is why it reads
+> every document whose `b` exists and is not null.
+
+**The limit reading over disjunctions and collection groups (step 5c, issue #69).** Run on
+2026-09-23 against the same target with the collection-group entry added, all twelve shapes
+answered the same bare and with `limit(1)`, and every prediction held, the first run's eight
+included. What the two new classes add:
+
+- **S10 and S12 stayed `FAILED_PRECONDITION` with the limit on.** S10 is S1's query at
+  `COLLECTION_GROUP` scope, with S1's `COLLECTION`-scope index deployed and `READY` beside it; S12 is
+  a disjunction whose second disjunct has no index. The limit rescued neither, which is the
+  direction §2 cares about.
+- **S9 and S11 were served both ways, and the limit bounded both reads**: S9 from 500 documents to
+  1, S11 from 144 to 1. S9 is served by the collection-group index alone, since no
+  collection-group single-field index exists by default. S11's 144 is where the type-bounded range
+  filters above were first seen.
+- **S10 is also the first observation that an index of one scope does not serve a query of the
+  other**, which is what `indexwright lint`'s `scope-mismatch` rule says in its message and had not
+  been measured here.
+
+It is still one operand, one collection and one index set, and `not-in`, `array-contains-any` and
+the negated unary forms remain unreached by any shape.
 
 Two things that reading does not say. The 500 on S3 is the seed's doing rather than a new class of
 expensive operator — `seed.mjs` writes the sentinel into `a` and into `tags` for every document, so
