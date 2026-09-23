@@ -204,6 +204,57 @@ test('a corpus nested past what the reader descends is refused as a corpus error
   );
 });
 
+/** A filter tree `levels` nodes deep, built by hand the way a caller of the JS API could. */
+function nested(levels) {
+  let node = { fieldPath: 'a', op: 'EQUAL' };
+  for (let level = 1; level < levels; level += 1) node = { op: 'AND', filters: [node] };
+  return node;
+}
+
+/** A corpus that never went through `parseCorpus` or `buildCorpus`, holding one tree. */
+const handBuilt = (where) => ({
+  corpusVersion: CORPUS_VERSION,
+  producers: [],
+  queries: [{ key: 'x', collectionGroup: 'c', queryScope: 'COLLECTION', where, orderBy: [] }],
+  skipped: [],
+});
+
+test('a corpus built through the JS API is held to the depth the reader accepts (issue #68)', () => {
+  // The ceiling is where the reader's is, and not merely somewhere short of the runtime's: a tree
+  // at exactly the ceiling writes, and one level more is refused on the way out rather than written
+  // as a file this package then refuses to read. Read back through `parseCorpus`, so the two ceilings
+  // cannot drift apart unnoticed; the ops alternate because a single-child chain is not normalised.
+  let where = { fieldPath: 'a', op: 'EQUAL' };
+  for (let level = 1; level < 100; level += 1) {
+    where = { op: level % 2 === 1 ? 'OR' : 'AND', filters: [{ fieldPath: `b${level}`, op: 'EQUAL' }, where] };
+  }
+  const atCeiling = parseCorpus(serialiseCorpus(buildCorpus([shape('c', where)], [])));
+  const depthOf = (node) => (node.filters === undefined ? 1 : 1 + Math.max(...node.filters.map(depthOf)));
+  assert.equal(depthOf(atCeiling.queries[0].where), 100);
+
+  const refused = (error) =>
+    error instanceof CorpusError && /"x" has a filter tree nested deeper than 100 levels/.test(error.message);
+  assert.throws(() => serialiseCorpus(handBuilt(nested(101))), refused);
+  // Deep enough to overflow the runtime's stack without the ceiling, which is the RangeError the
+  // issue is about. The tree is built iteratively, so constructing it overflows nothing.
+  assert.throws(() => serialiseCorpus(handBuilt(nested(100000))), refused);
+  // `mergeCorpora` refuses it whether or not another part shares its key: a merge is a corpus, and
+  // one carrying this tree would only fail later, when it was written.
+  assert.throws(() => mergeCorpora([handBuilt(nested(100000)), handBuilt(nested(100000))]), refused);
+  assert.throws(() => mergeCorpora([handBuilt(nested(101))]), refused);
+});
+
+test('writeCorpus refuses an over-deep tree without leaving a file behind', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-corpus-depth-'));
+  try {
+    const path = join(directory, 'firestore.queries.json');
+    assert.throws(() => writeCorpus(path, handBuilt(nested(101))), CorpusError);
+    assert.deepEqual(readdirSync(directory), []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('a corpus from a later format is refused by version, not by its members', () => {
   // Adding a top-level member is the normal reason to bump the version, so a reader that checked
   // the member set first would blame a stray field instead of naming the version it cannot read.

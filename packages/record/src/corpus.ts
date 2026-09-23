@@ -46,6 +46,11 @@ const SKIP_REASON_SET = new Set<string>([...SKIP_REASONS, ...LEGACY_SKIP_REASONS
  * reader recurses once per level, and a corpus is a committed file that arrives through review
  * rather than from a trusted caller: without a ceiling, a nested-enough file is a `RangeError`
  * escaping a function documented to fail with `CorpusError`.
+ *
+ * The writer holds a tree to the same ceiling (issue #68). A `Corpus` handed to `serialiseCorpus`,
+ * `writeCorpus` or `mergeCorpora` need not have come from `parseCorpus` or `buildCorpus`, and one
+ * nested past this would otherwise be a `RangeError` from the runtime on the way out — or, just
+ * short of that, a file this package writes and then refuses to read.
  */
 const MAX_FILTER_DEPTH = 100;
 
@@ -134,30 +139,34 @@ export function mergeCorpora(parts: readonly Corpus[]): Corpus {
     }
   }
 
-  const byKey = new Map<string, QueryShape>();
+  const byKey = new Map<string, { query: QueryShape; body: string }>();
   for (const part of parts) {
     for (const query of part.queries) {
+      // Every entry is written out, not only the ones that share a key: the result is a corpus
+      // anything that reads one can read, so a tree nested past what the reader accepts is refused
+      // here rather than carried into a merge that only fails once it is serialised.
+      const body = JSON.stringify(queryToJson(query));
       const existing = byKey.get(query.key);
       // The key is injective over the shape, so two parts that observed the same query agree on
       // every other member. Disagreeing means a part has been edited or has arrived corrupted, and
       // taking either side silently — which is what the last-writer-wins of `buildCorpus` would do —
       // is how a merged corpus comes to describe a query neither part recorded.
       if (existing !== undefined) {
-        if (JSON.stringify(queryToJson(existing)) !== JSON.stringify(queryToJson(query))) {
+        if (existing.body !== body) {
           throw new CorpusError(
             `two corpora hold the key ${JSON.stringify(query.key)} with bodies that differ; one of them is not the shape its key names`,
           );
         }
         continue;
       }
-      byKey.set(query.key, query);
+      byKey.set(query.key, { query, body });
     }
   }
 
   return {
     corpusVersion: version,
     producers: sortProducers(parts.flatMap((part) => [...part.producers])),
-    queries: [...byKey.values()].sort((a, b) => compareByCodePoint(a.key, b.key)),
+    queries: [...byKey.values()].map(({ query }) => query).sort((a, b) => compareByCodePoint(a.key, b.key)),
     skipped: [...new Set(parts.flatMap((part) => [...part.skipped]))].sort(compareByCodePoint),
   };
 }
@@ -210,7 +219,7 @@ function queryToJson(query: QueryShape): unknown {
     key: query.key,
     collectionGroup: query.collectionGroup,
     queryScope: query.queryScope,
-    where: filterToJson(query.where),
+    where: filterToJson(query.where, `the query ${JSON.stringify(query.key)}`, 1),
     orderBy: query.orderBy.map((order) => ({ fieldPath: order.fieldPath, direction: order.direction })),
   };
 }
@@ -219,8 +228,12 @@ function producerToJson(producer: Producer): unknown {
   return { name: producer.name, revision: producer.revision };
 }
 
-function filterToJson(node: FilterNode): unknown {
-  if (isComposite(node)) return { op: node.op, filters: node.filters.map(filterToJson) };
+/** Depth counted as `parseFilter` counts it, from 1 at the root, so the two refuse the same trees. */
+function filterToJson(node: FilterNode, at: string, depth: number): unknown {
+  if (depth > MAX_FILTER_DEPTH) {
+    throw new CorpusError(`${at} has a filter tree nested deeper than ${MAX_FILTER_DEPTH} levels, which no reader accepts`);
+  }
+  if (isComposite(node)) return { op: node.op, filters: node.filters.map((child) => filterToJson(child, at, depth + 1)) };
   return { fieldPath: node.fieldPath, op: node.op };
 }
 
