@@ -91,17 +91,35 @@ bare can, which is why `readProblems` in `summarise.mjs` requires at least one a
 shape supplies it — a run against an unseeded collection otherwise agrees with itself perfectly while
 measuring nothing.
 
-> **S1's 0 is not consistent with this same file and should not be relied on until it is re-run.**
-> S1 is `a == <sentinel> AND b > <sentinel>`. `seed.mjs` cycles `b` over
-> `['alpha','beta',42,true,null,{k:1},[1,2]]`, and a map and an array both sort *above* every string
-> in Firestore's value-type ordering, so for a 500-document seed 142 documents satisfy `b > <sentinel>`
-> — 71 if an array in an ASC slot is indexed per element rather than whole, but never 0. The same
-> file's S4 confirms it arithmetically: `b != <sentinel>` read 429, which decomposes exactly as 287
-> below the sentinel plus 142 above it, and those 142 are S1's filter. Whichever indexing model holds,
-> S1 cannot read 0 on the collection S3=500, S4=429 and S5=71 prove was seeded. The verdict half of
-> the run is unaffected — S1 answered `served` both ways — and so is the `limit(1)` conclusion; what
-> is in doubt is only S1's document count, and with it whether the sentence above should read *four*
-> shapes falling to 1 rather than three.
+> **S1's 0 is correct, and this note used to say it could not be.** It argued that a map and an
+> array sort above every string, so `b > <sentinel>` must match 142 of the seeded documents. That
+> assumes a range filter compares across types; Firestore's does not — `<`, `<=`, `>` and `>=` match
+> only values of the operand's type. Step 5c measured it directly: on the seeded collection
+> `a == <sentinel> AND b < <sentinel>` counts 144 and `b > <sentinel>` counts 0, because the only
+> strings in `b` are `alpha` and `beta` (two of every seven documents, 72 + 72) and both sort below
+> `indexwright_replay_sentinel`. So S1 reads 0 on a healthy seed, and three shapes falling to 1 is
+> the right count. S4's 429 does not contradict it: `!=` is not type-bounded, which is why it reads
+> every document whose `b` exists and is not null.
+
+**The limit reading over disjunctions and collection groups (step 5c, issue #69).** Run on
+2026-09-23 against the same target with the collection-group entry added, all twelve shapes
+answered the same bare and with `limit(1)`, and every prediction held, the first run's eight
+included. What the two new classes add:
+
+- **S10 and S12 stayed `FAILED_PRECONDITION` with the limit on.** S10 is S1's query at
+  `COLLECTION_GROUP` scope, with S1's `COLLECTION`-scope index deployed and `READY` beside it; S12 is
+  a disjunction whose second disjunct has no index. The limit rescued neither, which is the
+  direction §2 cares about.
+- **S9 and S11 were served both ways, and the limit bounded both reads**: S9 from 500 documents to
+  1, S11 from 144 to 1. S9 is served by the collection-group index alone, since no
+  collection-group single-field index exists by default. S11's 144 is where the type-bounded range
+  filters above were first seen.
+- **S10 is also the first observation that an index of one scope does not serve a query of the
+  other**, which is what `indexwright lint`'s `scope-mismatch` rule says in its message and had not
+  been measured here.
+
+It is still one operand, one collection and one index set, and `not-in`, `array-contains-any` and
+the negated unary forms remain unreached by any shape.
 
 Two things that reading does not say. The 500 on S3 is the seed's doing rather than a new class of
 expensive operator — `seed.mjs` writes the sentinel into `a` and into `tags` for every document, so
@@ -134,18 +152,19 @@ What the run did settle is the price. The readiness gate restarts on every invoc
 
 | File | What it is |
 |:--|:--|
-| `shapes.mjs` | The eight query shapes, defined once and shared by all three instruments so they cannot drift apart |
+| `shapes.mjs` | The query shapes, defined once and shared by all three instruments so they cannot drift apart. S1–S8 are the first run's; S9–S12 are the disjunction and collection-group shapes step 5c adds for issue #69 |
 | `suite.mjs` | The driver `record` captures from. `PROBE_SHAPES=S1,S2` issues a subset |
 | `differential.mjs` | The §7 instrument: issues the shapes, writes a JSON report to stdout |
 | `limit.mjs` | The #43 instrument: issues each shape bare and with `limit(1)`, and reports what each read |
 | `expectations.mjs` | Their command line — argv in, the expectation map out. Pure, so what an operator types is testable |
 | `summarise.mjs` | Their stop rule — rows in, findings and an exit code out, for the verdicts and for the read counts alike. Pure, so it can be tested without a database |
 | `expectations.test.mjs`, `summarise.test.mjs` | Tests for the two halves of the stop rule. Run in `npm test` alongside the packages' suites |
+| `shapes.test.mjs` | Pins what S9–S12 send on the wire — the scope and the disjunction step 5c exists to reach — and that `limit(1)` is the only field the limited issuing adds |
 | `seed.mjs` | Populates the collection, so #43's cost is observed rather than deduced |
 | `watch-readiness.mjs` | Timestamped index states through the same Admin path `check` uses |
 | `firestore.queries.json` | The captured corpus. Committed — it is the input `check` replays |
 | `firestore.covered.json` | The same capture narrowed to the shapes step 5 reported served. Committed, and rewritten by step 6 |
-| `firestore.indexes.json` | The candidate set, deployed to the target |
+| `firestore.indexes.json` | The candidate set, deployed to the target. The third entry is `COLLECTION_GROUP` scope and exists for S9 only; `indexwright lint` warns `scope-mismatch` on it, which is the point rather than a defect |
 | `firestore.indexes.wrong.json` | A set that is *not* the deployed one, for the exit-2 divergence path |
 
 `covered` in `shapes.mjs` is a **prediction**, written down so the run can falsify it. Neither
@@ -410,6 +429,72 @@ sentinel and varies only the limit, so it has nothing to say about §7.
 
 The two readings are independent, and both are needed. The verdicts say whether the fix is
 *allowed*; the counts say whether it is worth making.
+
+### 5c. The limit probe over disjunctions and collection groups (issue #69)
+
+Step 5b's eight shapes are all conjunctions against a single collection, and `buildReplayQuery` puts
+`limit(1)` on more than that: a disjunction, whose index requirement is per-disjunct, and a
+`COLLECTION_GROUP` scope, whose index is a distinct kind. S9–S12 reach those two classes, one shape
+predicted served and one predicted uncovered for each, because the direction §2 cares about is the
+uncovered one — only a query that should fail can show a limit rescuing it into served.
+
+| Shape | Class | Predicted | Why |
+|:--|:--|:--|:--|
+| S9 | `COLLECTION_GROUP` | served | `tags CONTAINS, a ASC` at `COLLECTION_GROUP` scope, the third entry in `firestore.indexes.json`. No collection-group single-field index exists by default, so nothing else can serve it |
+| S10 | `COLLECTION_GROUP` | uncovered | S1's pair, which is declared at `COLLECTION` scope only |
+| S11 | disjunction | served | `(a == · AND b > ·) OR (a == · AND b < ·)`: both disjuncts are S1's, and `(a, b)` is declared |
+| S12 | disjunction | uncovered | The second disjunct is `n == · AND b > ·`, and `(n, b)` is not declared. One inequality field across both disjuncts, so nothing turns on multi-field inequality support |
+
+The collection-group shapes query the group of id `probe`, and the root collection `seed.mjs` writes
+is a member of it, so the seed needs no second location. What this step needs from the target is
+step 2's collection and the three-entry set.
+
+**If the target still holds the first run's collection and two indexes**, deploying the file adds only
+the collection-group entry, so one build rather than two. Confirm the state first, since `check` and
+this step both assume the live set is the file:
+
+```bash
+gcloud firestore indexes composite list --project indexwright-probe --database '(default)'
+```
+
+If the collection was cleared after the first run, re-seed it with step 2's command. Then start the
+watcher and deploy, as in step 4:
+
+```bash
+node probe/watch-readiness.mjs indexwright-probe '(default)' 900
+```
+
+```bash
+firebase deploy --only firestore:indexes --project indexwright-probe
+```
+
+Once every index reports `READY`:
+
+```bash
+node probe/limit.mjs indexwright-probe '(default)' \
+  --expect-served S1,S2,S3,S4,S5,S7,S9,S11 --expect-uncovered S6,S10,S12 \
+  > probe/limit-disjunction-collection-group.json
+```
+
+S1–S8 keep step 5b's expectations, so the first run is re-read in the same breath. The stop rule and
+the exit codes are 5b's, unchanged. A new shape answering against its prediction exits 2 rather than
+1: it is a statement about the prediction, not about the limit, and the bare and limited rows beside
+it still say whether the two agreed.
+
+How the result reaches the code:
+
+- **No disagreement on S9–S12.** The limit reading extends to both classes, and the docblock on
+  `buildReplayQuery` says so in place of naming them as unreached. `not-in`, `array-contains-any` and
+  the negated unary forms are still not reached by any shape, and the docblock keeps saying that.
+- **A disagreement on any of them.** `limit(1)` is not available for that class, and
+  `buildReplayQuery` has to send it without one.
+
+The read half should hold too: S9 matches every seeded document, since each carries the sentinel in
+both `tags` and `a`, so it reads 500 bare and 1 with the limit.
+
+The corpus files are not re-captured for this step. Step 5c does not replay a corpus, and step 7's
+predictions are written against the eight-shape corpus in `firestore.queries.json`; S9–S12 enter it
+only if step 6 is run again. Steps 3 and 5 predate them too, and run them unconstrained.
 
 ### 6. Capture the corpus of shapes the target actually covers
 

@@ -204,15 +204,16 @@ function nodeFilter(
  * shapes, one operand, one collection and one index set observed at one moment; it is not a claim
  * about the planner in general, and a limit is applied here on that evidence and no more.
  *
- * **Which classes that evidence does not reach, named rather than left to the word "eight".** All
- * eight shapes are conjunctions of `EQUAL` and the ordering operators against a single collection.
- * This function emits more than that — a disjunction, a `COLLECTION_GROUP` scope, `not-in`,
- * `array-contains-any`, and the negated unary forms — and the limit goes on all of it. A
- * disjunction's index requirement is per-disjunct and a collection group's is a distinct index
- * kind, so neither is a shape the run generalises over; nothing here is evidence about them, and
- * they carry the limit on the argument that it is one field on the wire rather than on a reading.
- * Extending `probe/shapes.mjs` with an `or` shape and a `COLLECTION_GROUP` shape and re-running
- * step 5b is what would close it.
+ * **Which classes that evidence reaches, and which it does not.** The first eight shapes were all
+ * conjunctions of `EQUAL` and the ordering operators against a single collection. This function
+ * emits more than that, and the limit goes on all of it. A disjunction's index requirement is
+ * per-disjunct and a collection group's is a distinct index kind, so step 5c (issue #69) measured
+ * both, with a shape predicted served and one predicted uncovered for each: none changed its answer,
+ * the two uncovered ones stayed `FAILED_PRECONDITION` with the limit on — including a collection-group
+ * query with the same pair's `COLLECTION`-scope index beside it — and the served ones fell to one
+ * document. `not-in`, `array-contains-any` and the negated unary forms are still reached by no
+ * shape; they carry the limit on the argument that it is one field on the wire rather than on a
+ * reading.
  *
  * There is still no `select`, and that argument is untouched: a projection can be served by a
  * covering index the full query would need more of, which is the index-selection mistake the limit

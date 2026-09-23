@@ -15,6 +15,14 @@
         { "fieldPath": "tags", "arrayConfig": "CONTAINS" },
         { "fieldPath": "a", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "probe",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "tags", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "a", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
