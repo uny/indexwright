@@ -1,6 +1,6 @@
 {
   "name": "indexwright",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Linter for Firestore composite index declarations (firestore.indexes.json)",
   "keywords": [
     "firestore",

@@ -5,7 +5,13 @@ All notable changes to this project are documented here. The format follows
 versioning. Pre-1.0, rule additions and message changes may land in minor releases; the `json`
 output shape is the stable contract.
 
-## Unreleased
+## [0.4.0] — 2026-09-23
+
+The first rule over the file's other half. `fieldOverrides` has been validated and canonicalised
+since 0.3.0, but no rule read it; R5 now reports a field configured by several entries that
+disagree, which the Firebase CLI deploys without complaint and resolves by its own sort order and
+the database's state. Minor rather than patch: a run over all rules can report warnings it did not
+before.
 
 ### Added
 
@@ -119,6 +125,7 @@ First release. Static analysis of `firestore.indexes.json`; no network access, n
   `__name__` to the same resource.
 - A provisional JavaScript API, so the rules can run without spawning a process.
 
+[0.4.0]: https://github.com/uny/indexwright/releases/tag/v0.4.0
 [0.3.0]: https://github.com/uny/indexwright/releases/tag/v0.3.0
 [0.2.0]: https://github.com/uny/indexwright/releases/tag/v0.2.0
 [0.1.1]: https://github.com/uny/indexwright/releases/tag/v0.1.1
