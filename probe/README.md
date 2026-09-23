@@ -425,7 +425,7 @@ uncovered one — only a query that should fail can show a limit rescuing it int
 | S9 | `COLLECTION_GROUP` | served | `tags CONTAINS, a ASC` at `COLLECTION_GROUP` scope, the third entry in `firestore.indexes.json`. No collection-group single-field index exists by default, so nothing else can serve it |
 | S10 | `COLLECTION_GROUP` | uncovered | S1's pair, which is declared at `COLLECTION` scope only |
 | S11 | disjunction | served | `(a == · AND b > ·) OR (a == · AND b < ·)`: both disjuncts are S1's, and `(a, b)` is declared |
-| S12 | disjunction | uncovered | The second disjunct is S6's `(a, n)`, which is not declared |
+| S12 | disjunction | uncovered | The second disjunct is `n == · AND b > ·`, and `(n, b)` is not declared. One inequality field across both disjuncts, so nothing turns on multi-field inequality support |
 
 The collection-group shapes query the group of id `probe`, and the root collection `seed.mjs` writes
 is a member of it, so the seed needs no second location. What this step needs from the target is

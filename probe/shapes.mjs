@@ -129,15 +129,17 @@ export const SHAPES = [
   },
   {
     id: 'S12',
-    describe: "a disjunction one of whose disjuncts is S6's undeclared pair",
+    describe: 'a disjunction one of whose disjuncts is an equality and an inequality on an undeclared pair',
     covered: false,
-    // Negations and the array operators are kept out of both disjunctions: some of their
-    // combinations with `or` are rejected as `INVALID_ARGUMENT`, which never reaches the question.
+    // Uncovered for S6's reason — `(n, b)` is not declared — with `b` kept as the only inequality
+    // field. Negations, the array operators, and inequalities on two different fields are kept out
+    // of both disjunctions: a combination rejected as `INVALID_ARGUMENT` never reaches the question,
+    // and an expectation of `uncovered` would then stop the run for a reason unrelated to the limit.
     build: (c, v) =>
       c.where(
         Filter.or(
           Filter.and(Filter.where('a', '==', v.scalar()), Filter.where('b', '>', v.scalar())),
-          Filter.and(Filter.where('a', '==', v.scalar()), Filter.where('n', '>', v.scalar())),
+          Filter.and(Filter.where('n', '==', v.scalar()), Filter.where('b', '>', v.scalar())),
         ),
       ),
   },

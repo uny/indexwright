@@ -19,7 +19,7 @@ import { COLLECTION, SENTINEL, SHAPES } from './shapes.mjs';
 // The inverse of the guard `differential.mjs` and `seed.mjs` carry, for the same reason and in the
 // other direction: those two must not be redirected away from the named database, and this one must
 // not be pointed *at* it. `record` sets this variable to its proxy, so its absence means nothing is
-// capturing — the client would resolve application default credentials, issue all eight shapes at
+// capturing — the client would resolve application default credentials, issue every shape at
 // the real target, and write no corpus at all. The run would then look like a success: the shapes
 // the emulator would have rejected come back `FAILED_PRECONDITION` instead, which this file already
 // prints as "answered with an error", and step 6's `--out` file is left as whatever it was. A stale
