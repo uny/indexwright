@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { compareStrings } from './collections.js';
-import { analyse } from './key.js';
+import { analyse, analyseOverrides } from './key.js';
 import { MalformedInputError, parseDocument } from './parse.js';
 import { getRule, rules } from './rules/index.js';
 import { RULE_IDS } from './types.js';
@@ -93,6 +93,7 @@ function assemble(loaded: readonly LoadedFile[], options: LintOptions): LintResu
       file: entry.file,
       document: entry.document,
       indexes: analyse(entry.document),
+      overrides: analyseOverrides(entry.document),
       options: ruleOptions,
     };
     for (const id of selected) {

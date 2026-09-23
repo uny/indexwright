@@ -82,6 +82,33 @@ test('R4 stays quiet at the threshold', () => {
   assert.deepEqual(only(['scope-minority.json'], 'quota-headroom', { quota: 8, quotaThreshold: 0.5 }), []);
 });
 
+test('R5 groups every entry for one field into one finding', () => {
+  const [finding, ...rest] = only(['override-repeated.json'], 'repeated-field-override');
+  assert.equal(rest.length, 0, 'one finding per field; users.email is declared once');
+  // The two exemptions share a key, so related holds only the one other configuration.
+  assert.equal(finding.key, 'users::bio::');
+  assert.deepEqual(finding.related, ['users::bio::COLLECTION:ASCENDING']);
+  assert.match(finding.message, /field "bio" in 3 fieldOverrides entries \(positions 0, 2, 3\)/);
+  assert.match(finding.message, /2 different configurations/);
+});
+
+test('R5 counts ttl as part of the configuration, though the key leaves it out', () => {
+  const [finding, ...rest] = only(['override-repeated-ttl.json'], 'repeated-field-override');
+  assert.equal(rest.length, 0);
+  assert.equal(finding.key, 'sessions::expiresAt::COLLECTION:ASCENDING');
+  assert.deepEqual(finding.related, [], 'both entries share one key');
+  assert.match(finding.message, /in 2 fieldOverrides entries \(positions 0, 1\)/);
+});
+
+test('R5 ignores entries that spell one configuration two ways', () => {
+  assert.deepEqual(only(['override-repeated-agreeing.json'], 'repeated-field-override'), []);
+});
+
+test('R5 keeps fields apart by collection group and by path', () => {
+  // `a::b`/`c` and `a`/`b::c` would share a group if it were keyed on the rendered separator.
+  assert.deepEqual(only(['override-distinct.json'], 'repeated-field-override'), []);
+});
+
 test('no rule fires on a clean file', () => {
   const result = lintFixtures(['clean.json']);
   assert.deepEqual(result.findings, []);
@@ -106,17 +133,18 @@ test('a vector index is keyed but not flagged', () => {
   assert.deepEqual(result.errors, []);
 });
 
-test('no message suggests that an index is unused or removable', () => {
+test('no message suggests that an index or override is unused or removable', () => {
   const result = lintFixtures([
     'scope-minority.json',
     'field-order-variant.json',
     'name-field-redundant.json',
+    'override-repeated.json',
   ]);
   assert.ok(result.findings.length > 0);
   for (const finding of result.findings) {
     assert.doesNotMatch(
       finding.message,
-      /\bunused\b|\bnot used\b|safe to (delete|remove)|(delete|remove|drop) (the|this|one) index/i,
+      /\bunused\b|\bnot used\b|safe to (delete|remove)|(delete|remove|drop) (the|this|one) (index|override|entry)/i,
     );
   }
 });

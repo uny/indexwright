@@ -1,0 +1,16 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "sessions",
+      "fieldPath": "expiresAt",
+      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }]
+    },
+    {
+      "collectionGroup": "sessions",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }]
+    }
+  ]
+}

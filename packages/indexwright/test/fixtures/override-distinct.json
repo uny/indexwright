@@ -1,0 +1,18 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    { "collectionGroup": "users", "fieldPath": "bio", "indexes": [] },
+    {
+      "collectionGroup": "posts",
+      "fieldPath": "bio",
+      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }]
+    },
+    { "collectionGroup": "users", "fieldPath": "avatar", "indexes": [] },
+    { "collectionGroup": "a::b", "fieldPath": "c", "indexes": [] },
+    {
+      "collectionGroup": "a",
+      "fieldPath": "b::c",
+      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }]
+    }
+  ]
+}

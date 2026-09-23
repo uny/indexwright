@@ -5,6 +5,25 @@ All notable changes to this project are documented here. The format follows
 versioning. Pre-1.0, rule additions and message changes may land in minor releases; the `json`
 output shape is the stable contract.
 
+## Unreleased
+
+### Added
+
+- **R5 `repeated-field-override`** (issue #54): warns when two or more `fieldOverrides` entries
+  name the same `collectionGroup` and `fieldPath` and do not declare the same configuration —
+  canonical override key and `ttl` together. Firestore keeps one configuration per field, and the
+  Firebase CLI applies such entries in its own sort order, skipping any the live field already
+  matches, so which one takes effect is decided by the deploying tool and the database's state
+  rather than by the file. Entries that agree do not fire it. Its findings carry a canonical
+  override key in `key` and `related`, which shares the index key's `::`-separated shape but not
+  the meaning of its second part.
+
+### Changed
+
+- A run that selects all rules now runs five, so a file with repeated field overrides reports
+  warnings it did not before, and can newly exceed `--max-warnings`.
+- `RuleContext` carries `overrides`, the document's `fieldOverrides` in canonical form.
+
 ## [0.3.0] — 2026-09-21
 
 The other half of the file. `fieldOverrides` — single-field index configuration — was typed

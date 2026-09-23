@@ -197,11 +197,12 @@ function parseFraction(value: string, option: string): number {
 }
 
 export function usage(): string {
-  const ruleLines = rules.map((rule) => `  ${rule.id.padEnd(21)}${rule.description}`);
+  const width = Math.max(21, ...rules.map((rule) => rule.id.length + 2));
+  const ruleLines = rules.map((rule) => `  ${rule.id.padEnd(width)}${rule.description}`);
   return [
     'indexwright lint <file...> [options]',
     '',
-    'Lints Firestore composite index declarations. Every rule emits warnings, never errors.',
+    'Lints Firestore index declarations. Every rule emits warnings, never errors.',
     'No finding indicates that an index is unused or safe to delete.',
     '',
     'Options:',
