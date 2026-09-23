@@ -5,7 +5,15 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## [Unreleased]
+## [0.10.0] — 2026-09-23
+
+The release about the Firebase Web SDK. Until now its queries never reached the corpus: the Web SDK
+does not speak gRPC to the emulator, so the proxy forwarded what it sent and counted it on stderr.
+The full SDK's WebChannel `Listen` channel and the lite SDK's REST `documents:runQuery` are now
+decoded into the same entries a gRPC client produces, so `corpusVersion` stays 2, and a JSON field
+is read under either spelling the proto3 mapping allows, so a collection-group query cannot pass as
+a collection one. Minor rather than patch because the Web SDK's queries are new to the corpus and
+`Recorder.http1` is removed.
 
 ### Fixed
 
@@ -999,6 +1007,7 @@ First release. Query capture, specified in [SPEC.md](https://github.com/uny/inde
   stderr. Snapshot listeners carry their query over `Listen` and are counted, not recorded.
   Capturing `Listen` is the first extension worth making.
 
+[0.10.0]: https://github.com/uny/indexwright/releases/tag/record-v0.10.0
 [0.9.0]: https://github.com/uny/indexwright/releases/tag/record-v0.9.0
 [0.8.0]: https://github.com/uny/indexwright/releases/tag/record-v0.8.0
 [0.7.0]: https://github.com/uny/indexwright/releases/tag/record-v0.7.0
