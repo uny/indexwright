@@ -851,7 +851,9 @@ which is how the Firebase Web SDK reaches the emulator, they are the proto3 JSON
 messages — a `RunQueryRequest` posted to the REST `documents:runQuery` endpoint by
 `firestore/lite`, and a `ListenRequest` form-encoded into a WebChannel forward-channel `POST` by
 the full SDK in a browser, which sends `getDocs` that way as much as `onSnapshot`. Field names
-change case and enums arrive as names rather than numbers; nothing about what a shape is changes,
+arrive under either name the mapping gives them — the lowerCamelCase one the Firebase SDKs write, or
+the original proto name a conforming writer may — and enums arrive as names rather than numbers;
+nothing about what a shape is changes,
 and the corpus does not say which transport carried an entry any more than it says which RPC did.
 The REST spellings of the calls declined below are declined under the same reasons — a
 `documents:runAggregationQuery` is an `aggregation-query` — and a custom method the vocabulary has
