@@ -62,10 +62,11 @@ Firestore connection.
   plaintext on a local port. An intercepting proxy can decode `RunQuery` requests and record the
   observed `StructuredQuery` shapes, yielding a query corpus harvested from execution rather than
   hand-written. This is independent of language and framework, because it operates on the wire
-  protocol rather than on source code — but not of transport: the emulator also serves the Firebase
-  Web SDK over WebChannel rather than gRPC, and a suite driven from a browser does not pass through
-  a gRPC proxy at all. v0.2 captures the gRPC transport, which is what server-side SDKs use. The
-  corpus format is specified in §7.
+  protocol rather than on source code. It was not at first independent of transport: the emulator
+  also serves the Firebase Web SDK over HTTP/1.1 — WebChannel for the full SDK in a browser, REST
+  for `firestore/lite` — and v0.2 captured the gRPC transport only, which is what server-side SDKs
+  use. `record` has since read both HTTP/1.1 forms into the same corpus entry (§7). The corpus
+  format is specified in §7.
 - **v0.3 — coverage check.** Replay a captured corpus against a throwaway Firestore database that
   has the candidate index set applied, and report queries that fail with `FAILED_PRECONDITION`.
   The oracle is Firestore itself; indexwright does not reimplement the undocumented matching rule.
@@ -205,12 +206,13 @@ linter must say where the verb lives, not report an unknown command.
 
 **Known limit of v0.2/v0.3:** coverage is bounded by what actually exercises the proxy. A query that
 no test issues is not observed, and absence of observation is not evidence that an index is unused.
-That much is inherent. One further gap is not, and is an implementation gap v0.2 ships with: a
-suite driven through the Firebase Web SDK does not reach a gRPC proxy at all. It narrows what a
-corpus covers without narrowing what it appears to cover, which is why §7 counts it out loud. A
-second gap of the same kind — a query issued as a snapshot listener travels by `Listen` rather than
-`RunQuery` — has since been closed: `record` reads the query a `Listen` target carries under the
-same rules as a `RunQuery` (§7).
+That much is inherent. Two further gaps were not, and v0.2 shipped with both: a query issued as a
+snapshot listener travels by `Listen` rather than `RunQuery`, and a suite driven through the
+Firebase Web SDK does not reach a gRPC proxy at all. Each narrowed what a corpus covered without
+narrowing what it appeared to cover, which is why §7 counts every declined query out loud. Both have
+since been closed: `record` reads the query a `Listen` target carries under the same rules as a
+`RunQuery`, and reads the Web SDK's REST and WebChannel requests — JSON rather than protobuf, the
+same messages — into the same entries (§7).
 
 ## 4. CLI
 
@@ -717,8 +719,8 @@ corpus with no queries is a corpus. A consumer refuses an empty corpus on its ow
 corpus replays cleanly by construction and a pass would report coverage having measured nothing. A merge of three corpora one of which is empty is
 *not* empty, so a consumer that only examined the merge would lose that signal entirely and report
 full coverage for a set whose other consuming suite was never captured. The same applies to a part
-whose every entry is unreplayable. A suite driven through the Firebase Web SDK produces exactly such
-a corpus, so this is a shape that really occurs rather than a hypothetical; the remedy is to stop
+whose every entry is unreplayable. A suite that never reached the recorder produces exactly such a
+corpus, so this is a shape that really occurs rather than a hypothetical; the remedy is to stop
 naming that part, which is a decision the operator makes rather than one the merge makes for them.
 
 **Two parts sharing a canonical key must agree on the body under it.** The key is injective over the
@@ -844,6 +846,21 @@ is the stream's control traffic and is neither recorded nor counted. Earlier rel
 whole stream once as `listen-query`; a corpus committed under one of them still names that reason,
 and a reader accepts it — it is the one member of `skipped` no current recorder writes.
 
+Both are read on both transports the emulator serves. Over gRPC they are protobuf; over HTTP/1.1,
+which is how the Firebase Web SDK reaches the emulator, they are the proto3 JSON mapping of the same
+messages — a `RunQueryRequest` posted to the REST `documents:runQuery` endpoint by
+`firestore/lite`, and a `ListenRequest` form-encoded into a WebChannel forward-channel `POST` by
+the full SDK in a browser, which sends `getDocs` that way as much as `onSnapshot`. Field names
+arrive under either name the mapping gives them — the lowerCamelCase one the Firebase SDKs write, or
+the original proto name a conforming writer may — and enums arrive as names rather than numbers;
+nothing about what a shape is changes,
+and the corpus does not say which transport carried an entry any more than it says which RPC did.
+The REST spellings of the calls declined below are declined under the same reasons — a
+`documents:runAggregationQuery` is an `aggregation-query` — and a custom method the vocabulary has
+never heard of is `unsupported-rpc` whether it arrives as a gRPC `:path` or a REST suffix. The Web
+SDK does normalise a query before sending it, and *Implicit fields are not materialised* above says
+what that means for the file.
+
 Everything else the proxy sees, it counts under one of the reasons below and records nothing:
 
 - **`PartitionQuery`** — carries a `StructuredQuery` the same way, but as a bulk-read entry point
@@ -865,9 +882,12 @@ Everything else the proxy sees, it counts under one of the reasons below and rec
 - **A message compressed with an encoding `record` cannot undo** — gRPC marks compression per
   message and names the codec in `grpc-encoding`. `gzip` and `deflate` are undone and the message
   read; anything else is counted as `unsupported-encoding`. A client that negotiates a codec this
-  package does not implement would otherwise have every query it sent vanish without trace.
-- **Bytes that do not parse** — a truncated frame, a body that ends mid-message, or a payload that
-  is not the message the method declares. Counted as `undecodable-message`. This is the one reason
+  package does not implement would otherwise have every query it sent vanish without trace. An
+  HTTP/1.1 body under a `Content-Encoding` is counted the same way rather than undone: the Web SDK
+  sends none, so there is no client to serve by implementing it.
+- **Bytes that do not parse** — a truncated frame, a body that ends mid-message, a payload that
+  is not the message the method declares, or a JSON body that is not JSON or holds a value of the
+  wrong type under a key the mapping defines. Counted as `undecodable-message`. This is the one reason
   that indicates a defect rather than a boundary: it should not occur against a conforming client,
   and a corpus carrying it is reporting that something read the wire wrongly.
 

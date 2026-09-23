@@ -5,6 +5,65 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## [Unreleased]
+
+### Fixed
+
+- **A capture closes an HTTP/1.1 request still in flight.** A WebChannel backward channel is a
+  chunked `GET` the emulator holds open for as long as the listener lives, so a run that captured
+  the Web SDK ended with one in flight — and the upstream half of it, which nothing owned, kept the
+  event loop alive after the suite had finished and the corpus was written. `indexwright-record`
+  appeared to hang after a capture that in fact succeeded. The downstream half going away now takes
+  the upstream half with it, as a failed gRPC stream already destroyed the stream it opened.
+
+### Added
+
+- **The Firebase Web SDK is captured** (issue #58). The Web SDK does not speak gRPC to the emulator,
+  and until now the proxy forwarded its requests, counted them on stderr, and wrote a corpus that
+  omitted every query they carried. Observed against a local emulator with firebase 12.19.0: the
+  full SDK in a browser sends every query — `getDocs` and `getDocsFromServer` as much as
+  `onSnapshot` — as a `ListenRequest` in JSON, form-encoded into a WebChannel forward-channel
+  `POST` on `/google.firestore.v1.Firestore/Listen/channel`; `firebase/firestore/lite` posts a
+  `RunQueryRequest` as JSON to the REST `documents:runQuery` endpoint under `Content-Type:
+  text/plain`, in Node as well as in a browser; and the full SDK in Node still speaks gRPC, which
+  was already read. Both HTTP/1.1 forms are now decoded into the same `RawQuery` the protobuf
+  decoder produces and reach the corpus as the same entries, so `corpusVersion` stays 2. REST
+  `documents:runAggregationQuery` and `documents:partitionQuery` count under the reasons their gRPC
+  calls already had, a REST custom method the package has never heard of counts as
+  `unsupported-rpc`, a body under a `Content-Encoding` counts as `unsupported-encoding`, and a body
+  that is not JSON counts as `undecodable-message`. The Web SDK normalises a query before sending
+  it — `__name__` is appended to the sort order and an inequality field promoted into it — and the
+  corpus records what was sent, as SPEC §7 already said it would.
+
+- **A field is read under either name the proto3 JSON mapping gives it.** The Firebase SDKs write
+  lowerCamelCase, and reading only that spelling was not merely a missing field: `all_descendants`,
+  `order_by` and `find_nearest` fell through as unknown keys, so a client writing the original proto
+  names would have had a collection-group query recorded as a collection one, a sort order dropped,
+  and a vector query recorded as a plain shape — recorded wrongly rather than declined. The proxy
+  reads the wire rather than the source, so the client that wrote those bytes need not be a Firebase
+  SDK. A message naming one field under both spellings is `undecodable-message`.
+
+### Changed
+
+- **The HTTP/1.1 count is gone from stderr, and `Recorder.http1` with it.** The line said those
+  requests carried no gRPC and their queries were absent from the corpus, which stops being true
+  the moment they are read. HTTP/1.1 is now a transport like the other one: a request that carries
+  a query is recorded or counted under a skip reason, and one that does not is forwarded without
+  comment, as a gRPC `Commit` always was.
+
+### Notes
+
+- **Fixtures come from the client, and the test run stays offline.** `test/fixtures/web-sdk.json`
+  holds request bodies as the browser build of `@firebase/firestore` and `firebase/firestore/lite`
+  emitted them against a stub, captured by `scripts/capture-web-fixtures.mjs` the way
+  `capture-fixtures.mjs` captures the gRPC ones — no emulator, no Java, and the expected keys
+  written by hand. The end-to-end path was run once by hand through a real emulator with a real
+  browser; nothing in CI depends on either.
+- **REST `documents:listen` is counted, not read.** The REST surface spells it, the Web SDK never
+  sends it — its listeners travel by WebChannel — and a stream of JSON requests on one `POST` is not
+  a body this package reads. It is `unsupported-rpc`, so that a client which did send one would be
+  noticed rather than passed.
+
 ## [0.9.0] — 2026-09-22
 
 The release about what `check` vouches for. Two ways a set that was not the candidate set could

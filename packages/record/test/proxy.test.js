@@ -5,7 +5,7 @@ import { connect, createServer as createHttp2Server } from 'node:http2';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import { classify, fields, parseHostPort, startCapture } from '../dist/index.js';
+import { classify, classifyHttp1, fields, parseHostPort, startCapture } from '../dist/index.js';
 
 const { cases } = JSON.parse(
   readFileSync(fileURLToPath(new URL('fixtures/run-query.json', import.meta.url)), 'utf8'),
@@ -299,7 +299,7 @@ test('a compressed message this package cannot undo is counted, not dropped', as
   }
 });
 
-test('HTTP/1.1 is forwarded rather than refused, and is reported as uncaptured', async () => {
+test('HTTP/1.1 is forwarded rather than refused', async () => {
   // The emulator's data-clearing endpoint is HTTP/1.1, and a suite that uses it would break if
   // pointing FIRESTORE_EMULATOR_HOST at the proxy meant refusing the protocol.
   const upstream = createHttp1Server((request, response) => {
@@ -314,13 +314,272 @@ test('HTTP/1.1 is forwarded rather than refused, and is reported as uncaptured',
     });
     assert.equal(response.status, 200);
     assert.match(await response.text(), /^saw DELETE /);
-    assert.equal(capture.recorder.http1, 1);
-    // Not a corpus skip reason: this is the transport gap of §3, not a query the proxy declined.
+    assert.equal(capture.recorder.observed, 0);
     assert.equal(capture.recorder.skips.size, 0);
   } finally {
     await capture.close();
     upstream.close();
   }
+});
+
+const { cases: webCases } = JSON.parse(
+  readFileSync(fileURLToPath(new URL('fixtures/web-sdk.json', import.meta.url)), 'utf8'),
+);
+
+function webFixture(name) {
+  const found = webCases.find((entry) => entry.name === name);
+  assert.ok(found, `web fixture "${name}" is missing`);
+  return found;
+}
+
+/** An HTTP/1.1 upstream that answers everything with 200 and records each request whole. */
+function stubHttp1Upstream() {
+  const seen = [];
+  const server = createHttp1Server((request, response) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      seen.push({ method: request.method, url: request.url, body: Buffer.concat(chunks).toString('utf8') });
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.end('ok');
+    });
+  });
+  return { server, seen };
+}
+
+/** Send one HTTP/1.1 request through the proxy the way the Web SDK does. */
+async function post(address, path, body, headers = {}) {
+  const response = await fetch(`http://${address}${path}`, { method: 'POST', body, headers });
+  return { status: response.status, body: await response.text() };
+}
+
+test('a REST documents:runQuery is recorded from its JSON body and forwarded intact', async () => {
+  const upstream = stubHttp1Upstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: () => {} });
+  try {
+    const { rest } = webFixture('a collection group query');
+    const response = await post(capture.address, rest.path, rest.body, { 'content-type': rest.contentType });
+    assert.equal(response.status, 200);
+    assert.equal(response.body, 'ok');
+    assert.deepEqual(upstream.seen, [{ method: 'POST', url: rest.path, body: rest.body }]);
+    assert.equal(capture.recorder.observed, 1);
+    assert.deepEqual(
+      capture.recorder.shapes.map((shape) => shape.key),
+      ['items::COLLECTION_GROUP::AND(sku:EQUAL)::qty:ASCENDING|__name__:ASCENDING'],
+    );
+    assert.equal(capture.recorder.skips.size, 0);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('a WebChannel forward channel is recorded message by message, and its other traffic is not', async () => {
+  const upstream = stubHttp1Upstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: () => {} });
+  try {
+    const channel = '/google.firestore.v1.Firestore/Listen/channel';
+    const form = { 'content-type': 'application/x-www-form-urlencoded' };
+    // The first POST of a channel, as captured: `headers=` plus one add_target.
+    const first = webFixture('a not-equal filter').forwardChannel;
+    await post(capture.address, `${channel}?VER=8&RID=1&CVER=22&X-HTTP-Session-Id=gsessionid&t=1`, first.body, form);
+    // A later POST carrying a remove_target and a fresh add_target together, as the SDK batches.
+    const second = new URLSearchParams(webFixture('a nested field path').forwardChannel.body).get('req0___data__');
+    const batched = new URLSearchParams({
+      count: '2',
+      ofs: '3',
+      req0___data__: JSON.stringify({ database: 'd', removeTarget: 1002 }),
+      req1___data__: second,
+    });
+    await post(capture.address, `${channel}?VER=8&SID=abc&RID=2&AID=7&t=1`, batched.toString(), form);
+    // The backward channel is a GET, the Write channel carries no query, and a preflight asks first.
+    await fetch(`http://${capture.address}${channel}?VER=8&SID=abc&RID=rpc&AID=8&TYPE=xmlhttp&t=1`);
+    await post(capture.address, '/google.firestore.v1.Firestore/Write/channel?VER=8&RID=3&t=1', 'count=1&ofs=0&req0___data__=%7B%22database%22%3A%22d%22%7D', form);
+    await fetch(`http://${capture.address}/v1/projects/p/databases/(default)/documents:runQuery`, { method: 'OPTIONS' });
+
+    assert.equal(upstream.seen.length, 5, 'every request reached the upstream');
+    assert.equal(capture.recorder.observed, 2);
+    assert.deepEqual(
+      capture.recorder.shapes.map((shape) => shape.key),
+      [
+        'orders::COLLECTION::AND(state:NOT_EQUAL)::state:ASCENDING|__name__:ASCENDING',
+        'orders::COLLECTION::AND(profile.city:EQUAL)::__name__:ASCENDING',
+      ],
+    );
+    assert.equal(capture.recorder.skips.size, 0);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('a forward-channel body the reader cannot take apart is counted, not passed over', async () => {
+  // The POST was a query-bearing call whatever came of its body. Recording nothing for it without
+  // saying so is how a dropped query comes to look like one that was never issued (SPEC §7) — the
+  // same rule the gRPC side keeps for a RunQuery that carries no frame.
+  const upstream = stubHttp1Upstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: () => {} });
+  try {
+    const channel = '/google.firestore.v1.Firestore/Listen/channel?VER=8&RID=1&t=1';
+    const form = { 'content-type': 'application/x-www-form-urlencoded' };
+    // Not UTF-8 at all, and a body whose stated count nothing answers: both leave no message.
+    await post(capture.address, channel, Buffer.from([0xff, 0xfe]), form);
+    await post(capture.address, channel, 'count=1&ofs=0', form);
+    assert.equal(upstream.seen.length, 2, 'both still reached the upstream');
+    assert.equal(capture.recorder.observed, 2);
+    assert.equal(capture.recorder.skips.get('undecodable-message'), 2);
+    assert.equal(capture.recorder.shapes.length, 0);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('closing releases an upstream request still in flight, so a captured run can exit', async () => {
+  // A WebChannel backward channel is a chunked GET the emulator holds open for as long as the
+  // listener lives, so a run that captured the Web SDK ends with one in flight. Left holding a
+  // socket on the global agent, it keeps the event loop alive after the corpus is written and
+  // `indexwright-record` appears to hang after a capture that in fact succeeded.
+  const sockets = new Set();
+  const upstream = createHttp1Server((request, response) => {
+    response.writeHead(200, { 'content-type': 'text/plain' });
+    response.write('[[0,["c","SID",,8]]]\n'); // and never ends, as the backward channel does not
+  });
+  upstream.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  const upstreamAddress = await listen(upstream);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: () => {} });
+  const channel = `http://${capture.address}/google.firestore.v1.Firestore/Listen/channel?VER=8&SID=a&RID=rpc&TYPE=xmlhttp`;
+  const aborter = new AbortController();
+  try {
+    const response = await fetch(channel, { signal: aborter.signal });
+    // Read one chunk, so the request is established rather than merely sent.
+    await response.body.getReader().read();
+    assert.equal(sockets.size, 1, 'the proxy opened the backward channel upstream');
+
+    await capture.close();
+    // Both destroys are asynchronous — the downstream socket's close is what reaches the response,
+    // and the upstream socket's close follows it — so this waits for the state rather than for a
+    // fixed number of turns. Unfixed it never arrives, and the test fails on the deadline instead
+    // of on the assertion.
+    const deadline = Date.now() + 2000;
+    while (sockets.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(sockets.size, 0, 'closing the capture released the upstream request');
+  } finally {
+    aborter.abort();
+    for (const socket of sockets) socket.destroy();
+    upstream.close();
+  }
+});
+
+test('closing an unanswered request is silent, because the teardown is the proxy\'s own', async () => {
+  // The other half of releasing an in-flight request: destroying one the emulator has not answered
+  // makes it report a reset, and warning about that would name a teardown this proxy performed
+  // itself — "socket hang up" printed as the last line of a capture that in fact succeeded.
+  const warnings = [];
+  const sockets = new Set();
+  const upstream = createHttp1Server((request) => request.resume()); // accepts the POST, never answers
+  upstream.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  const upstreamAddress = await listen(upstream);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: (message) => warnings.push(message) });
+  try {
+    const { forwardChannel } = webFixture('a not-equal filter');
+    const pending = post(capture.address, '/google.firestore.v1.Firestore/Listen/channel?VER=8&RID=1&t=1', forwardChannel.body, {
+      'content-type': forwardChannel.contentType,
+    }).catch(() => {}); // the client's own request dies with the proxy; that is not what is asserted
+    // Recorded on the way past, so the assertion is about a POST that really was in flight.
+    while (capture.recorder.observed === 0) await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await capture.close();
+    await pending;
+    // Settled before the assertion: the reset reaches the request's 'error' a turn or two after
+    // `close` resolves, so asserting straight away passes whether or not the warning is coming.
+    for (let turn = 0; turn < 50; turn += 1) await new Promise((resolve) => setTimeout(resolve, 4));
+    assert.deepEqual(
+      warnings.filter((message) => message.startsWith('http/1.1')),
+      [],
+      'closing warned about its own teardown',
+    );
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    upstream.close();
+  }
+});
+
+test('REST calls the corpus cannot model are counted under the reasons gRPC calls are', async () => {
+  const upstream = stubHttp1Upstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: () => {} });
+  try {
+    const documents = '/v1/projects/p/databases/(default)/documents';
+    const text = { 'content-type': 'text/plain' };
+    await post(capture.address, `${documents}:runAggregationQuery`, '{"structuredAggregationQuery":{}}', text);
+    await post(capture.address, `${documents}:partitionQuery`, '{"structuredQuery":{}}', text);
+    await post(capture.address, `${documents}:executePipeline`, '{}', text);
+    // Not a query: a write, a lookup, and a document created by path.
+    await post(capture.address, `${documents}:commit`, '{"writes":[]}', text);
+    await post(capture.address, `${documents}:batchGet`, '{"documents":[]}', text);
+    await post(capture.address, `${documents}/orders`, '{"fields":{}}', text);
+    // A body that is not JSON on a query-bearing call is a defect, and is counted as one.
+    await post(capture.address, `${documents}:runQuery`, '{"structuredQuery":', text);
+    // One the proxy cannot read because it is compressed, which the Web SDK never sends.
+    await post(capture.address, `${documents}:runQuery`, gzipSync('{}'), { ...text, 'content-encoding': 'gzip' });
+
+    assert.equal(upstream.seen.length, 8);
+    assert.equal(capture.recorder.shapes.length, 0);
+    assert.deepEqual(
+      [...capture.recorder.skips.entries()].sort(),
+      [
+        ['aggregation-query', 1],
+        ['partition-query', 1],
+        ['undecodable-message', 1],
+        ['unsupported-encoding', 1],
+        ['unsupported-rpc', 1],
+      ],
+    );
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('classifyHttp1 reads the REST custom method and the WebChannel path, and leaves the rest alone', () => {
+  const documents = '/v1/projects/p/databases/(default)/documents';
+  assert.deepEqual(classifyHttp1('POST', `${documents}:runQuery`), { kind: 'record', method: 'RestRunQuery' });
+  // A subcollection parent is spelled into the path before the colon.
+  assert.deepEqual(classifyHttp1('POST', `${documents}/orders/o1:runQuery`), { kind: 'record', method: 'RestRunQuery' });
+  assert.deepEqual(classifyHttp1('POST', `${documents}:runQuery?alt=json`), { kind: 'record', method: 'RestRunQuery' });
+  assert.deepEqual(classifyHttp1('POST', `${documents}/orders/a:b:runQuery`), { kind: 'record', method: 'RestRunQuery' });
+  assert.deepEqual(classifyHttp1('POST', `${documents}:runAggregationQuery`), { kind: 'skip', reason: 'aggregation-query' });
+  assert.deepEqual(classifyHttp1('POST', `${documents}:partitionQuery`), { kind: 'skip', reason: 'partition-query' });
+  assert.deepEqual(classifyHttp1('POST', `${documents}:somethingNew`), { kind: 'skip', reason: 'unsupported-rpc' });
+  // REST spells it, the Web SDK never sends it, and it is a query-bearing call this package does not read.
+  assert.deepEqual(classifyHttp1('POST', `${documents}:listen`), { kind: 'skip', reason: 'unsupported-rpc' });
+  assert.deepEqual(classifyHttp1('POST', `${documents}:commit`), { kind: 'ignore' });
+  assert.deepEqual(classifyHttp1('POST', `${documents}/orders`), { kind: 'ignore' });
+  assert.deepEqual(classifyHttp1('GET', `${documents}/orders/o1`), { kind: 'ignore' });
+  assert.deepEqual(classifyHttp1('PATCH', `${documents}/orders/o1`), { kind: 'ignore' });
+  assert.deepEqual(classifyHttp1('DELETE', '/emulator/v1/projects/p/databases/(default)/documents'), { kind: 'ignore' });
+
+  const channel = (method) => `/google.firestore.v1.Firestore/${method}/channel?VER=8&RID=1&t=1`;
+  assert.deepEqual(classifyHttp1('POST', channel('Listen')), { kind: 'record', method: 'ForwardChannel' });
+  assert.deepEqual(classifyHttp1('GET', channel('Listen')), { kind: 'ignore' });
+  assert.deepEqual(classifyHttp1('OPTIONS', channel('Listen')), { kind: 'ignore' });
+  assert.deepEqual(classifyHttp1('POST', channel('Write')), { kind: 'ignore' });
+  assert.deepEqual(classifyHttp1('POST', channel('RunQuery')), { kind: 'skip', reason: 'unsupported-rpc' });
+  assert.deepEqual(classifyHttp1('POST', channel('SomethingNew')), { kind: 'skip', reason: 'unsupported-rpc' });
+  assert.deepEqual(classifyHttp1('POST', '/other.Service/Listen/channel'), { kind: 'ignore' });
+  assert.deepEqual(classifyHttp1(undefined, undefined), { kind: 'ignore' });
 });
 
 test('classify routes by the gRPC method, and leaves other services alone', () => {

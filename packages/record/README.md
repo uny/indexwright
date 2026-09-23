@@ -111,9 +111,9 @@ so a corpus file that disagrees with itself is refused by the reader before the 
 this catches the same disagreement arriving through the API. And **a part with nothing replayable in
 it** — `check` refuses a single empty corpus because one replays cleanly by construction, and a merge
 of three corpora one of which is empty is non-empty, so a run that only looked at the merge would
-report full coverage for a set whose other consuming suite was never captured. A suite driven through
-the Firebase Web SDK produces exactly such a corpus; the fix is to drop that part from the command
-line.
+report full coverage for a set whose other consuming suite was never captured. A suite that never
+reached the recorder — pointed at the emulator directly, say — produces exactly such a corpus; the
+fix is to drop that part from the command line.
 
 Naming one corpus twice is refused earlier, as a usage error, and the two spellings of one path are
 one corpus: a command meaning to name two suites that names one of them twice checks a narrower set
@@ -213,8 +213,8 @@ would drop a gap nobody measured.
 
 **A corpus with nothing replayable in it is refused, not reported as a pass.** An empty corpus
 replays cleanly by construction, so exiting `0` on one would say the candidate set covers everything
-having measured nothing. That happens for a real reason: a suite driven through the Firebase Web SDK
-issues no gRPC, so `record` observes no queries to record.
+having measured nothing. That happens for a real reason: a suite that ran against the emulator
+directly rather than through the recorder leaves `record` no queries to record.
 
 **It also establishes that the set on the target is the candidate set**, in both directions. A target
 holding an index the file does not declare serves queries the candidate set alone would not, so the
@@ -333,9 +333,9 @@ answer there as well. Verifying by resolution rather than by spelling is
 [issue #24](https://github.com/uny/indexwright/issues/24).
 
 The proxy is transparent: bodies, trailers, and gRPC errors reach your client unchanged, and
-HTTP/1.1 traffic — the emulator's REST endpoints, including the one
-`@firebase/rules-unit-testing` uses to clear data — is forwarded rather than refused. A suite that
-passes against the emulator passes against the proxy.
+HTTP/1.1 traffic — the Web SDK's REST and WebChannel requests, and the emulator's own endpoints,
+including the one `@firebase/rules-unit-testing` uses to clear data — is forwarded rather than
+refused. A suite that passes against the emulator passes against the proxy.
 
 ## What lands in the file
 
@@ -369,6 +369,16 @@ A snapshot listener is captured too: its query travels over `Listen` rather than
 recorded under the same rules the moment its target is added, whether or not the listener is ever
 detached. `onSnapshot` and `get()` on the same query are one entry.
 
+The Firebase **Web SDK** is captured as well, on the transports it really uses. The full SDK in a
+browser sends every query — `getDocs` as much as `onSnapshot` — as a `Listen` target over
+WebChannel, and `firebase/firestore/lite` posts it to the REST `documents:runQuery` endpoint, in
+Node too. Both are read into the same entry the gRPC transport would produce, so a workspace whose
+suites mix server and web clients records one corpus. The Web SDK normalises a query before
+sending it — it appends `__name__` to the sort order and promotes an inequality field into it —
+and the corpus records what was sent, so one application query has two legitimate entries
+depending on which SDK issued it. A corpus is comparable across runs of one project, not across
+SDKs.
+
 ## What it does not capture
 
 Counted in `skipped` and reported on stderr, never dropped silently — a query that was issued and
@@ -386,10 +396,6 @@ then discarded without trace would look like coverage:
 
 A corpus written by an earlier release may also name `listen-query`, which is how those releases
 counted a snapshot listener. It still reads; nothing writes it now.
-
-One gap is not a skip reason because it is a transport rather than a query: the Firebase **Web
-SDK** talks WebChannel over HTTP/1.1 and carries no gRPC to read. Those requests are forwarded and
-counted, and `indexwright-record` says so on stderr.
 
 ## Stability
 

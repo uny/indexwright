@@ -5,6 +5,7 @@
  * be indexed, so it goes to stderr where it helps triage, and the file stays diff-stable (SPEC §7).
  */
 import { gunzipSync, inflateSync } from 'node:zlib';
+import { decodeJsonListen, decodeJsonRunQuery, forwardChannelMessages } from './decode-json.js';
 import { decodeListen, decodeRunQuery } from './decode.js';
 import type { DecodeResult } from './decode.js';
 import { toQueryShape } from './shape.js';
@@ -28,7 +29,6 @@ export class Recorder {
   readonly #shapes = new Map<string, QueryShape>();
   readonly #skips = new Map<SkipReason, number>();
   #observed = 0;
-  #http1 = 0;
 
   /** Distinct query shapes, in insertion order; `buildCorpus` is what sorts them. */
   get shapes(): QueryShape[] {
@@ -48,18 +48,9 @@ export class Recorder {
     return this.#observed;
   }
 
-  /** Requests that arrived over HTTP/1.1, which carries no gRPC and is therefore never captured. */
-  get http1(): number {
-    return this.#http1;
-  }
-
   skip(reason: SkipReason): void {
     this.#observed += 1;
     this.#skips.set(reason, (this.#skips.get(reason) ?? 0) + 1);
-  }
-
-  countHttp1(): void {
-    this.#http1 += 1;
   }
 
   /**
@@ -130,6 +121,36 @@ export class Recorder {
     };
   }
 
+  /**
+   * Record the `RunQueryRequest` a REST `documents:runQuery` request carries as JSON (issue #58).
+   *
+   * One request is one message: the REST form has no framing, so unlike the gRPC body there is no
+   * second message to look for and nothing to split.
+   */
+  recordRestRunQuery(body: Uint8Array): void {
+    this.#count(decodeJsonRunQuery(body));
+  }
+
+  /**
+   * Record the targets one WebChannel forward-channel POST carries (issue #58).
+   *
+   * A POST holds zero or more `ListenRequest`s, each read as `recordListen` reads a frame: a target
+   * is a query whether the channel it rides on is ever answered. A POST that carries no message —
+   * the channel's own handshake and teardown — counts nothing, like a `Listen` stream that has only
+   * just opened.
+   */
+  recordForwardChannel(body: Uint8Array): void {
+    let messages: string[];
+    try {
+      messages = forwardChannelMessages(body);
+    } catch (error) {
+      if (!(error instanceof WireError)) throw error;
+      this.skip('undecodable-message');
+      return;
+    }
+    for (const message of messages) this.#count(decodeJsonListen(message));
+  }
+
   /** One framed message: undo its compression, decode it, and count what came of that. */
   #record(
     message: { readonly compressed: boolean; readonly payload: Uint8Array },
@@ -151,7 +172,11 @@ export class Recorder {
       }
     }
 
-    const result = decode(payload);
+    this.#count(decode(payload));
+  }
+
+  /** What one decoded message comes to: a shape, a skip, or — for control traffic — nothing. */
+  #count(result: DecodeResult | null): void {
     if (result === null) return;
     if (!result.ok) {
       this.skip(result.reason);

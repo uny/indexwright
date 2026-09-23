@@ -149,16 +149,6 @@ function report(
       .join(', ');
     streams.err(`indexwright-record: not recorded: ${counts}\n`);
   }
-
-  if (recorder.http1 > 0) {
-    // Not a corpus skip reason: HTTP/1.1 carries no gRPC, so this is the transport gap rather than
-    // a query the proxy declined. Saying so is the difference between a narrow corpus and one that
-    // looks complete.
-    streams.err(
-      `indexwright-record: ${recorder.http1} request(s) arrived over HTTP/1.1 (REST or WebChannel) ` +
-        'and carry no gRPC to capture; queries issued that way are absent from the corpus\n',
-    );
-  }
 }
 
 interface ChildResult {
