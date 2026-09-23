@@ -5,6 +5,18 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## [Unreleased]
+
+### Fixed
+
+- **A hand-built corpus is held to the filter depth a corpus file is** (issue #68). `serialiseCorpus`,
+  `writeCorpus` and `mergeCorpora` now refuse a filter tree nested deeper than `parseCorpus`
+  accepts, with a `CorpusError` naming the entry's key, where they used to throw the runtime's
+  `RangeError` or — just short of that — write a file this package then refused to read. The depth
+  is counted as the reader counts it, so a tree at exactly the ceiling still writes and reads back.
+  0.6.0's notes named this as a decision about the JS API; it is now closed rather than documented.
+  `writeCorpus` leaves no file behind when it refuses.
+
 ## [0.10.0] — 2026-09-23
 
 The release about the Firebase Web SDK. Until now its queries never reached the corpus: the Web SDK
