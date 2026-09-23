@@ -222,11 +222,15 @@ const handBuilt = (where) => ({
 test('a corpus built through the JS API is held to the depth the reader accepts (issue #68)', () => {
   // The ceiling is where the reader's is, and not merely somewhere short of the runtime's: a tree
   // at exactly the ceiling writes, and one level more is refused on the way out rather than written
-  // as a file this package then refuses to read.
-  const atCeiling = JSON.parse(serialiseCorpus(handBuilt(nested(100))));
-  let depth = 0;
-  for (let node = atCeiling.queries[0].where; node !== undefined; node = node.filters?.[0]) depth += 1;
-  assert.equal(depth, 100);
+  // as a file this package then refuses to read. Read back through `parseCorpus`, so the two ceilings
+  // cannot drift apart unnoticed; the ops alternate because a single-child chain is not normalised.
+  let where = { fieldPath: 'a', op: 'EQUAL' };
+  for (let level = 1; level < 100; level += 1) {
+    where = { op: level % 2 === 1 ? 'OR' : 'AND', filters: [{ fieldPath: `b${level}`, op: 'EQUAL' }, where] };
+  }
+  const atCeiling = parseCorpus(serialiseCorpus(buildCorpus([shape('c', where)], [])));
+  const depthOf = (node) => (node.filters === undefined ? 1 : 1 + Math.max(...node.filters.map(depthOf)));
+  assert.equal(depthOf(atCeiling.queries[0].where), 100);
 
   const refused = (error) =>
     error instanceof CorpusError && /"x" has a filter tree nested deeper than 100 levels/.test(error.message);
