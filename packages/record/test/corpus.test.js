@@ -234,8 +234,10 @@ test('a corpus built through the JS API is held to the depth the reader accepts 
   // Deep enough to overflow the runtime's stack without the ceiling, which is the RangeError the
   // issue is about. The tree is built iteratively, so constructing it overflows nothing.
   assert.throws(() => serialiseCorpus(handBuilt(nested(100000))), refused);
-  // `mergeCorpora` descends a tree only to compare two entries sharing a key.
+  // `mergeCorpora` refuses it whether or not another part shares its key: a merge is a corpus, and
+  // one carrying this tree would only fail later, when it was written.
   assert.throws(() => mergeCorpora([handBuilt(nested(100000)), handBuilt(nested(100000))]), refused);
+  assert.throws(() => mergeCorpora([handBuilt(nested(101))]), refused);
 });
 
 test('writeCorpus refuses an over-deep tree without leaving a file behind', () => {

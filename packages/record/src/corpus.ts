@@ -139,30 +139,34 @@ export function mergeCorpora(parts: readonly Corpus[]): Corpus {
     }
   }
 
-  const byKey = new Map<string, QueryShape>();
+  const byKey = new Map<string, { query: QueryShape; body: string }>();
   for (const part of parts) {
     for (const query of part.queries) {
+      // Every entry is written out, not only the ones that share a key: the result is a corpus
+      // anything that reads one can read, so a tree nested past what the reader accepts is refused
+      // here rather than carried into a merge that only fails once it is serialised.
+      const body = JSON.stringify(queryToJson(query));
       const existing = byKey.get(query.key);
       // The key is injective over the shape, so two parts that observed the same query agree on
       // every other member. Disagreeing means a part has been edited or has arrived corrupted, and
       // taking either side silently — which is what the last-writer-wins of `buildCorpus` would do —
       // is how a merged corpus comes to describe a query neither part recorded.
       if (existing !== undefined) {
-        if (JSON.stringify(queryToJson(existing)) !== JSON.stringify(queryToJson(query))) {
+        if (existing.body !== body) {
           throw new CorpusError(
             `two corpora hold the key ${JSON.stringify(query.key)} with bodies that differ; one of them is not the shape its key names`,
           );
         }
         continue;
       }
-      byKey.set(query.key, query);
+      byKey.set(query.key, { query, body });
     }
   }
 
   return {
     corpusVersion: version,
     producers: sortProducers(parts.flatMap((part) => [...part.producers])),
-    queries: [...byKey.values()].sort((a, b) => compareByCodePoint(a.key, b.key)),
+    queries: [...byKey.values()].map(({ query }) => query).sort((a, b) => compareByCodePoint(a.key, b.key)),
     skipped: [...new Set(parts.flatMap((part) => [...part.skipped]))].sort(compareByCodePoint),
   };
 }

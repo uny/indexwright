@@ -15,6 +15,7 @@ again, by its own `corpusVersion`.
   `RangeError` or — just short of that — write a file this package then refused to read. The depth
   is counted as the reader counts it, so a tree at exactly the ceiling still writes and reads back.
   0.6.0's notes named this as a decision about the JS API; it is now closed rather than documented.
+  `mergeCorpora` refuses such a tree in any part, not only when two parts share its key, and
   `writeCorpus` leaves no file behind when it refuses.
 
 ## [0.10.0] — 2026-09-23
