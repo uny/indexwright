@@ -5,7 +5,12 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## [Unreleased]
+## [0.10.1] — 2026-09-23
+
+A patch for a path the JS API left unbounded. A corpus built by hand is now held to the filter depth
+a corpus file is, so `serialiseCorpus`, `writeCorpus` and `mergeCorpora` fail with the `CorpusError`
+they are documented to fail with, and this package can no longer write a corpus it refuses to read.
+Nothing changes for a corpus that `record` captured or `parseCorpus` read. `corpusVersion` stays 2.
 
 ### Fixed
 
@@ -1020,6 +1025,7 @@ First release. Query capture, specified in [SPEC.md](https://github.com/uny/inde
   stderr. Snapshot listeners carry their query over `Listen` and are counted, not recorded.
   Capturing `Listen` is the first extension worth making.
 
+[0.10.1]: https://github.com/uny/indexwright/releases/tag/record-v0.10.1
 [0.10.0]: https://github.com/uny/indexwright/releases/tag/record-v0.10.0
 [0.9.0]: https://github.com/uny/indexwright/releases/tag/record-v0.9.0
 [0.8.0]: https://github.com/uny/indexwright/releases/tag/record-v0.8.0
