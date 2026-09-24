@@ -134,12 +134,12 @@ strings, booleans, maps and arrays as well as the numbers — so `IS_NOT_NAN`, l
 the range operators, is not bounded by type. It reads what `IS_NOT_NULL` reads on this seed, which
 holds no `NaN`.
 
-Two things the step 5b reading does not say. The 500 on S3 is the seed's doing rather than a new class of
-expensive operator — `seed.mjs` writes the sentinel into `a` and into `tags` for every document, so
-an `array-contains` plus an equality against the sentinel matches all of them. And this is eight
-shapes, one operand, one collection, one index set: it observes that `limit(1)` is selection-neutral
-on the axes tested, which is the same kind of statement the §7 result is, and not a claim about the
-planner in general.
+Two things the step 5b reading does not say. The 500 on S3 is the seed's doing rather than a new
+class of expensive operator — `seed.mjs` writes the sentinel into `a` and into `tags` for every
+document, so an `array-contains` plus an equality against the sentinel matches all of them. And this
+is eight shapes, one operand, one collection, one index set: it observes that `limit(1)` is
+selection-neutral on the axes tested, which is the same kind of statement the §7 result is, and not
+a claim about the planner in general.
 
 The arity result belongs with them, though it was never in question in a flag: S2 at one, three and
 ten values was served identically. That is the axis the corpus discards, and the sharpest way SPEC §7
