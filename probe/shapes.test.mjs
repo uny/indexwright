@@ -40,6 +40,35 @@ test('each class issue #69 names is reached by one shape served and one not', ()
   assert.deepEqual(reached((q) => topOp(q) === 'OR'), ['S11:true', 'S12:false']);
 });
 
+/** Every operator a structured query's filter tree carries, leaves only. */
+function operators(node) {
+  if (node === undefined) return [];
+  if (node.compositeFilter !== undefined) return node.compositeFilter.filters.flatMap(operators);
+  return [(node.fieldFilter ?? node.unaryFilter).op];
+}
+
+test('each operator class issue #89 names is reached by one shape served and one not', () => {
+  for (const [op, expected] of [
+    ['NOT_IN', ['S13:true', 'S14:false']],
+    ['ARRAY_CONTAINS_ANY', ['S15:true', 'S16:false']],
+    ['IS_NOT_NULL', ['S17:true', 'S18:false']],
+    ['IS_NOT_NAN', ['S19:true', 'S20:false']],
+  ]) {
+    const reached = SHAPES.filter((shape) => operators(wire(shape.id).where).includes(op)).map(
+      (shape) => `${shape.id}:${shape.covered}`,
+    );
+    assert.deepEqual(reached, expected, op);
+  }
+});
+
+test('no shape carries the operators the buildReplayQuery docblock names as unreached', () => {
+  const unreached = ['LESS_THAN_OR_EQUAL', 'GREATER_THAN_OR_EQUAL', 'IS_NAN'];
+  for (const shape of SHAPES) {
+    const carried = operators(wire(shape.id).where).filter((op) => unreached.includes(op));
+    assert.deepEqual(carried, [], shape.id);
+  }
+});
+
 test('every shape queries the one collection id the seed writes, and none leaves it', () => {
   for (const shape of SHAPES) {
     const query = wire(shape.id);

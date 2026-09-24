@@ -119,14 +119,27 @@ included. What the two new classes add:
   been measured here.
 
 It is still one operand, one collection and one index set, and `not-in`, `array-contains-any` and
-the negated unary forms remain unreached by any shape.
+the negated unary forms remained unreached until step 5d.
 
-Two things that reading does not say. The 500 on S3 is the seed's doing rather than a new class of
-expensive operator — `seed.mjs` writes the sentinel into `a` and into `tags` for every document, so
-an `array-contains` plus an equality against the sentinel matches all of them. And this is eight
-shapes, one operand, one collection, one index set: it observes that `limit(1)` is selection-neutral
-on the axes tested, which is the same kind of statement the §7 result is, and not a claim about the
-planner in general.
+**The limit reading over the remaining operators (step 5d, issue #89).** Run on 2026-09-23 against
+the set step 5c left deployed, with no new index: all twenty shapes answered the same bare and with
+`limit(1)`, and every prediction held. `NOT_IN` (S13, S14), `ARRAY_CONTAINS_ANY` (S15, S16),
+`IS_NOT_NULL` (S17, S18) and `IS_NOT_NAN` (S19, S20) each had its uncovered shape stay
+`FAILED_PRECONDITION` with the limit on, and its served shape fall to one document: S13, S17 and S19
+from 429, S15 from 500. The operators no shape carries are now `<=`, `>=` and `IS_NAN`, siblings of
+`<`, `>` and `IS_NULL`'s equality class, which were measured.
+
+S19's 429 is worth a line. `b != NaN` matched every document whose `b` exists and is not null —
+strings, booleans, maps and arrays as well as the numbers — so `IS_NOT_NAN`, like `!=` and unlike
+the range operators, is not bounded by type. It reads what `IS_NOT_NULL` reads on this seed, which
+holds no `NaN`.
+
+Two things the step 5b reading does not say. The 500 on S3 is the seed's doing rather than a new
+class of expensive operator — `seed.mjs` writes the sentinel into `a` and into `tags` for every
+document, so an `array-contains` plus an equality against the sentinel matches all of them. And this
+is eight shapes, one operand, one collection, one index set: it observes that `limit(1)` is
+selection-neutral on the axes tested, which is the same kind of statement the §7 result is, and not
+a claim about the planner in general.
 
 The arity result belongs with them, though it was never in question in a flag: S2 at one, three and
 ten values was served identically. That is the axis the corpus discards, and the sharpest way SPEC §7
@@ -152,14 +165,14 @@ What the run did settle is the price. The readiness gate restarts on every invoc
 
 | File | What it is |
 |:--|:--|
-| `shapes.mjs` | The query shapes, defined once and shared by all three instruments so they cannot drift apart. S1–S8 are the first run's; S9–S12 are the disjunction and collection-group shapes step 5c adds for issue #69 |
+| `shapes.mjs` | The query shapes, defined once and shared by all three instruments so they cannot drift apart. S1–S8 are the first run's; S9–S12 are the disjunction and collection-group shapes step 5c adds for issue #69, and S13–S20 the operators step 5d adds for issue #89 |
 | `suite.mjs` | The driver `record` captures from. `PROBE_SHAPES=S1,S2` issues a subset |
 | `differential.mjs` | The §7 instrument: issues the shapes, writes a JSON report to stdout |
 | `limit.mjs` | The #43 instrument: issues each shape bare and with `limit(1)`, and reports what each read |
 | `expectations.mjs` | Their command line — argv in, the expectation map out. Pure, so what an operator types is testable |
 | `summarise.mjs` | Their stop rule — rows in, findings and an exit code out, for the verdicts and for the read counts alike. Pure, so it can be tested without a database |
 | `expectations.test.mjs`, `summarise.test.mjs` | Tests for the two halves of the stop rule. Run in `npm test` alongside the packages' suites |
-| `shapes.test.mjs` | Pins what S9–S12 send on the wire — the scope and the disjunction step 5c exists to reach — and that `limit(1)` is the only field the limited issuing adds |
+| `shapes.test.mjs` | Pins what S9–S20 send on the wire — the scope, the disjunction and the operators steps 5c and 5d exist to reach — and that `limit(1)` is the only field the limited issuing adds |
 | `seed.mjs` | Populates the collection, so #43's cost is observed rather than deduced |
 | `watch-readiness.mjs` | Timestamped index states through the same Admin path `check` uses |
 | `firestore.queries.json` | The captured corpus. Committed — it is the input `check` replays |
@@ -485,7 +498,7 @@ How the result reaches the code:
 
 - **No disagreement on S9–S12.** The limit reading extends to both classes, and the docblock on
   `buildReplayQuery` says so in place of naming them as unreached. `not-in`, `array-contains-any` and
-  the negated unary forms are still not reached by any shape, and the docblock keeps saying that.
+  the negated unary forms are left to step 5d.
 - **A disagreement on any of them.** `limit(1)` is not available for that class, and
   `buildReplayQuery` has to send it without one.
 
@@ -495,6 +508,24 @@ both `tags` and `a`, so it reads 500 bare and 1 with the limit.
 The corpus files are not re-captured for this step. Step 5c does not replay a corpus, and step 7's
 predictions are written against the eight-shape corpus in `firestore.queries.json`; S9–S12 enter it
 only if step 6 is run again. Steps 3 and 5 predate them too, and run them unconstrained.
+
+### 5d. The limit probe over the remaining operators (issue #89)
+
+S13–S20 give `NOT_IN`, `ARRAY_CONTAINS_ANY`, `IS_NOT_NULL` and `IS_NOT_NAN` a served and an
+uncovered shape each. The served ones put the operator beside an equality on `a` on `b` (the declared
+`(a, b)`), or on `tags` (the declared `(tags CONTAINS, a)`); the uncovered ones bring in `n`, which
+no index names — in S16 as an inequality beside the `tags` operator, elsewhere as the operator's own
+field. They need nothing step 5c did not already deploy, so this step is one command:
+
+```bash
+node probe/limit.mjs indexwright-probe '(default)' \
+  --expect-served S1,S2,S3,S4,S5,S7,S9,S11,S13,S15,S17,S19 \
+  --expect-uncovered S6,S10,S12,S14,S16,S18,S20 \
+  > probe/limit-remaining-operators.json
+```
+
+The stop rule, the exit codes and the reading of a disagreement are 5c's, and so is what it leaves
+alone: the corpus is not re-captured, and steps 3 and 5 run S13–S20 unconstrained.
 
 ### 6. Capture the corpus of shapes the target actually covers
 

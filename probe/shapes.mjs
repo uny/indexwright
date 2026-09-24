@@ -143,6 +143,68 @@ export const SHAPES = [
         ),
       ),
   },
+  // S13–S20 are the operator classes S1–S12 still do not reach (issue #89), a served and an uncovered
+  // shape for each, on the set step 5c left deployed. The served ones put the operator on `b` beside
+  // an equality on `a`, or on `tags`, where a declared index already answers; the uncovered ones bring
+  // in `n`, which no index names — S16 as an inequality beside `tags`, the rest as the operator's own
+  // field — so no new index is needed.
+  //
+  // `NOT_IN` and `IS_NOT_NULL` are also two of the operators issue #43 is about: like `!=`, they
+  // match every document that merely has the field, which is where the read bound matters.
+  {
+    id: 'S13',
+    describe: 'an equality and a NOT_IN, on the declared (a, b)',
+    covered: true,
+    varies: 'arity',
+    build: (c, v) => c.where('a', '==', v.scalar()).where('b', 'not-in', v.list()),
+  },
+  {
+    id: 'S14',
+    describe: 'an equality and a NOT_IN, on the undeclared (a, n)',
+    covered: false,
+    varies: 'arity',
+    build: (c, v) => c.where('a', '==', v.scalar()).where('n', 'not-in', v.list()),
+  },
+  {
+    id: 'S15',
+    describe: 'an ARRAY_CONTAINS_ANY and an equality, on the declared (tags CONTAINS, a)',
+    covered: true,
+    varies: 'arity',
+    build: (c, v) => c.where('tags', 'array-contains-any', v.list()).where('a', '==', v.scalar()),
+  },
+  {
+    id: 'S16',
+    describe: 'an ARRAY_CONTAINS_ANY and an inequality, on the undeclared (tags CONTAINS, n)',
+    covered: false,
+    varies: 'arity',
+    build: (c, v) => c.where('tags', 'array-contains-any', v.list()).where('n', '>', v.scalar()),
+  },
+  // The unary halves carry no operand, as S5's does not; the `a ==` half is what the §7 comparison
+  // varies, so these carry no `varies` either.
+  {
+    id: 'S17',
+    describe: 'an equality and a unary IS_NOT_NULL, on the declared (a, b)',
+    covered: true,
+    build: (c, v) => c.where('a', '==', v.scalar()).where('b', '!=', null),
+  },
+  {
+    id: 'S18',
+    describe: 'an equality and a unary IS_NOT_NULL, on the undeclared (a, n)',
+    covered: false,
+    build: (c, v) => c.where('a', '==', v.scalar()).where('n', '!=', null),
+  },
+  {
+    id: 'S19',
+    describe: 'an equality and a unary IS_NOT_NAN, on the declared (a, b)',
+    covered: true,
+    build: (c, v) => c.where('a', '==', v.scalar()).where('b', '!=', NaN),
+  },
+  {
+    id: 'S20',
+    describe: 'an equality and a unary IS_NOT_NAN, on the undeclared (a, n)',
+    covered: false,
+    build: (c, v) => c.where('a', '==', v.scalar()).where('n', '!=', NaN),
+  },
 ];
 
 /** The collection every shape is issued against. */
