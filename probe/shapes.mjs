@@ -145,8 +145,9 @@ export const SHAPES = [
   },
   // S13–S20 are the operator classes S1–S12 still do not reach (issue #89), a served and an uncovered
   // shape for each, on the set step 5c left deployed. The served ones put the operator on `b` beside
-  // an equality on `a`, or on `tags`, where a declared index already answers; the uncovered ones move
-  // it to `n`, which no index names — so no new index is needed.
+  // an equality on `a`, or on `tags`, where a declared index already answers; the uncovered ones bring
+  // in `n`, which no index names — S16 as an inequality beside `tags`, the rest as the operator's own
+  // field — so no new index is needed.
   //
   // `NOT_IN` and `IS_NOT_NULL` are also two of the operators issue #43 is about: like `!=`, they
   // match every document that merely has the field, which is where the read bound matters.

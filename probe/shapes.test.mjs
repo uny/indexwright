@@ -61,6 +61,14 @@ test('each operator class issue #89 names is reached by one shape served and one
   }
 });
 
+test('no shape carries the operators the buildReplayQuery docblock names as unreached', () => {
+  const unreached = ['LESS_THAN_OR_EQUAL', 'GREATER_THAN_OR_EQUAL', 'IS_NAN'];
+  for (const shape of SHAPES) {
+    const carried = operators(wire(shape.id).where).filter((op) => unreached.includes(op));
+    assert.deepEqual(carried, [], shape.id);
+  }
+});
+
 test('every shape queries the one collection id the seed writes, and none leaves it', () => {
   for (const shape of SHAPES) {
     const query = wire(shape.id);

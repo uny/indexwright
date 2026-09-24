@@ -134,7 +134,7 @@ strings, booleans, maps and arrays as well as the numbers — so `IS_NOT_NAN`, l
 the range operators, is not bounded by type. It reads what `IS_NOT_NULL` reads on this seed, which
 holds no `NaN`.
 
-Two things that reading does not say. The 500 on S3 is the seed's doing rather than a new class of
+Two things the step 5b reading does not say. The 500 on S3 is the seed's doing rather than a new class of
 expensive operator — `seed.mjs` writes the sentinel into `a` and into `tags` for every document, so
 an `array-contains` plus an equality against the sentinel matches all of them. And this is eight
 shapes, one operand, one collection, one index set: it observes that `limit(1)` is selection-neutral
@@ -513,8 +513,9 @@ only if step 6 is run again. Steps 3 and 5 predate them too, and run them uncons
 
 S13–S20 give `NOT_IN`, `ARRAY_CONTAINS_ANY`, `IS_NOT_NULL` and `IS_NOT_NAN` a served and an
 uncovered shape each. The served ones put the operator beside an equality on `a` on `b` (the declared
-`(a, b)`), or on `tags` (the declared `(tags CONTAINS, a)`); the uncovered ones move it to `n`, which
-no index names. They need nothing step 5c did not already deploy, so this step is one command:
+`(a, b)`), or on `tags` (the declared `(tags CONTAINS, a)`); the uncovered ones bring in `n`, which
+no index names — in S16 as an inequality beside the `tags` operator, elsewhere as the operator's own
+field. They need nothing step 5c did not already deploy, so this step is one command:
 
 ```bash
 node probe/limit.mjs indexwright-probe '(default)' \
@@ -523,7 +524,8 @@ node probe/limit.mjs indexwright-probe '(default)' \
   > probe/limit-remaining-operators.json
 ```
 
-The stop rule, the exit codes and the reading of a disagreement are 5c's.
+The stop rule, the exit codes and the reading of a disagreement are 5c's, and so is what it leaves
+alone: the corpus is not re-captured, and steps 3 and 5 run S13–S20 unconstrained.
 
 ### 6. Capture the corpus of shapes the target actually covers
 
