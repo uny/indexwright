@@ -13,13 +13,18 @@
  * it. Fixtures taken from the real client are what catch that.
  *
  * **`count()`/`sum()`/`average()` are not a third transport — they are the *same* REST transport
- * the full SDK's plain queries never use.** `RestConnection`, in `@firebase/firestore`'s shared
- * internals, routes every non-streaming RPC (`BatchGetDocuments`, `Commit`, `RunAggregationQuery`)
- * through a plain HTTP/1.1 POST rather than through the WebChannel `Listen` stream a `Query` goes
- * out on; `WebChannelConnection` extends it rather than replacing it, and only overrides the
- * streaming half. `getCountFromServer`/`getAggregateFromServer` (full SDK) and
+ * the full SDK's plain queries never use, and not because `RunAggregationQuery` is unary.** It is
+ * server-streaming in the v1 proto, `returns (stream RunAggregationQueryResponse)`, same as
+ * `RunQuery` — see `../src/proxy.ts` and `../src/recorder.ts` for where this project's own capture
+ * already reads it that way. `RestConnection`, in `@firebase/firestore`'s shared internals, invokes
+ * it through its *unary* `invokeRPC` path anyway (`_t`, which forwards straight to the plain-invoke
+ * `nt` — the SDK's own comment on that: "the REST API automatically aggregates all of the streamed
+ * results, so we can just use the normal invoke() method"), rather than through the WebChannel
+ * streaming path reserved for `Listen`/`Write`; `WebChannelConnection` extends `RestConnection`
+ * and only overrides that streaming half, leaving `RunAggregationQuery` on the base class's REST
+ * invoke in both builds. `getCountFromServer`/`getAggregateFromServer` (full SDK) and
  * `getCount`/`getAggregate` (`firestore/lite`) both reach `invokeRunAggregationQueryRpc`, which
- * calls that non-streaming path — so the full SDK's aggregation and lite's aggregation are the
+ * calls that one REST-collecting path — so the full SDK's aggregation and lite's aggregation are the
  * *same* REST call, `documents:runAggregationQuery`, with no forward-channel body to capture at
  * all. `web-sdk-aggregation.json` captures both anyway, because "the same call" is exactly the kind
  * of claim a wire capture should confirm rather than assume — the two SDKs share a serializer but
@@ -31,7 +36,7 @@
  * request is on the wire before any answer is due either way, and that is all either fixture needs.
  *
  * **The aggregation half needs one more thing the plain-query half does not: `XMLHttpRequest`.**
- * `RestConnection`'s non-streaming invoke — the path `RunAggregationQuery` takes, see above — goes
+ * `RestConnection`'s unary invoke — the path `RunAggregationQuery` takes, see above — goes
  * through `@firebase/webchannel-wrapper`'s `XhrIo`, which calls the real, global `XMLHttpRequest`
  * unconditionally; there is no `fetch` fallback the way the WebChannel *streaming* half the plain
  * query capture already exercises seems to tolerate running without one. Node has no such global,
@@ -59,7 +64,7 @@ const missing = () => {
   console.error('this script needs firebase and xhr2:\n  npm install --no-save firebase xhr2');
   process.exit(2);
 };
-// Installed before anything from `firebase` is imported: `RestConnection`'s non-streaming invoke
+// Installed before anything from `firebase` is imported: `RestConnection`'s unary invoke
 // reads the global at call time, not at module load, but there is no path in this script that
 // calls it before this line runs either way, so the order here is the simplest one that works.
 globalThis.XMLHttpRequest = (await import('xhr2').catch(missing)).default;

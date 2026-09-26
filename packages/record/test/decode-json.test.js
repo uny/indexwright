@@ -426,6 +426,29 @@ test('an aggregation naming none of count/sum/avg is an unsupported shape', () =
   assert.deepEqual(decodeAggregation(body), { ok: false, reason: 'unsupported-shape' });
 });
 
+test('an aggregation naming more than one of count/sum/avg is undecodable, not resolved by a pick', () => {
+  // Not a message a conforming proto3 JSON writer produces (`operator` is a oneof), so it is
+  // declined outright rather than choosing one and risking a different choice than the binary
+  // reader's "last field number wins" would make for the equivalent wire bytes — see the comment on
+  // `readAggregation` in both decode.ts and decode-json.ts.
+  const query = (aggregation) =>
+    decodeAggregation({
+      structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'o' }] }, aggregations: [aggregation] },
+    });
+  assert.deepEqual(query({ count: {}, sum: { field: { fieldPath: 'a' } } }), {
+    ok: false,
+    reason: 'undecodable-message',
+  });
+  assert.deepEqual(query({ sum: { field: { fieldPath: 'a' } }, avg: { field: { fieldPath: 'a' } } }), {
+    ok: false,
+    reason: 'undecodable-message',
+  });
+  assert.deepEqual(
+    query({ count: {}, sum: { field: { fieldPath: 'a' } }, avg: { field: { fieldPath: 'a' } } }),
+    { ok: false, reason: 'undecodable-message' },
+  );
+});
+
 test('a sum or average naming no field is an unsupported shape', () => {
   const query = (aggregation) =>
     decodeAggregation({

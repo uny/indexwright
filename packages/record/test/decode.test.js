@@ -468,6 +468,26 @@ test('the inner query of an aggregation reads the vector and depth refusals the 
   });
 });
 
+test('an Aggregation setting more than one of count/sum/avg keeps the last field number, as protobuf does', () => {
+  // One `Aggregation` message carrying both field 1 (`count`) and field 2 (`sum`), concatenated —
+  // legal on the wire, and `readAggregation`'s loop keeps whichever it saw last, the ordinary
+  // "repeated field number within one message" rule every oneof in this reader follows. The JSON
+  // reader declines the equivalent case outright instead (`decode-json.test.js`), because the JSON
+  // mapping has no occurrence order to fall back on; this test pins the binary side's own rule so
+  // the two do not drift towards agreeing by accident.
+  const countThenSum = Buffer.concat([COUNT_AGGREGATION, sumAggregationOf('x')]);
+  const query = structuredAggregationQueryOf(structuredQueryOf('no filters and no sort'), [countThenSum]);
+  const result = decodeRunAggregationQuery(runAggregationQueryOf(query));
+  assert.ok(result.ok);
+  assert.deepEqual(result.query.aggregations, [{ op: 'SUM', field: 'x' }]);
+
+  const sumThenCount = Buffer.concat([sumAggregationOf('x'), COUNT_AGGREGATION]);
+  const reversed = structuredAggregationQueryOf(structuredQueryOf('no filters and no sort'), [sumThenCount]);
+  const reversedResult = decodeRunAggregationQuery(runAggregationQueryOf(reversed));
+  assert.ok(reversedResult.ok);
+  assert.deepEqual(reversedResult.query.aggregations, [{ op: 'COUNT', field: null }]);
+});
+
 test('two aggregations naming the same op and field collapse to one entry, sorted, de-duplicated', () => {
   const query = structuredAggregationQueryOf(structuredQueryOf('no filters and no sort'), [
     sumAggregationOf('b'),

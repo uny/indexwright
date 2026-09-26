@@ -998,11 +998,16 @@ reimplemented, only which SDK call is issued.
 measured `limit(1)` against eight plain shapes before applying it there; no equivalent measurement
 exists for an aggregation, and the reasoning does not carry over even provisionally. A `count()` or
 `aggregate()` call has no `.limit()` to attach one to, and reasoning about what a limit would mean is
-moot for `explain`, which reads nothing regardless — but under `--oracle read`, an aggregation over a
-shape like `!=` genuinely scans the matching index range to produce its number, unlike a plain
-query's `limit(1)` read of one document. `docs/README.md`'s guidance to prefer `--oracle explain`
-applies with particular force to a corpus carrying aggregation entries, and says so plainly rather
-than leaving an operator to discover the cost against a real database.
+moot for `explain`, which reads nothing regardless. Under `--oracle read`, though, an aggregation
+over a shape like `!=` is *inferred* to scan the matching index range to produce its number, on what
+a `count()`/`sum()`/`average()` must do to answer correctly — a plain query's `limit(1)` stops at the
+first document, and nothing analogous bounds an aggregate's own scan. That inference is not a
+measurement: no read-cost signal comparable to `limit.mjs`'s document counts has been taken for an
+aggregation (`AggregateQuerySnapshot` gives no count to read one off), and probe step 5f — not yet
+run — says so rather than treating the inference as settled. `docs/README.md`'s guidance to prefer
+`--oracle explain` for a corpus carrying aggregation entries follows from the inference and applies
+with particular force to it regardless, on the same conservative footing every other unmeasured
+assumption in this section is held to.
 
 **A probe step is written but not yet run.** `probe/README.md` step 5f exercises `count`/`sum`/`avg`
 over a served and an uncovered shape, under both oracles, to check whether an aggregation's read cost
@@ -1038,12 +1043,19 @@ The REST spelling of `RunAggregationQuery`, `documents:runAggregationQuery`, is 
 rules as its gRPC form — see *Aggregation queries*, below — and the REST spellings of the calls
 declined below are declined under the same reasons; a custom method the vocabulary has never heard
 of is `unsupported-rpc` whether it arrives as a gRPC `:path` or a REST suffix. **This is the one call
-both Web SDK builds reach the same way.** `RunAggregationQuery` has no streaming form, so
-`count()`/`sum()`/`average()` post to `documents:runAggregationQuery` from the full SDK's browser
-build — `getCountFromServer`, `getAggregateFromServer` — exactly as they do from
-`firestore/lite`'s `getCount`/`getAggregate`; neither goes out on the WebChannel forward channel a
-plain query does. The two builds' bodies were captured independently and are byte-identical, which
-is a fact about this one release of the shared internals rather than a guarantee — see
+both Web SDK builds reach the same way, and not because the RPC is unary.** `RunAggregationQuery` is
+server-streaming in the v1 proto, `returns (stream RunAggregationQueryResponse)`, the same as
+`RunQuery` — this package's own decoder comments (`proxy.ts`, `recorder.ts`) say so, since the corpus
+reads whichever transport carries it. The Web SDK nonetheless invokes it through
+`RestConnection`'s *unary* `invokeRPC` path rather than the WebChannel streaming path it reserves for
+`Listen`/`Write`: that path issues one REST POST and collects the streamed responses into a single
+reply itself — the SDK's own comment on it: "the REST API automatically aggregates all of the
+streamed results, so we can just use the normal invoke() method." `count()`/`sum()`/`average()`
+therefore post to `documents:runAggregationQuery` from the full SDK's browser build —
+`getCountFromServer`, `getAggregateFromServer` — exactly as they do from `firestore/lite`'s
+`getCount`/`getAggregate`; neither goes out on the WebChannel forward channel a plain query does.
+The two builds' bodies were captured independently and are byte-identical, which is a fact about this
+one release of the shared internals rather than a guarantee — see
 `packages/record/scripts/capture-web-fixtures.mjs`. The Web SDK does normalise a query before
 sending it, and *Implicit fields are not materialised* above says what that means for the file.
 

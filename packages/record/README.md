@@ -405,9 +405,10 @@ aggregations. Values, aliases, and `count()`'s optional cap are not recorded, fo
 the same inner query — see [SPEC.md §7, *Aggregation queries*][spec-aggregation] for the proof —
 so a corpus can hold both without either shadowing the other. `check` replays an aggregation entry
 by asking Firestore the identical `count()`/`aggregate()`, with **no `limit`**: unlike a plain query,
-there is nowhere on an aggregate query to attach one, and under `--oracle read` an aggregation over a
-wide shape (a `!=`, say) genuinely scans the matching range to produce its number rather than reading
-one document — prefer `--oracle explain` for a corpus carrying aggregation entries.
+there is nowhere on an aggregate query to attach one. Under `--oracle read`, an aggregation over a
+wide shape (a `!=`, say) is inferred — not measured — to scan the matching range to produce its
+number, rather than stopping at one document the way a plain query's `limit(1)` does; prefer
+`--oracle explain` for a corpus carrying aggregation entries on that inference.
 
 [spec-aggregation]: https://github.com/uny/indexwright/blob/main/SPEC.md#aggregation-queries-v04-corpusversion-3
 
@@ -421,8 +422,10 @@ and the corpus records what was sent, so one application query has two legitimat
 depending on which SDK issued it. A corpus is comparable across runs of one project, not across
 SDKs.
 
-An aggregation reaches the emulator differently from a plain query, on **both** Web SDK builds:
-`count()`, `sum()`, and `average()` have no streaming form, so `getCountFromServer`/
+An aggregation reaches the emulator differently from a plain query, on **both** Web SDK builds —
+`RunAggregationQuery` is server-streaming on the wire, the same as `RunQuery`, but both SDK builds
+invoke it through the unary REST path rather than the WebChannel streaming path they reserve for
+`Listen`/`Write`, and that path collects the streamed responses itself: `getCountFromServer`/
 `getAggregateFromServer` (the full SDK) post to REST `documents:runAggregationQuery` exactly as
 `getCount`/`getAggregate` (`firestore/lite`) do — neither goes out over the WebChannel forward
 channel a `Listen` target does. `record` reads this endpoint the same way it reads
