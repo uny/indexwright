@@ -10,12 +10,19 @@
  * The oracle is Firestore. Nothing here decides whether an index covers a query; it asks, and
  * reports which of three answers came back — served, `FAILED_PRECONDITION`, or something else.
  *
+ * As of issue #91 there are two ways to ask. `askOracle` puts the identical built query to
+ * Firestore either as a `read` — `Query.get()`, the oracle every version before #91 used — or as an
+ * `explain` — `Query.explain({ analyze: false })`, for a gate that must not take a document off the
+ * database (it needs the same permissions a query does; SPEC §3). Both classify the thrown status
+ * through the one `classifyRejection`; which oracle was asked changes what leaves the database and
+ * nothing about what a served, uncovered, or failed verdict means.
+ *
  * The values are synthesised and the claim they rest on is SPEC §7's: that index selection turns on
  * how a field is indexed rather than on the value compared against it. That claim is not published,
  * and it is the one assumption in v0.3 that a synthesised replay could get wrong.
  */
 
-import { render } from './args.js';
+import { ORACLES, render, type Oracle } from './args.js';
 import {
   FAILED_PRECONDITION,
   INVALID_ARGUMENT,
@@ -228,6 +235,16 @@ function nodeFilter(
  * records a collection id and never the parent path (SPEC §7). Index selection is by collection id
  * and scope, so the root collection asks the same question of the same index; what is lost is
  * nothing the corpus retained.
+ *
+ * **This function does not know a second oracle exists (issue #91), and that is deliberate.**
+ * `askOracle` below puts the identical query this builds — `limit(1)` included — to Firestore either
+ * as a `read` or as an `explain`, so the two oracles can disagree only about the status that comes
+ * back, never about what was asked. The limit's own reasoning, measured above, goes *moot* for
+ * `explain` rather than *wrong*: an `explain` with `analyze: false` returns no document down either
+ * path, so there is no read left for a limit to bound. It stays on anyway, because sending `read` a
+ * different query than `explain` would leave a disagreement between them ambiguous between "the
+ * oracle answers differently" and "the two were never asked the same thing" — and the whole value
+ * of running both against one corpus is that it can only be the first.
  */
 export function buildReplayQuery(
   sdk: FirestoreModule,
@@ -270,19 +287,92 @@ export function classifyRejection(error: unknown): ReplayStatus {
 }
 
 /**
+ * What `askOracle` needs from a built query — nothing but the two methods it might call — reduced
+ * the way `Replayer` reduces the whole SDK down to "run this plan".
+ *
+ * `explain`'s parameter is typed as the object carrying the literal `analyze: false` rather than as
+ * `FirebaseFirestore.ExplainOptions`, which also admits `{ analyze: true }` and `{}`. That is not
+ * decoration: it is what turns "`analyze: true` must never be sent, in any branch" (issue #91) from
+ * a sentence in a docblock into something `tsc` refuses to compile if the one call site below is
+ * ever edited to pass it. A real `FirebaseFirestore.Query` still satisfies this structurally, by
+ * method-parameter bivariance, so `buildReplayQuery`'s return type needed no change to fit it.
+ */
+export interface Askable {
+  get(): Promise<unknown>;
+  explain(options: { readonly analyze: false }): Promise<unknown>;
+}
+
+/**
+ * Ask Firestore about one already-built query, through the chosen oracle, and classify the answer.
+ *
+ * `read` is `Query.get()`: the query runs, and the one document `limit(1)` allows through is read
+ * and discarded — the oracle every version before #91 used, and still the default.
+ *
+ * `explain` is `Query.explain({ analyze: false })` — Query Explain's own default, which the
+ * Firestore documentation describes as performing no index or read operation while still charging
+ * the one read a served query would have. It exists for a gate whose standing rule is that no
+ * document may reach the process running it — not for a narrower grant: Query Explain needs the
+ * permissions a regular query does (SPEC §3). The verdict comes from the same `FAILED_PRECONDITION` /
+ * `INVALID_ARGUMENT` / other split `classifyRejection` already makes, and returns no document to the
+ * process either way.
+ *
+ * **The `ExplainResults` `explain()` resolves with is not read, ever, on this path — not
+ * `metrics`, not `planSummary.indexesUsed`.** Two independent reasons, not one belt-and-braces
+ * reason. First, `check`'s verdict is defined as the thrown status; a query that does not throw is
+ * `served`, whichever oracle asked, and reading the payload of a resolved promise to second-guess
+ * that would be a verdict this package invented rather than one Firestore gave. Second,
+ * `indexesUsed` is the SDK's own words "intended to be human-readable... advised to not program
+ * against this object" (`@google-cloud/firestore`'s `PlanSummary`) — a format Google reserves the
+ * right to change without notice, which is exactly the kind of undocumented surface SPEC §3 already
+ * refuses to reimplement for index *matching*, arriving here as index *reporting* instead.
+ */
+export async function askOracle(query: Askable, oracle: Oracle): Promise<ReplayStatus> {
+  requireKnownOracle(oracle);
+  try {
+    if (oracle === 'explain') await query.explain({ analyze: false });
+    else await query.get();
+    return { kind: 'served' };
+  } catch (error) {
+    return classifyRejection(error);
+  }
+}
+
+/**
+ * Throws unless `oracle` is one of `ORACLES`.
+ *
+ * `Oracle` is closed only to `tsc`. `askOracle` and `replayClient` are public JS API, and an untyped
+ * caller's `'explan'` or `undefined` would otherwise fall through to `get()` — reading a document
+ * for a caller who asked for the oracle that reads none.
+ */
+function requireKnownOracle(oracle: Oracle): void {
+  if (!(ORACLES as readonly unknown[]).includes(oracle)) {
+    const known = ORACLES.map((name) => `"${name}"`).join(', ');
+    throw new TypeError(`oracle must be one of ${known}, got ${render(String(oracle))}`);
+  }
+}
+
+/**
  * A replayer for the named database.
  *
  * `projectId` and `databaseId` are both passed for the reason `adminLister` passes the project: a
  * target the operator did not name must not be reachable through the client's own defaulting either.
  *
+ * `oracle` is required rather than defaulted here, on the same principle `CheckCommand.oracle` is
+ * required: `parseCheck` is the one place `DEFAULT_ORACLE` is read, and a second default sitting
+ * here would be a second place that default could drift from it. `check.ts` always has a `command`
+ * to read it from before this is called.
+ *
  * The redirect refusal is repeated here rather than left to `parseCheck`, and it is not redundant:
  * `FIRESTORE_EMULATOR_HOST` redirects *this* client — the emulator enforces no composite index, so
  * every replayed query is served and the run reports full coverage having measured nothing. That is
- * the failure SPEC §3 names, and the guard belongs in the module that builds the client.
+ * the failure SPEC §3 names, and the guard belongs in the module that builds the client. It applies
+ * to both oracles alike: an emulator answers `explain({ analyze: false })` exactly as cleanly as it
+ * answers `get()`, since the composite-index enforcement neither asks for is what is missing.
  *
  * The caller owns what comes back and must close it. A live gRPC channel refs the event loop.
  */
-export async function replayClient(project: string, database: string): Promise<Replayer> {
+export async function replayClient(project: string, database: string, oracle: Oracle): Promise<Replayer> {
+  requireKnownOracle(oracle);
   const refusal = redirectRefusal();
   if (refusal !== undefined) throw new TargetError(refusal);
   const sdk = await loadFirestore();
@@ -306,12 +396,12 @@ export async function replayClient(project: string, database: string): Promise<R
         const message = error instanceof ReplayError ? error.message : render(messageOf(error));
         return { kind: 'unbuildable', message };
       }
-      try {
-        await query.get();
-        return { kind: 'served' };
-      } catch (error) {
-        return classifyRejection(error);
-      }
+      // What happens against the target, and how the answer is read, is `askOracle`'s question
+      // rather than this closure's: the two clients this module builds — `read` against `get()`,
+      // `explain` against `explain({ analyze: false })` — differ only in which method is called, and
+      // keeping that one difference in one function is what keeps `analyze: true` unreachable from
+      // both of this module's call sites rather than from only one.
+      return askOracle(query, oracle);
     },
     async close(): Promise<void> {
       await db.terminate();

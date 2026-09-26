@@ -66,14 +66,53 @@ export interface CheckCommand {
    * replays as cleanly as a current one and exits 0.
    */
   readonly requireIdentity: boolean;
+  /**
+   * Which question each corpus entry is put to the target as (issue #91).
+   *
+   * Required rather than defaulted away like `baseline` is, and for the opposite reason `baseline`
+   * is left optional: an absent baseline changes nothing about what is asked, only which findings
+   * fail the run, so a command built without one has no member for it. An absent oracle would still
+   * have to mean *something* — `check` cannot replay without choosing one — so leaving it
+   * `undefined` would only move the default out of `parseCheck` and into every caller that builds a
+   * `CheckCommand` by hand, `check.ts` included. `DEFAULT_ORACLE` is the one place that default is
+   * written.
+   *
+   * Named for what leaves the database rather than for the SDK method that asks — `read` is
+   * `Query.get()`, `explain` is `Query.explain({ analyze: false })` — because that is the axis an
+   * operator choosing between them cares about, and it is the axis SPEC §3 and this file's own
+   * usage text already describe the verb by ("reads only").
+   */
+  readonly oracle: Oracle;
 }
 
 export type Command = RecordCommand | CheckCommand | { kind: 'help' } | { kind: 'version' };
+
+/**
+ * The two oracles `check` can put a replayed query to. See `CheckCommand.oracle`.
+ *
+ * A closed pair rather than an open string, for the reason `FilterOperator` in `types.ts` is closed:
+ * `parseCheck` refuses anything else by construction, so a caller reading this type cannot reach a
+ * value `replay.ts`'s `askOracle` does not know what to do with.
+ */
+export type Oracle = 'read' | 'explain';
+
+/** Every value `--oracle` accepts, in the order `usage()` lists them. */
+export const ORACLES: readonly Oracle[] = ['read', 'explain'];
+
+/**
+ * `check`'s oracle when `--oracle` is not given.
+ *
+ * `read` — the query is run and one document is read — because that is what every version before
+ * #91 did, and a version that added a second oracle without changing the default must not change
+ * what an existing pipeline measures merely by being upgraded.
+ */
+export const DEFAULT_ORACLE: Oracle = 'read';
 
 export const DEFAULT_OUT = 'firestore.queries.json';
 export const DEFAULT_EMULATOR = '127.0.0.1:8080';
 export const ALLOW_REMOTE_EMULATOR = '--allow-remote-emulator';
 export const REQUIRE_IDENTITY = '--require-identity';
+export const ORACLE_OPTION = '--oracle';
 export const DEFAULT_CORPUS = DEFAULT_OUT;
 export const DEFAULT_INDEXES = 'firestore.indexes.json';
 
@@ -320,6 +359,7 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
   let indexes = DEFAULT_INDEXES;
   let baseline: string | undefined;
   let requireIdentity = false;
+  let oracle = DEFAULT_ORACLE;
 
   for (let i = 0; i < options.length; i += 1) {
     const argument = options[i] as string;
@@ -383,6 +423,9 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
         if (inline !== null) throw new UsageError(`${name} takes no value, got "${inline}"`);
         requireIdentity = true;
         break;
+      case ORACLE_OPTION:
+        oracle = requireOracle(takeValue(), name);
+        break;
       default:
         throw new UsageError(`unknown option "${name}"`);
     }
@@ -426,8 +469,30 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
     corpus: corpora.length === 0 ? [DEFAULT_CORPUS] : corpora,
     indexes,
     requireIdentity,
+    oracle,
     ...(baseline === undefined ? {} : { baseline }),
   };
+}
+
+/**
+ * `--oracle`'s value, or a `UsageError` naming the two this version knows.
+ *
+ * Refused the same way a missing value on any other option here is — an empty string, or the next
+ * option absorbed because this one was written without its argument — before the smaller question
+ * of which two words are accepted. `ORACLES.join` rather than a literal `"read" or "explain"`, so
+ * the message and the accepted set cannot drift apart the way two independently spelled lists do.
+ */
+function requireOracle(value: string, option: string): Oracle {
+  if (value === '') throw new UsageError(`${option} needs a value`);
+  if (value.startsWith('-')) {
+    throw new UsageError(`${option} needs a value, got the option ${render(value)}`);
+  }
+  if (!(ORACLES as readonly string[]).includes(value)) {
+    throw new UsageError(
+      `${option} must be one of ${ORACLES.map((name) => `"${name}"`).join(', ')}, got ${render(value)}`,
+    );
+  }
+  return value as Oracle;
 }
 
 /**
@@ -638,8 +703,10 @@ export function usage(): string {
     'The proxy always listens on loopback. There is no option to change that.',
     '',
     'check replays a corpus against a database that already has the candidate index set applied,',
-    'and reports the queries it cannot serve. It applies nothing and reads only — one document per',
-    'entry, because the answer it is after is the query\'s status and not its rows.',
+    'and reports the queries it cannot serve. It applies nothing, and by default reads only — one',
+    'document per entry, because the answer it is after is the query\'s status and not its rows.',
+    '--oracle explain asks the same question through Query Explain instead, with analyze off, and',
+    'reads nothing at all; see --oracle below.',
     '',
     'Before it reports, it establishes twice over that the set is ready — every index reporting',
     'READY through the Admin API, and the set unchanged for a settling period — and that the set',
@@ -664,6 +731,12 @@ export function usage(): string {
     `  ${REQUIRE_IDENTITY}      refuse a corpus that names no producer, rather than replaying it.`,
     '                          Off by default: a corpus written before the format carried an',
     '                          identity names none, and requiring it always would refuse them all',
+    `  ${ORACLE_OPTION} <${ORACLES.join('|')}>  which oracle answers each entry (default: ${DEFAULT_ORACLE}). "read" runs`,
+    '                          the query and reads one document; "explain" asks Query.explain with',
+    '                          analyze off instead, so no document reaches this process (it needs',
+    '                          the same permission a query does). Both ask the identical query, limit(1)',
+    '                          included; only the thrown status is a verdict, never the metrics',
+    '                          Query.explain returns',
     '',
     'The target is never inferred. GOOGLE_CLOUD_PROJECT, gcloud config, and the project inside',
     'application default credentials are not consulted for it: a database carrying more indexes',

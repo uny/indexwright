@@ -14,6 +14,7 @@ It answered five things at once, which is why it was worth doing before anything
 | Issue #43: does `limit(1)` change which index serves a query | `limit.mjs`, on the deployed set | Unmeasured, and the whole of the argument for sending no limit | **No shape changed verdict**, and three shapes fell from 500/429/71 documents to 1 |
 | Issue #39: the process exits once the report is written | `check`, timed | Untestable with a fake client | **It exits.** Three runs, none hung |
 | `DEFAULT_SETTLE_MS` = 60s | `watch-readiness.mjs` | A guess | Still a guess, now a documented one — see below |
+| Issue #91: do `read` and `explain({ analyze: false })` agree | `oracle.mjs`, on the deployed set (step 5e) | An adopter's reading, never taken here | **All twenty shapes agreed**, on a settled set; the `CREATING` window is not reached |
 
 Index builds dominate the wall clock — roughly three and a half minutes each — so the design
 deploys **one** index set and varies the corpus against it. That reaches `check`'s exit 0, 1 and 2
@@ -169,6 +170,7 @@ What the run did settle is the price. The readiness gate restarts on every invoc
 | `suite.mjs` | The driver `record` captures from. `PROBE_SHAPES=S1,S2` issues a subset |
 | `differential.mjs` | The §7 instrument: issues the shapes, writes a JSON report to stdout |
 | `limit.mjs` | The #43 instrument: issues each shape bare and with `limit(1)`, and reports what each read |
+| `oracle.mjs` | The #91 instrument: issues each shape's `limit(1)` query through `read` and through `explain`, and compares the verdicts. Step 5e |
 | `expectations.mjs` | Their command line — argv in, the expectation map out. Pure, so what an operator types is testable |
 | `summarise.mjs` | Their stop rule — rows in, findings and an exit code out, for the verdicts and for the read counts alike. Pure, so it can be tested without a database |
 | `expectations.test.mjs`, `summarise.test.mjs` | Tests for the two halves of the stop rule. Run in `npm test` alongside the packages' suites |
@@ -526,6 +528,53 @@ node probe/limit.mjs indexwright-probe '(default)' \
 
 The stop rule, the exit codes and the reading of a disagreement are 5c's, and so is what it leaves
 alone: the corpus is not re-captured, and steps 3 and 5 run S13–S20 unconstrained.
+
+### 5e. The explain-oracle probe, against the same deployed set (issue #91)
+
+**Run on 2026-09-26; the reading is at the end of this step.** This step is the runbook for the
+measurement issue #91 itself asks a prospective adopter for, written down so that the run can be
+reproduced and checked against the claim rather than taken on the adopter's word.
+
+`check --oracle explain` asks the identical `limit(1)` query `--oracle read` does, through
+`Query.explain({ analyze: false })` in place of `Query.get()`. The claim it rests on, stated
+exactly: for every shape, `read` and `explain` agree on served versus `FAILED_PRECONDITION`. One
+disagreement on either side is enough to falsify it, for the same reason one is enough in step 5b —
+a `limit(1)` argument, or an oracle argument, that fails for even one shape is not available as a
+fix at any price.
+
+This step needs no new index build; it runs against whichever set step 4's or step 5c's watcher
+already settled. What it does **not** reach is the other half of issue #91's claim: that `explain`
+answers `FAILED_PRECONDITION` with `read`'s semantics *during* the settling window, while an index is
+still `CREATING`. Catching that window needs a fresh build timed against `watch-readiness.mjs`, the
+way step 4 itself was timed, and is a separate run from this one — this step's result, once taken,
+says only whether the two oracles agree on a set already `READY`.
+
+```bash
+node probe/oracle.mjs indexwright-probe '(default)' \
+  --expect-served S1,S2,S3,S4,S5,S7,S9,S11,S13,S15,S17,S19 \
+  --expect-uncovered S6,S10,S12,S14,S16,S18,S20 \
+  > probe/oracle-after.json
+```
+
+The expectations are step 5d's, unchanged — this step asks a different question of the same set, not
+a different set. The stop rule, the exit codes, and the reading of a disagreement are `limit.mjs`'s
+(step 5b), with one difference: there is no read-count half to this step, and none is reported.
+`explain({ analyze: false })` returns no document either way, so there is nothing for a limit to
+bound and nothing for this script to read back — `oracle.mjs`'s own header says why it must not read
+`ExplainMetrics` even to double-check that.
+
+**Results (2026-09-26).** Run against the set step 5c left deployed. The three declared composites
+were `READY`, and they were joined on the target by three `x, z` composites that no probe shape
+filters or sorts on, so none of them can serve anything below. Every one of the twenty shapes
+answered the same through both oracles, and every prediction held: S1–S5, S7, S9, S11, S13, S15, S17
+and S19 were served, and S6, S8, S10, S12, S14, S16, S18 and S20 answered `FAILED_PRECONDITION`. The
+exit status was 0. The two oracles word the same status differently. `read` carries the console's
+create-this-index link; `explain` says only `no matching index found`. That difference is a reason
+the verdict is read from the status code and never from the message.
+
+What this does not reach is stated above and bears repeating. The set was settled, so nothing here
+says how `explain` answers while an index is `CREATING`, and that half of issue #91's claim is still
+the adopter's. It is also one collection and one operand, the same limits step 5b states.
 
 ### 6. Capture the corpus of shapes the target actually covers
 

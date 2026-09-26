@@ -23,6 +23,7 @@ const COMMAND = {
   corpus: ['firestore.queries.json'],
   indexes: 'firestore.indexes.json',
   requireIdentity: false,
+  oracle: 'read',
 };
 
 const DECLARED = {
@@ -140,7 +141,7 @@ function keyOf(field) {
   }).key;
 }
 
-function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses = [], corpus = ONE_QUERY, corpora, declared = DECLARED, baseline, requireIdentity = false, ...rest } = {}) {
+function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses = [], corpus = ONE_QUERY, corpora, declared = DECLARED, baseline, requireIdentity = false, oracle = 'read', ...rest } = {}) {
   // `corpora` names several parts as `{ path: text }`; `corpus` is the one-part shorthand every test
   // written before issue #56 uses, and is the same thing with one entry under the default path.
   const files = corpora ?? { [COMMAND.corpus[0]]: corpus };
@@ -148,6 +149,7 @@ function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses 
   const said = [];
   const closed = { lister: 0, replayer: 0 };
   const replayed = [];
+  const replayerCalls = [];
   const slept = [];
   let clock = 0;
   const queue = [...listings];
@@ -187,15 +189,18 @@ function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses 
         closed.lister += 1;
       },
     }),
-    replayer: async () => ({
-      run: async (plan) => {
-        replayed.push(plan);
-        return outcomes.shift() ?? { kind: 'served' };
-      },
-      close: async () => {
-        closed.replayer += 1;
-      },
-    }),
+    replayer: async (project, database, chosenOracle) => {
+      replayerCalls.push({ project, database, oracle: chosenOracle });
+      return {
+        run: async (plan) => {
+          replayed.push(plan);
+          return outcomes.shift() ?? { kind: 'served' };
+        },
+        close: async () => {
+          closed.replayer += 1;
+        },
+      };
+    },
     ...rest,
   };
 
@@ -203,6 +208,7 @@ function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses 
   return {
     closed,
     replayed,
+    replayerCalls,
     slept,
     said: () => said.join(''),
     run: () =>
@@ -211,6 +217,7 @@ function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses 
           ...COMMAND,
           corpus: paths,
           requireIdentity,
+          oracle,
           ...(baseline === undefined ? {} : { baseline: BASELINE_PATH }),
         },
         streams,
@@ -457,8 +464,12 @@ test('a path that could forge a report line is rendered before it reaches the st
   );
   assert.equal(code, 2);
   const lines = said.join('').trimEnd().split('\n');
-  assert.equal(lines.length, 1, `forged a second line: ${JSON.stringify(lines)}`);
-  assert.match(lines[0], /could not read the corpus at .*\\u000a/);
+  // The oracle line (see `check.ts`) is said before this refusal is reached, the same as it is
+  // before every other early decline in this file — one line more than this test predates, and not
+  // a third the forgery could have produced.
+  assert.equal(lines.length, 2, `forged an extra line: ${JSON.stringify(lines)}`);
+  assert.match(lines[0], /^indexwright-record: oracle: read/);
+  assert.match(lines[1], /could not read the corpus at .*\\u000a/);
 });
 
 test('an empty corpus is refused rather than reported as full coverage', async () => {
@@ -953,8 +964,11 @@ test('what a file refused to parse cannot forge a line of output', async () => {
   });
   assert.equal(await h.run(), 2);
   const lines = h.said().trimEnd().split('\n');
-  assert.equal(lines.length, 1);
-  assert.match(lines[0], /could not read the corpus/);
+  // One line more than this test predates: the oracle line (see `check.ts`) is said before this
+  // refusal is reached, on every run, and not a second forged one.
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /^indexwright-record: oracle: read/);
+  assert.match(lines[1], /could not read the corpus/);
 });
 
 test('a run that has reported lets the process exit', async () => {
@@ -1250,6 +1264,50 @@ test('a corpus naming no producer still runs when identity was not required', as
   const h = harness();
   assert.equal(await h.run(), 0);
   assert.equal(h.replayed.length, 1);
+});
+
+test('the default oracle is read, and stderr names it before anything else is dialled', async () => {
+  // No `oracle` named in `harness()`'s options — `read` is what `DEFAULT_ORACLE` in `args.ts` picks,
+  // and this pins `check.ts`'s own default against the same word rather than against a constant
+  // that could drift from it.
+  const h = harness();
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /oracle: read — each entry is asked by running the query and reading one document/);
+  assert.deepEqual(h.replayerCalls, [{ project: COMMAND.project, database: COMMAND.database, oracle: 'read' }]);
+});
+
+test('--oracle explain is threaded to the replayer, and named on stderr in its own words', async () => {
+  const h = harness({ oracle: 'explain' });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /oracle: explain — each entry is asked with Query\.explain\(\{ analyze: false \}\); nothing is read/);
+  assert.deepEqual(h.replayerCalls, [{ project: COMMAND.project, database: COMMAND.database, oracle: 'explain' }]);
+  // Never both in one report: a reader trusting the wrong line for a run that mixed its wording
+  // would misjudge whether a "served" verdict means a document came back or that nothing was read.
+  assert.doesNotMatch(h.said(), /oracle: read —/);
+});
+
+test('the oracle line is said before any refusal, the same as the target line in cli.ts', async () => {
+  // `--require-identity` declines before anything is dialled or settled (see the test above this
+  // block); the oracle line has to survive that decline too, since which oracle a run *would have*
+  // used is exactly the fact a reader cannot recover from a report that never reached replay.
+  const h = harness({ requireIdentity: true, oracle: 'explain' });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /oracle: explain —/);
+  assert.equal(h.replayerCalls.length, 0);
+});
+
+test('an oracle this version does not know is refused, never announced or replayed as read', async () => {
+  // `Oracle` is closed only to `tsc`. An untyped caller's typo, or a `CheckCommand` built by hand
+  // before the member existed, would otherwise take the `read` branch of both the line and the
+  // replayer — reading a document for a caller who may have meant `explain`.
+  // `null` stands for the missing member: `harness()` fills in `read` for an `undefined` one.
+  for (const oracle of ['explan', null]) {
+    const h = harness({ oracle });
+    assert.equal(await h.run(), 2);
+    assert.match(h.said(), /cannot report: oracle must be one of "read", "explain", got /);
+    assert.doesNotMatch(h.said(), /oracle: read —/);
+    assert.equal(h.replayerCalls.length, 0);
+  }
 });
 
 test('two corpora are checked as one set, and every entry of both is asked about', async () => {

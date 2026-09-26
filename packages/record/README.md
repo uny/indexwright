@@ -57,8 +57,8 @@ Options:
 ## `check`
 
 `check` replays a corpus against a database that already has the candidate index set applied, and
-reports the queries it cannot serve. It applies nothing and reads only — one document per entry,
-because the answer it is after is the query's status and not its rows.
+reports the queries it cannot serve. It applies nothing, and by default reads only — one document
+per entry, because the answer it is after is the query's status and not its rows.
 
 ```text
 indexwright-record check --project <id> --database <name> [options]
@@ -70,7 +70,26 @@ Options:
   --indexes <file>        the candidate index declarations (default: firestore.indexes.json)
   --baseline <file>       gaps already accepted by this project (no default)
   --require-identity      refuse a corpus that names no producer (off by default)
+  --oracle <read|explain> how each entry is asked (default: read)
 ```
+
+**`--oracle`** chooses how each entry is put to the target (issue #91), and changes only that —
+never the verdict semantics, readiness, the settling period, or the exit codes. `read`, the default,
+is `Query.get()`: the query runs and the one document `limit(1)` admits is read. `explain` asks the
+*identical* query — `limit(1)` included — through `Query.explain({ analyze: false })` instead, which
+Firestore's own documentation describes as performing no index or read operation while still
+charging the one read a served query would have. It is for a gate that must not take a document
+off the database: `read` returns at most one, `explain` returns none. It does not narrow the grant — Query
+Explain needs the same permissions a regular query does, so the runner still needs a role that may
+query the target (`roles/datastore.user` is the ordinary one). `analyze: true` is never sent, by either oracle — it executes the query and is
+billed as a query, undoing exactly the cost and access `explain` exists to avoid — and the metrics
+`explain` returns (`ExplainMetrics`, `planSummary.indexesUsed`) are never read to reach a verdict;
+the SDK documents that format as human-readable and not meant to be programmed against, and `check`'s
+verdict is the thrown status alone, the same signal `read` classifies. Every run says which oracle
+answered, on stderr, on the line after the target and before anything is read — see [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md)
+§3 for the fuller design note. It covers which half of the case for `explain` this package has
+measured, which is agreement with `read` on a settled set (`probe/README.md` step 5e). It also covers
+which half is still an adopter's reading: agreement while an index is `CREATING`.
 
 | Exit | Meaning |
 |-----:|:--------|

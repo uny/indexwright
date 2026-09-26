@@ -332,9 +332,13 @@ test('check prints the target before it could reach a network, and exits non-zer
   const missing = join(mkdtempSync(join(tmpdir(), 'indexwright-')), 'absent.json');
   const argv = ['check', '--project', 'acme-prod', '--database', '(default)', '--indexes', missing];
   assert.equal(await run(argv, streams, {}), 2);
-  const [first, second] = streams.stderr().split('\n');
+  // `check.ts` says which oracle would have answered before this same refusal, the same way `cli.ts`
+  // says the target before `check` is even reached — see `check.test.js` for the reasoning. Neither
+  // line here names it explicitly, so the default is asserted by position rather than by content.
+  const [first, second, third] = streams.stderr().split('\n');
   assert.match(first, /target projects\/acme-prod\/databases\/\(default\)/);
-  assert.match(second, /could not read the candidate indexes/);
+  assert.match(second, /oracle: read/);
+  assert.match(third, /could not read the candidate indexes/);
 });
 
 test('check\'s exit code is the one the CLI returns, for each of the three', async () => {
@@ -911,6 +915,62 @@ test('--require-identity is off unless asked for, and takes no value', () => {
   assert.throws(
     () => parseArgs(['check', '--project', 'p', '--database', 'd', '--require-identity=false']),
     (error) => error instanceof UsageError && /takes no value/.test(error.message),
+  );
+});
+
+test('--oracle defaults to read, and accepts explain', () => {
+  // Unqualified, a `check` command asks the oracle every version before #91 did — read, one
+  // document per entry — so upgrading to a version that knows a second oracle changes nothing about
+  // what an existing pipeline measures.
+  assert.equal(parseArgs(['check', '--project', 'p', '--database', 'd']).oracle, 'read');
+  assert.equal(
+    parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle', 'explain']).oracle,
+    'explain',
+  );
+  assert.equal(
+    parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle', 'read']).oracle,
+    'read',
+  );
+  // The `=value` form, exactly as `--baseline=a.json` is accepted elsewhere in this file.
+  assert.equal(
+    parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle=explain']).oracle,
+    'explain',
+  );
+});
+
+test('--oracle refuses a value that is neither read nor explain', () => {
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle', 'analyze']),
+    (error) =>
+      error instanceof UsageError &&
+      /--oracle must be one of "read", "explain", got "analyze"/.test(error.message),
+  );
+});
+
+test('--oracle needs a value, and does not absorb the next option written in its place', () => {
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle']),
+    (error) => error instanceof UsageError && /--oracle needs a value/.test(error.message),
+  );
+  // An empty inline value is the same missing value, not an unknown oracle named "".
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle=']),
+    (error) => error instanceof UsageError && /--oracle needs a value$/.test(error.message),
+  );
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle', '--indexes']),
+    (error) => error instanceof UsageError && /--oracle needs a value, got the option "--indexes"/.test(error.message),
+  );
+});
+
+test('a repeated --oracle is last-wins, the same as --project and --database', () => {
+  // Unlike `--corpus`, which is repeatable-and-merged and refuses a literal repeat because that
+  // would silently narrow what is checked, a single scalar flag named twice on one command line has
+  // no ambiguity to protect against: the rightmost value is the one that would reach the shell's own
+  // `getopt`-style tools too, and `--project`/`--database` already read that way here.
+  assert.equal(
+    parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle', 'explain', '--oracle', 'read']).oracle,
+    'read',
   );
 });
 

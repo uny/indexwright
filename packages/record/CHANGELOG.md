@@ -5,6 +5,33 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## [Unreleased]
+
+### Added
+
+- **`check --oracle explain`, for a gate that must not take a document off the database** (issue
+  #91). Each corpus entry can now be put to the target through `Query.explain({ analyze: false })`
+  instead of `Query.get()` — the identical `limit(1)` query either way, so a disagreement between the
+  two is about the oracle asked and never about a different query being sent. The verdict is still
+  the thrown status alone; `ExplainMetrics` and `planSummary.indexesUsed` are never read, and
+  `analyze: true` is never sent, by either oracle. Readiness, the settling period, reconciliation,
+  and the exit codes are unchanged, and the default stays `read` — every version before this one.
+  Every run says on stderr which oracle answered. The claim that makes `explain` sound — that it
+  answers `FAILED_PRECONDITION` with `read`'s semantics, including while an index is still
+  `CREATING` — is measured here for a settled set and not for the window. `probe/README.md` step 5e
+  put all twenty probe shapes through both oracles on 2026-09-26 and every one answered the same.
+  The `CREATING` half is still the adopter's own reading. See SPEC.md §3 for the full design note.
+
+### Changed
+
+- **`CheckCommand` gains a required `oracle` member, and `replayClient` a required third
+  argument** (issue #91). A caller that builds a `CheckCommand` by hand, or passes its own
+  `CheckOptions.replayer`, has to name the oracle rather than inherit one; a `replayer` is handed
+  the oracle as its third argument and must honour it, since `tsc` accepts one that ignores it. An
+  oracle that is neither `read` nor `explain` — an untyped caller's typo, or a missing member — is
+  refused by `check`, `replayClient` and `askOracle` rather than asked as `read`. `parseArgs` fills in
+  `read` as before. This is a type change to the provisional JS API (SPEC §10), not to the CLI.
+
 ## [0.10.1] — 2026-09-23
 
 A patch for a path the JS API left unbounded. A corpus built by hand is now held to the filter depth

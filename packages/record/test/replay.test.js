@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import firestore from '@google-cloud/firestore';
 import {
+  askOracle,
   buildReplayQuery,
   classifyRejection,
   planReplay,
@@ -238,12 +239,13 @@ test('only FAILED_PRECONDITION is the finding, and the status text cannot forge 
 test('a redirected environment is refused by the module that builds the client, not only by the parser', async () => {
   // The JavaScript API is public, so a caller reaching this directly would otherwise construct the
   // very client SPEC §3 refuses: an emulator enforces no composite index, so every replayed query is
-  // served and the run reports full coverage having measured nothing.
+  // served and the run reports full coverage having measured nothing. Refused before either oracle
+  // is asked, so `'read'` here stands for both.
   for (const variable of ['FIRESTORE_EMULATOR_HOST', 'GOOGLE_CLOUD_UNIVERSE_DOMAIN']) {
     const before = process.env[variable];
     process.env[variable] = 'somewhere-else';
     try {
-      await assert.rejects(replayClient('acme-prod', '(default)'), (error) => {
+      await assert.rejects(replayClient('acme-prod', '(default)', 'read'), (error) => {
         assert.ok(error instanceof TargetError);
         assert.match(error.message, new RegExp(variable));
         return true;
@@ -253,6 +255,130 @@ test('a redirected environment is refused by the module that builds the client, 
       else process.env[variable] = before;
     }
   }
+});
+
+/**
+ * `askOracle` tests, entirely offline: a fake carrying `get` and `explain`, never a real
+ * `Firestore`. `buildReplayQuery` and the SDK materialisation are covered above and are unchanged by
+ * #91 — this is only the second half `replayClient.run` delegates to, in isolation.
+ */
+
+test('the read oracle calls get and never touches explain', async () => {
+  const query = {
+    get: async () => ({ size: 0 }),
+    explain: async () => {
+      throw new Error('the read oracle must not call explain');
+    },
+  };
+  assert.deepEqual(await askOracle(query, 'read'), { kind: 'served' });
+});
+
+test('the explain oracle asks with analyze exactly false, pinned against a literal', async () => {
+  // Pinned the way `REPLAY_SENTINEL`'s own test is pinned: against `{ analyze: false }` written out
+  // here, not against a constant this module and the test could both import and drift together on.
+  // `analyze: true` executes the query and is billed as a query (issue #91) — it must never be sent, in
+  // any branch, and asserting the literal is what would catch a future edit that sent it.
+  let received;
+  const query = {
+    get: async () => {
+      throw new Error('the explain oracle must not call get');
+    },
+    explain: async (options) => {
+      received = options;
+      return { metrics: {}, snapshot: null };
+    },
+  };
+  assert.deepEqual(await askOracle(query, 'explain'), { kind: 'served' });
+  assert.deepEqual(received, { analyze: false });
+});
+
+test('explain never reads ExplainMetrics or planSummary.indexesUsed, even when reading them would throw', async () => {
+  // A verdict of `served` has to be reachable without the handler so much as looking at what
+  // `explain()` resolved with. `indexesUsed` is a human-facing report the SDK itself documents as
+  // not meant to be programmed against, and #91 draws the verdict from the thrown status alone — so
+  // a result whose every property throws on read still has to classify as `served`, proving nothing
+  // was read rather than merely that nothing informed the verdict.
+  const poisoned = new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        // `then` is let through as `undefined` rather than trapped: `await` on a resolved value
+        // checks `typeof value.then === 'function'` to decide whether to treat it as a thenable,
+        // and a trap that threw there would fail the test on its own machinery rather than on
+        // anything `askOracle` does.
+        if (prop === 'then') return undefined;
+        throw new Error(`must not read ExplainResults.${String(prop)}`);
+      },
+    },
+  );
+  const query = {
+    get: async () => {
+      throw new Error('the explain oracle must not call get');
+    },
+    explain: async () => poisoned,
+  };
+  assert.deepEqual(await askOracle(query, 'explain'), { kind: 'served' });
+});
+
+test('a status thrown from explain classifies exactly as the same status thrown from read would', async () => {
+  const throwing = (code) => ({
+    get: async () => {
+      throw status(code, 'x');
+    },
+    explain: async () => {
+      throw status(code, 'x');
+    },
+  });
+  assert.equal((await askOracle(throwing(9), 'read')).kind, 'uncovered');
+  assert.equal((await askOracle(throwing(9), 'explain')).kind, 'uncovered');
+  assert.equal((await askOracle(throwing(3), 'read')).kind, 'invalid');
+  assert.equal((await askOracle(throwing(3), 'explain')).kind, 'invalid');
+  assert.equal((await askOracle(throwing(7), 'read')).kind, 'failed');
+  assert.equal((await askOracle(throwing(7), 'explain')).kind, 'failed');
+});
+
+test('an oracle this version does not know is refused before any query is asked', async () => {
+  // Public JS API, so `Oracle` being closed is `tsc`'s guarantee only. Falling through to `get()`
+  // would read a document for a caller who may have asked for the oracle that reads none.
+  const query = {
+    get: async () => {
+      throw new Error('an unknown oracle must not call get');
+    },
+    explain: async () => {
+      throw new Error('an unknown oracle must not call explain');
+    },
+  };
+  for (const oracle of ['explan', undefined]) {
+    await assert.rejects(askOracle(query, oracle), TypeError);
+    await assert.rejects(replayClient('acme-prod', '(default)', oracle), TypeError);
+  }
+});
+
+test('the client replayClient builds asks through the oracle it was given', async () => {
+  // The seam `check.test.js` replaces wholesale. Offline: the SDK's own `Query` methods are
+  // swapped for recorders, so what is pinned is which one the real client's `run` calls.
+  const calls = [];
+  const { get, explain } = firestore.Query.prototype;
+  firestore.Query.prototype.get = async function () {
+    calls.push('get');
+  };
+  firestore.Query.prototype.explain = async function (options) {
+    calls.push(['explain', options]);
+  };
+  try {
+    for (const oracle of ['read', 'explain']) {
+      const replayer = await replayClient('indexwright-probe', '(default)', oracle);
+      try {
+        assert.deepEqual(await replayer.run(planOf({ collectionGroup: 'orders' })), { kind: 'served' });
+      } finally {
+        await replayer.close();
+      }
+    }
+  } finally {
+    firestore.Query.prototype.get = get;
+    firestore.Query.prototype.explain = explain;
+  }
+  assert.deepEqual(calls, ['get', ['explain', { analyze: false }]]);
 });
 
 test('the sentinel is a document id Firestore will accept', () => {
