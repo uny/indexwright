@@ -59,6 +59,13 @@ again, by its own `corpusVersion`.
   refused by `check`, `replayClient` and `askOracle` rather than asked as `read`. `parseArgs` fills in
   `read` as before. This is a type change to the provisional JS API (SPEC §10), not to the CLI.
 
+- **`CheckCommand` gains a required `targetSet` member, and `indexes` becomes optional.** Both are
+  part of the provisional JS API (SPEC §10), so this is a type change rather than a breaking one: a
+  caller that only ever passed `check`'s first argument through from `parseArgs`, as the documented
+  usage does, sees no difference. A caller that builds a `CheckCommand` literal by hand needs to add
+  `targetSet: 'candidate'` to keep the strict default explicit — `indexes` is unaffected for that
+  caller, since it stays a plain `string` under that mode.
+
 ## [0.10.1] — 2026-09-23
 
 A patch for a path the JS API left unbounded. A corpus built by hand is now held to the filter depth
