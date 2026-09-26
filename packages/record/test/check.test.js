@@ -1296,6 +1296,20 @@ test('the oracle line is said before any refusal, the same as the target line in
   assert.equal(h.replayerCalls.length, 0);
 });
 
+test('an oracle this version does not know is refused, never announced or replayed as read', async () => {
+  // `Oracle` is closed only to `tsc`. An untyped caller's typo, or a `CheckCommand` built by hand
+  // before the member existed, would otherwise take the `read` branch of both the line and the
+  // replayer — reading a document for a caller who may have meant `explain`.
+  // `null` stands for the missing member: `harness()` fills in `read` for an `undefined` one.
+  for (const oracle of ['explan', null]) {
+    const h = harness({ oracle });
+    assert.equal(await h.run(), 2);
+    assert.match(h.said(), /cannot report: oracle must be one of "read", "explain", got /);
+    assert.doesNotMatch(h.said(), /oracle: read —/);
+    assert.equal(h.replayerCalls.length, 0);
+  }
+});
+
 test('two corpora are checked as one set, and every entry of both is asked about', async () => {
   // The question #56 is about: one index set consumed by two suites. Checked one at a time, the set
   // below satisfies the first corpus and is reported clean while failing the second.

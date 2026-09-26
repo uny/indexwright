@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs';
 import { normalize, resolve } from 'node:path';
 import { analyse, analyseOverrides, parseDocument, type AnalysedIndex, type AnalysedOverride } from 'indexwright';
 import { adminLister, AdminError, listLiveFields, listLiveIndexes, type IndexLister } from './admin.js';
-import { canonicalTarget, REQUIRE_IDENTITY, render, type CheckCommand, type Oracle } from './args.js';
+import { canonicalTarget, ORACLES, REQUIRE_IDENTITY, render, type CheckCommand, type Oracle } from './args.js';
 import { parseBaseline } from './baseline.js';
 import { messageOf } from './client.js';
 import { mergeCorpora, parseCorpus } from './corpus.js';
@@ -111,6 +111,14 @@ export async function check(
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const readFile = options.readFile ?? defaultReadFile;
   const target = canonicalTarget(command);
+
+  // The one refusal ahead of the oracle line, since it is the line's own subject: an untyped caller's
+  // `'explan'` or missing member would otherwise be announced as `read` and replayed as `read`.
+  if (!(ORACLES as readonly unknown[]).includes(command.oracle)) {
+    const known = ORACLES.map((name) => `"${name}"`).join(', ');
+    say(`cannot report: oracle must be one of ${known}, got ${render(String(command.oracle))}`);
+    return 2;
+  }
 
   // Said before any refusal below, on every run rather than only when replay is reached — the same
   // treatment the target line gets in `cli.ts`, and for the same reason: which oracle produced the

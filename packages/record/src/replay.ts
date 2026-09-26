@@ -12,17 +12,17 @@
  *
  * As of issue #91 there are two ways to ask. `askOracle` puts the identical built query to
  * Firestore either as a `read` — `Query.get()`, the oracle every version before #91 used — or as an
- * `explain` — `Query.explain({ analyze: false })`, for a principal that may hold no permission to
- * read documents at all. Both classify the thrown status through the one `classifyRejection`; which
- * oracle was asked changes what leaves the database and nothing about what a served, uncovered, or
- * failed verdict means.
+ * `explain` — `Query.explain({ analyze: false })`, for a gate that must not take a document off the
+ * database (it needs the same permissions a query does; SPEC §3). Both classify the thrown status
+ * through the one `classifyRejection`; which oracle was asked changes what leaves the database and
+ * nothing about what a served, uncovered, or failed verdict means.
  *
  * The values are synthesised and the claim they rest on is SPEC §7's: that index selection turns on
  * how a field is indexed rather than on the value compared against it. That claim is not published,
  * and it is the one assumption in v0.3 that a synthesised replay could get wrong.
  */
 
-import { render, type Oracle } from './args.js';
+import { ORACLES, render, type Oracle } from './args.js';
 import {
   FAILED_PRECONDITION,
   INVALID_ARGUMENT,
@@ -327,12 +327,27 @@ export interface Askable {
  * refuses to reimplement for index *matching*, arriving here as index *reporting* instead.
  */
 export async function askOracle(query: Askable, oracle: Oracle): Promise<ReplayStatus> {
+  requireKnownOracle(oracle);
   try {
     if (oracle === 'explain') await query.explain({ analyze: false });
     else await query.get();
     return { kind: 'served' };
   } catch (error) {
     return classifyRejection(error);
+  }
+}
+
+/**
+ * Throws unless `oracle` is one of `ORACLES`.
+ *
+ * `Oracle` is closed only to `tsc`. `askOracle` and `replayClient` are public JS API, and an untyped
+ * caller's `'explan'` or `undefined` would otherwise fall through to `get()` — reading a document
+ * for a caller who asked for the oracle that reads none.
+ */
+function requireKnownOracle(oracle: Oracle): void {
+  if (!(ORACLES as readonly unknown[]).includes(oracle)) {
+    const known = ORACLES.map((name) => `"${name}"`).join(', ');
+    throw new TypeError(`oracle must be one of ${known}, got ${render(String(oracle))}`);
   }
 }
 
@@ -357,6 +372,7 @@ export async function askOracle(query: Askable, oracle: Oracle): Promise<ReplayS
  * The caller owns what comes back and must close it. A live gRPC channel refs the event loop.
  */
 export async function replayClient(project: string, database: string, oracle: Oracle): Promise<Replayer> {
+  requireKnownOracle(oracle);
   const refusal = redirectRefusal();
   if (refusal !== undefined) throw new TargetError(refusal);
   const sdk = await loadFirestore();

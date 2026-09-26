@@ -26,7 +26,10 @@ again, by its own `corpusVersion`.
 
 - **`CheckCommand` gains a required `oracle` member, and `replayClient` a required third
   argument** (issue #91). A caller that builds a `CheckCommand` by hand, or passes its own
-  `CheckOptions.replayer`, has to name the oracle rather than inherit one. `parseArgs` fills in
+  `CheckOptions.replayer`, has to name the oracle rather than inherit one; a `replayer` is handed
+  the oracle as its third argument and must honour it, since `tsc` accepts one that ignores it. An
+  oracle that is neither `read` nor `explain` — an untyped caller's typo, or a missing member — is
+  refused by `check`, `replayClient` and `askOracle` rather than asked as `read`. `parseArgs` fills in
   `read` as before. This is a type change to the provisional JS API (SPEC §10), not to the CLI.
 
 ## [0.10.1] — 2026-09-23

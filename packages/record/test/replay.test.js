@@ -276,7 +276,7 @@ test('the read oracle calls get and never touches explain', async () => {
 test('the explain oracle asks with analyze exactly false, pinned against a literal', async () => {
   // Pinned the way `REPLAY_SENTINEL`'s own test is pinned: against `{ analyze: false }` written out
   // here, not against a constant this module and the test could both import and drift together on.
-  // `analyze: true` executes the query and is billed as one (issue #91) — it must never be sent, in
+  // `analyze: true` executes the query and is billed as a query (issue #91) — it must never be sent, in
   // any branch, and asserting the literal is what would catch a future edit that sent it.
   let received;
   const query = {
@@ -335,6 +335,50 @@ test('a status thrown from explain classifies exactly as the same status thrown 
   assert.equal((await askOracle(throwing(3), 'explain')).kind, 'invalid');
   assert.equal((await askOracle(throwing(7), 'read')).kind, 'failed');
   assert.equal((await askOracle(throwing(7), 'explain')).kind, 'failed');
+});
+
+test('an oracle this version does not know is refused before any query is asked', async () => {
+  // Public JS API, so `Oracle` being closed is `tsc`'s guarantee only. Falling through to `get()`
+  // would read a document for a caller who may have asked for the oracle that reads none.
+  const query = {
+    get: async () => {
+      throw new Error('an unknown oracle must not call get');
+    },
+    explain: async () => {
+      throw new Error('an unknown oracle must not call explain');
+    },
+  };
+  for (const oracle of ['explan', undefined]) {
+    await assert.rejects(askOracle(query, oracle), TypeError);
+    await assert.rejects(replayClient('acme-prod', '(default)', oracle), TypeError);
+  }
+});
+
+test('the client replayClient builds asks through the oracle it was given', async () => {
+  // The seam `check.test.js` replaces wholesale. Offline: the SDK's own `Query` methods are
+  // swapped for recorders, so what is pinned is which one the real client's `run` calls.
+  const calls = [];
+  const { get, explain } = firestore.Query.prototype;
+  firestore.Query.prototype.get = async function () {
+    calls.push('get');
+  };
+  firestore.Query.prototype.explain = async function (options) {
+    calls.push(['explain', options]);
+  };
+  try {
+    for (const oracle of ['read', 'explain']) {
+      const replayer = await replayClient('indexwright-probe', '(default)', oracle);
+      try {
+        assert.deepEqual(await replayer.run(planOf({ collectionGroup: 'orders' })), { kind: 'served' });
+      } finally {
+        await replayer.close();
+      }
+    }
+  } finally {
+    firestore.Query.prototype.get = get;
+    firestore.Query.prototype.explain = explain;
+  }
+  assert.deepEqual(calls, ['get', ['explain', { analyze: false }]]);
 });
 
 test('the sentinel is a document id Firestore will accept', () => {
