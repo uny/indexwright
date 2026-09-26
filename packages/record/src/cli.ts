@@ -4,7 +4,7 @@ import { closeSync, openSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { canonicalTarget, parseArgs, usage, UsageError } from './args.js';
+import { canonicalTarget, parseArgs, targetSetLabel, usage, UsageError } from './args.js';
 import { check, type CheckOptions, type Streams } from './check.js';
 import { buildCorpus, writeCorpus } from './corpus.js';
 import { startCapture } from './proxy.js';
@@ -55,7 +55,11 @@ export async function run(
     // construction (issue #8). A statement of fact, not a judgement: nothing here inspects the name
     // for how production-like it looks, because a rule that fires on `prod-sandbox` and stays quiet
     // on `db-7` teaches its own silence to be read as an all-clear.
-    streams.err(`indexwright-record: target ${canonicalTarget(command)}\n`);
+    //
+    // The mode is said in the same line, for the reason `targetSetLabel` gives: a report from
+    // `--target-set live` or `--allow-extra` is not the strict pass this verb defaults to, and a
+    // reader who only kept the target line must not be able to mistake one for the other (issue #92).
+    streams.err(`indexwright-record: target ${canonicalTarget(command)}, ${targetSetLabel(command)}\n`);
     return check(command, streams, options);
   }
 
