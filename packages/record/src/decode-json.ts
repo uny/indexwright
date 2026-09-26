@@ -23,13 +23,16 @@
  * it cannot vouch for, and is declined as `undecodable-message` rather than read around.
  */
 import { declined, MAX_FILTER_DEPTH, UnsupportedShape, VectorQuery } from './decode.js';
-import type { DecodeResult } from './decode.js';
+import type { AggregationDecodeResult, DecodeResult } from './decode.js';
 import type {
+  AggregationOp,
+  AggregationSpec,
   CompositeOperator,
   Direction,
   FieldOperator,
   FilterNode,
   Order,
+  RawAggregationQuery,
   RawQuery,
   UnaryOperator,
 } from './types.js';
@@ -61,6 +64,23 @@ export function decodeJsonRunQuery(body: Uint8Array): DecodeResult {
     return { ok: true, query: readStructuredQuery(query) };
   } catch (error) {
     return declined(error);
+  }
+}
+
+/**
+ * Decode the body of a REST `documents:runAggregationQuery` request (issue #93).
+ *
+ * `structuredAggregationQuery`/`structured_aggregation_query` is the same `field()`-mediated
+ * either-spelling read every other member of this reader uses; see the module docblock.
+ */
+export function decodeJsonRunAggregationQuery(body: Uint8Array): AggregationDecodeResult {
+  try {
+    const request = parseObject(body);
+    const query = field(request, 'structuredAggregationQuery');
+    if (query === undefined) throw new UnsupportedShape('request carries no structured aggregation query');
+    return { ok: true, query: readStructuredAggregationQuery(query) };
+  } catch (error) {
+    return declined(error) as AggregationDecodeResult;
   }
 }
 
@@ -206,6 +226,54 @@ function readStructuredQuery(value: unknown): RawQuery {
     where,
     orderBy,
   };
+}
+
+/**
+ * The `structuredAggregationQuery` object: the inner `structuredQuery` plus the `aggregations` list.
+ * The inner query goes through `readStructuredQuery`, the same function `documents:runQuery` uses,
+ * so the filter-depth ceiling and the `find_nearest` refusal apply here without restating either.
+ */
+function readStructuredAggregationQuery(value: unknown): RawAggregationQuery {
+  const agg = object(value, 'structuredAggregationQuery');
+  const inner = field(agg, 'structuredQuery');
+  if (inner === undefined) throw new UnsupportedShape('aggregation query carries no structured query');
+  const list = field(agg, 'aggregations');
+  const items = list === undefined ? [] : array(list, 'aggregations');
+  // The proto requires at least one; an empty list is a message no conforming client sends.
+  if (items.length === 0) throw new UnsupportedShape('aggregation query carries no aggregations');
+  return { query: readStructuredQuery(inner), aggregations: items.map(readAggregation) };
+}
+
+/**
+ * One `aggregations[]` entry. `count`/`sum`/`avg` is a `oneof`, and unlike `decode.ts`'s protobuf
+ * reader — which keeps whichever member the wire physically sets last, because that is what a
+ * `oneof` *means* in the binary encoding — the proto3 JSON mapping has no "last one wins" to fall
+ * back on: a JSON object naming two of these keys at once is not a message a conforming writer
+ * produces at all, the same way `field()` above refuses a member spelled under both names rather
+ * than picking one. So this is declined as `undecodable-message` instead of choosing between them,
+ * which matters because choosing would otherwise let the identical malformed *meaning* — "which of
+ * these three did the sender intend" — decode to a different corpus key depending on which
+ * transport carried it: the binary reader keeps the later field number, the JSON reader here would
+ * have kept whichever key this loop checked first, and neither answer is the sender's.
+ */
+function readAggregation(value: unknown): AggregationSpec {
+  const agg = object(value, 'aggregations[]');
+  const count = field(agg, 'count');
+  const sum = field(agg, 'sum');
+  const avg = field(agg, 'avg');
+  const set = [count, sum, avg].filter((member) => member !== undefined).length;
+  if (set > 1) throw new WireError('aggregation names more than one of count, sum and avg');
+  if (count !== undefined) return { op: 'COUNT' as AggregationOp, field: null };
+  if (sum !== undefined) return { op: 'SUM' as AggregationOp, field: readAggregateFunctionField(sum, 'sum') };
+  if (avg !== undefined) return { op: 'AVG' as AggregationOp, field: readAggregateFunctionField(avg, 'avg') };
+  throw new UnsupportedShape('aggregation holds no recognised operator');
+}
+
+function readAggregateFunctionField(value: unknown, what: string): string {
+  const holder = object(value, what);
+  const reference = field(holder, 'field');
+  if (reference === undefined) throw new UnsupportedShape(`${what} aggregation names no field`);
+  return readFieldReference(reference);
 }
 
 function readCollectionSelector(value: unknown): { collectionId: string | null; allDescendants: boolean } {

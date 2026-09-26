@@ -5,7 +5,16 @@
  * not serialise alike. That is the whole reason for the escaping below — a corpus in which two
  * queries share an entry is not a gap in coverage, it is a gap that looks like coverage.
  */
-import type { FilterComposite, FilterNode, Order, QueryShape, RawQuery } from './types.js';
+import type {
+  AggregationShape,
+  AggregationSpec,
+  FilterComposite,
+  FilterNode,
+  Order,
+  QueryShape,
+  RawAggregationQuery,
+  RawQuery,
+} from './types.js';
 import { isComposite } from './types.js';
 
 /** The delimiters the key is built from, plus the backslash that escapes them. */
@@ -114,4 +123,56 @@ export function toQueryShape(raw: RawQuery): QueryShape {
     orderBy: [...raw.orderBy],
   };
   return { key: queryKey(shape), ...shape };
+}
+
+/**
+ * One aggregation, serialised the way one filter leaf is: `escapeComponent` is applied to every
+ * component including the enum name, and a `COUNT` — which names no field — omits the `:field`
+ * suffix entirely rather than writing an empty one, so that `COUNT` beside `SUM(count)` cannot
+ * collapse onto the same string as two aggregations that both happen to serialise short.
+ */
+export function serialiseAggregation(spec: AggregationSpec): string {
+  return spec.field === null
+    ? escapeComponent(spec.op)
+    : `${escapeComponent(spec.op)}:${escapeComponent(spec.field)}`;
+}
+
+/**
+ * The aggregation list in the one form the corpus stores: a sorted, de-duplicated set (SPEC §7's
+ * argument for `AND`/`OR` children, restated here — see `AggregationShape.aggregations`).
+ */
+export function normaliseAggregations(aggregations: readonly AggregationSpec[]): AggregationSpec[] {
+  const byKey = new Map<string, AggregationSpec>();
+  for (const spec of aggregations) byKey.set(serialiseAggregation(spec), spec);
+  return [...byKey.values()].sort((a, b) => compareByCodePoint(serialiseAggregation(a), serialiseAggregation(b)));
+}
+
+/**
+ * The canonical key of an aggregation entry, injective over `(inner query, aggregation set)` and
+ * unable to collide with any `queryKey` — the property `mergeCorpora` leans on to keep `queries` and
+ * `aggregations` in disjoint namespaces without inspecting which array an entry arrived in.
+ *
+ * The proof is in what `queryKey` can never produce as a prefix. Its first component is
+ * `escapeComponent(collectionGroup)`, and `escapeComponent` escapes every `(` in its input to the
+ * two-character sequence `\(` — never emitting a bare `(`. So a plain key's first component, read up
+ * to its first *unescaped* `::`, contains no raw `(` at all; the only raw `(` a plain key can ever
+ * hold arrives later, from `serialiseFilter` wrapping a composite's children (`AND(...)`, whose
+ * operator name is drawn from a closed two-member vocabulary that does not include `aggregate`).
+ * Prefixing this key with the literal text `aggregate(` therefore makes it start with a raw `(` at
+ * an offset no plain key can reach — including a query on a collection literally named `aggregate`,
+ * whose own first component would read `aggregate` with no following `(` at all, escaped or not.
+ */
+export function aggregationKey(inner: Omit<QueryShape, 'key'>, aggregations: readonly AggregationSpec[]): string {
+  return `aggregate(${queryKey(inner)})::${aggregations.map(serialiseAggregation).join('|')}`;
+}
+
+export function toAggregationShape(raw: RawAggregationQuery): AggregationShape {
+  const inner = {
+    collectionGroup: raw.query.collectionGroup,
+    queryScope: raw.query.queryScope,
+    where: normaliseRoot(raw.query.where),
+    orderBy: [...raw.query.orderBy],
+  };
+  const aggregations = normaliseAggregations(raw.aggregations);
+  return { key: aggregationKey(inner, aggregations), ...inner, aggregations };
 }

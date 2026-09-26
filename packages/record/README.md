@@ -360,7 +360,7 @@ refused. A suite that passes against the emulator passes against the proxy.
 
 ```jsonc
 {
-  "corpusVersion": 2,
+  "corpusVersion": 3,
   "producers": [{ "name": "orders-service", "revision": "9c1f2ab" }],
   "queries": [
     {
@@ -369,6 +369,16 @@ refused. A suite that passes against the emulator passes against the proxy.
       "queryScope": "COLLECTION",
       "where": { "op": "AND", "filters": [{ "fieldPath": "status", "op": "EQUAL" }] },
       "orderBy": [{ "fieldPath": "createdAt", "direction": "DESCENDING" }]
+    }
+  ],
+  "aggregations": [
+    {
+      "key": "aggregate(orders::COLLECTION::AND()::)::COUNT",
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "where": { "op": "AND", "filters": [] },
+      "orderBy": [],
+      "aggregations": [{ "op": "COUNT", "field": null }]
     }
   ],
   "skipped": []
@@ -388,6 +398,26 @@ A snapshot listener is captured too: its query travels over `Listen` rather than
 recorded under the same rules the moment its target is added, whether or not the listener is ever
 detached. `onSnapshot` and `get()` on the same query are one entry.
 
+`count()`, `sum(field)`, and `average(field)` are captured too, as their own kind of entry
+(`aggregations`, alongside `queries`): the inner query plus a sorted, de-duplicated set of
+aggregations. Values, aliases, and `count()`'s optional cap are not recorded, for the same reason
+`limit`/`select` are not. An aggregation entry's key can never collide with a plain query's key over
+the same inner query — see [SPEC.md §7, *Aggregation queries*][spec-aggregation] for the proof —
+so a corpus can hold both without either shadowing the other. `check` replays an aggregation entry
+by asking Firestore the identical `count()`/`aggregate()`, with **no `limit`**: unlike a plain query,
+there is nowhere on an aggregate query to attach one. Under `--oracle read`, an aggregation over a
+wide shape (a `!=`, say) is inferred — not measured — to scan the matching range to produce its
+number, rather than stopping at one document the way a plain query's `limit(1)` does; prefer
+`--oracle explain` for a corpus carrying aggregation entries on that inference.
+
+Replaying the aggregation itself, rather than its inner query, is not a formality. Measured against
+a real database (`probe/README.md` step 5f), `count()` needs what its inner query needs, but `sum()`
+and `average()` also need the aggregated field in the index. A `sum(amount)` over a filter that an
+`(a, b)` composite serves was refused until `(a, b, amount)` existed. The emulator enforces none of
+this, so it is the kind of gap that first shows up in production.
+
+[spec-aggregation]: https://github.com/uny/indexwright/blob/main/SPEC.md#aggregation-queries-v04-corpusversion-3
+
 The Firebase **Web SDK** is captured as well, on the transports it really uses. The full SDK in a
 browser sends every query — `getDocs` as much as `onSnapshot` — as a `Listen` target over
 WebChannel, and `firebase/firestore/lite` posts it to the REST `documents:runQuery` endpoint, in
@@ -398,6 +428,15 @@ and the corpus records what was sent, so one application query has two legitimat
 depending on which SDK issued it. A corpus is comparable across runs of one project, not across
 SDKs.
 
+An aggregation reaches the emulator differently from a plain query, on **both** Web SDK builds —
+`RunAggregationQuery` is server-streaming on the wire, the same as `RunQuery`, but both SDK builds
+invoke it through the unary REST path rather than the WebChannel streaming path they reserve for
+`Listen`/`Write`, and that path collects the streamed responses itself: `getCountFromServer`/
+`getAggregateFromServer` (the full SDK) post to REST `documents:runAggregationQuery` exactly as
+`getCount`/`getAggregate` (`firestore/lite`) do — neither goes out over the WebChannel forward
+channel a `Listen` target does. `record` reads this endpoint the same way it reads
+`documents:runQuery`.
+
 ## What it does not capture
 
 Counted in `skipped` and reported on stderr, never dropped silently — a query that was issued and
@@ -405,7 +444,6 @@ then discarded without trace would look like coverage:
 
 | Reason | What it was |
 |:--|:--|
-| `aggregation-query` | `count()`, `sum()`, `average()` — their index requirements are not the inner query's |
 | `partition-query` | `PartitionQuery`, a bulk-read entry point rather than an application query |
 | `vector-query` | `find_nearest`; served by a `vectorConfig` index this version does not model |
 | `unsupported-shape` | an enum value or a `from` clause the corpus vocabulary cannot name |
@@ -413,8 +451,9 @@ then discarded without trace would look like coverage:
 | `unsupported-encoding` | a message compressed with something other than gzip or deflate |
 | `undecodable-message` | bytes that did not parse — a defect rather than a boundary |
 
-A corpus written by an earlier release may also name `listen-query`, which is how those releases
-counted a snapshot listener. It still reads; nothing writes it now.
+A corpus written by an earlier release may also name `listen-query` (how record ≤ 0.7.0 counted a
+snapshot listener) or `aggregation-query` (how record ≤ 0.10.1 counted every `RunAggregationQuery`,
+before this release captured it). Both still read; nothing writes either now.
 
 ## Stability
 

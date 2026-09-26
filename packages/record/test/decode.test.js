@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { decodeListen, decodeRunQuery, toQueryShape } from '../dist/index.js';
+import { decodeListen, decodeRunAggregationQuery, decodeRunQuery, toAggregationShape, toQueryShape } from '../dist/index.js';
 import * as wire from '../dist/wire.js';
 
 /**
@@ -14,6 +14,14 @@ import * as wire from '../dist/wire.js';
  */
 const { cases } = JSON.parse(
   readFileSync(fileURLToPath(new URL('fixtures/run-query.json', import.meta.url)), 'utf8'),
+);
+
+/**
+ * Real `RunAggregationQueryRequest` bytes (issue #93), same discipline as `cases` above.
+ * Regenerate with `scripts/capture-aggregation-fixtures.mjs`.
+ */
+const { cases: aggregationCases } = JSON.parse(
+  readFileSync(fileURLToPath(new URL('fixtures/run-aggregation-query.json', import.meta.url)), 'utf8'),
 );
 
 const EXPECTED_KEYS = new Map([
@@ -326,4 +334,174 @@ test('a Listen target reads the vector and shape refusals the RunQuery reader do
   assert.deepEqual(decodeListen(listenAddQuery(vector)), { ok: false, reason: 'vector-query' });
   // StructuredQuery{ from: [] }
   assert.deepEqual(decodeListen(listenAddQuery(Buffer.alloc(0))), { ok: false, reason: 'unsupported-shape' });
+});
+
+/** Real captured `RunAggregationQueryRequest`s decode to the shape written by hand here (issue #93). */
+const AGGREGATION_EXPECTED_KEYS = new Map([
+  ['a bare count', 'aggregate(orders::COLLECTION::AND()::)::COUNT'],
+  ['count with a filter', 'aggregate(orders::COLLECTION::AND(status:EQUAL)::)::COUNT'],
+  ['a single sum', 'aggregate(orders::COLLECTION::AND()::)::SUM:amount'],
+  ['a single average', 'aggregate(orders::COLLECTION::AND()::)::AVG:amount'],
+  [
+    'count, sum and average together',
+    'aggregate(orders::COLLECTION::AND()::)::AVG:amount|COUNT|SUM:amount',
+  ],
+  ['a collection group aggregation', 'aggregate(items::COLLECTION_GROUP::AND(sku:EQUAL)::)::COUNT'],
+  ['a sum on a nested field path', 'aggregate(orders::COLLECTION::AND()::)::SUM:cart.total'],
+]);
+
+function decodeAggregationFixture(name) {
+  const found = aggregationCases.find((entry) => entry.name === name);
+  assert.ok(found, `fixture "${name}" is missing; regenerate scripts/capture-aggregation-fixtures.mjs`);
+  const result = decodeRunAggregationQuery(Buffer.from(found.message, 'base64'));
+  assert.ok(result.ok, `expected "${name}" to decode, got ${result.ok ? '' : result.reason}`);
+  return toAggregationShape(result.query);
+}
+
+test('every captured aggregation request decodes to the shape it was written as', () => {
+  assert.equal(aggregationCases.length, AGGREGATION_EXPECTED_KEYS.size, 'the fixture and the expectations disagree in size');
+  for (const [name, expected] of AGGREGATION_EXPECTED_KEYS) {
+    assert.equal(decodeAggregationFixture(name).key, expected, name);
+  }
+});
+
+test('an aggregation key can never collide with a plain query key over the same inner query', () => {
+  // The proof (see `aggregationKey` in shape.ts): `escapeComponent` never emits a raw `(`, so a
+  // plain key's `collectionGroup` component — entirely that function's output — never contains one,
+  // even for a collection literally named "aggregate". The `aggregate(...)` prefix therefore starts
+  // with a raw `(` at an offset no plain key can reach.
+  const plain = decodeFixture('no filters and no sort');
+  assert.equal(plain.key, 'orders::COLLECTION::AND()::');
+  const aggregated = decodeAggregationFixture('a bare count');
+  assert.notEqual(aggregated.key, plain.key);
+  assert.ok(aggregated.key.startsWith('aggregate('));
+  // The proof is about the *first component* only — up to a plain key's first unescaped `::` — not
+  // the whole key: `AND()` further along is exactly where a plain key's own raw `(` comes from.
+  assert.ok(!plain.key.split('::', 1)[0].includes('('));
+  // Even a collection literally named "aggregate" cannot manufacture the collision: its first
+  // component reads "aggregate", with no `(` following it at all, escaped or not.
+  assert.ok(!'aggregate::COLLECTION::AND()::'.split('::', 1)[0].includes('('));
+});
+
+/** `RunAggregationQueryRequest{ structured_aggregation_query }`. */
+function runAggregationQueryOf(structuredAggregationQuery) {
+  return delimited(2, structuredAggregationQuery);
+}
+
+/** `StructuredAggregationQuery{ structured_query, aggregations: [...] }`. */
+function structuredAggregationQueryOf(structuredQuery, aggregations) {
+  return Buffer.concat([
+    delimited(1, structuredQuery),
+    ...aggregations.map((aggregation) => delimited(3, aggregation)),
+  ]);
+}
+
+/** `StructuredAggregationQuery.Aggregation{ count: {} }`. */
+const COUNT_AGGREGATION = delimited(1, Buffer.alloc(0));
+
+/** `StructuredAggregationQuery.Aggregation.Sum{ field: FieldReference{ field_path } }`. */
+function sumAggregationOf(fieldPath) {
+  return delimited(2, delimited(1, delimited(2, Buffer.from(fieldPath))));
+}
+
+test('an aggregation naming none of count/sum/avg is skipped as unsupported-shape, not a made-up reason', () => {
+  // `Aggregation{ alias: "x" }`: the `operator` oneof is required and this sets none of it. Not
+  // nameable, and not the closed-vocabulary `aggregation-query` reason — that one is legacy-only as
+  // of this release (see `types.ts`).
+  const noOperator = delimited(7, Buffer.from('x'));
+  const query = structuredAggregationQueryOf(structuredQueryOf('no filters and no sort'), [noOperator]);
+  assert.deepEqual(decodeRunAggregationQuery(runAggregationQueryOf(query)), {
+    ok: false,
+    reason: 'unsupported-shape',
+  });
+});
+
+test('an aggregation query naming no structured_query is unsupported-shape', () => {
+  // Field 3 (`aggregations`) only; field 1 (`structured_query`) never written.
+  const noInner = delimited(3, COUNT_AGGREGATION);
+  assert.deepEqual(decodeRunAggregationQuery(runAggregationQueryOf(noInner)), {
+    ok: false,
+    reason: 'unsupported-shape',
+  });
+});
+
+test('an aggregation query naming no aggregations is unsupported-shape', () => {
+  const noAggregations = delimited(1, structuredQueryOf('no filters and no sort'));
+  assert.deepEqual(decodeRunAggregationQuery(runAggregationQueryOf(noAggregations)), {
+    ok: false,
+    reason: 'unsupported-shape',
+  });
+});
+
+test('a request naming no structured_aggregation_query at all is unsupported-shape', () => {
+  assert.deepEqual(decodeRunAggregationQuery(Buffer.alloc(0)), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('the inner query of an aggregation reads the vector and depth refusals the RunQuery reader does', () => {
+  // find_nearest inside the inner query: StructuredQuery{ from: [{collection_id:"o"}], find_nearest: {} }
+  const vector = Buffer.concat([delimited(2, delimited(2, Buffer.from('o'))), delimited(9, Buffer.alloc(0))]);
+  const vectorAggregation = structuredAggregationQueryOf(vector, [COUNT_AGGREGATION]);
+  assert.deepEqual(decodeRunAggregationQuery(runAggregationQueryOf(vectorAggregation)), {
+    ok: false,
+    reason: 'vector-query',
+  });
+
+  // A filter tree one level past MAX_FILTER_DEPTH (100), built the way the corpus test builds one:
+  // reused here through the aggregation's inner query rather than restated, since `decode.ts`'s
+  // `readStructuredAggregationQuery` calls the very `readStructuredQuery` this bound is written into.
+  // A chain of AND-composite FieldFilters, one level at a time, each carrying an EQUAL (op 5).
+  const fieldFilterOf = (name) =>
+    delimited(2, Buffer.concat([delimited(1, delimited(2, Buffer.from(name))), Buffer.from([0x10, 0x05])]));
+  let nestedFilter = fieldFilterOf('a');
+  for (let level = 0; level < 101; level += 1) {
+    // CompositeFilter{ op: AND(1), filters: [prior, fieldFilterOf(...)] }
+    nestedFilter = delimited(
+      1,
+      Buffer.concat([Buffer.from([0x08, 0x01]), delimited(2, nestedFilter), delimited(2, fieldFilterOf(`b${level}`))]),
+    );
+  }
+  const deepQuery = Buffer.concat([delimited(2, delimited(2, Buffer.from('o'))), delimited(3, nestedFilter)]);
+  const deepAggregation = structuredAggregationQueryOf(deepQuery, [COUNT_AGGREGATION]);
+  assert.deepEqual(decodeRunAggregationQuery(runAggregationQueryOf(deepAggregation)), {
+    ok: false,
+    reason: 'unsupported-shape',
+  });
+});
+
+test('an Aggregation setting more than one of count/sum/avg keeps the last field number, as protobuf does', () => {
+  // One `Aggregation` message carrying both field 1 (`count`) and field 2 (`sum`), concatenated —
+  // legal on the wire, and `readAggregation`'s loop keeps whichever it saw last, the ordinary
+  // "repeated field number within one message" rule every oneof in this reader follows. The JSON
+  // reader declines the equivalent case outright instead (`decode-json.test.js`), because the JSON
+  // mapping has no occurrence order to fall back on; this test pins the binary side's own rule so
+  // the two do not drift towards agreeing by accident.
+  const countThenSum = Buffer.concat([COUNT_AGGREGATION, sumAggregationOf('x')]);
+  const query = structuredAggregationQueryOf(structuredQueryOf('no filters and no sort'), [countThenSum]);
+  const result = decodeRunAggregationQuery(runAggregationQueryOf(query));
+  assert.ok(result.ok);
+  assert.deepEqual(result.query.aggregations, [{ op: 'SUM', field: 'x' }]);
+
+  const sumThenCount = Buffer.concat([sumAggregationOf('x'), COUNT_AGGREGATION]);
+  const reversed = structuredAggregationQueryOf(structuredQueryOf('no filters and no sort'), [sumThenCount]);
+  const reversedResult = decodeRunAggregationQuery(runAggregationQueryOf(reversed));
+  assert.ok(reversedResult.ok);
+  assert.deepEqual(reversedResult.query.aggregations, [{ op: 'COUNT', field: null }]);
+});
+
+test('two aggregations naming the same op and field collapse to one entry, sorted, de-duplicated', () => {
+  const query = structuredAggregationQueryOf(structuredQueryOf('no filters and no sort'), [
+    sumAggregationOf('b'),
+    COUNT_AGGREGATION,
+    sumAggregationOf('b'),
+    sumAggregationOf('a'),
+  ]);
+  const result = decodeRunAggregationQuery(runAggregationQueryOf(query));
+  assert.ok(result.ok);
+  const shape = toAggregationShape(result.query);
+  assert.deepEqual(shape.aggregations, [
+    { op: 'COUNT', field: null },
+    { op: 'SUM', field: 'a' },
+    { op: 'SUM', field: 'b' },
+  ]);
+  assert.equal(shape.key, 'aggregate(orders::COLLECTION::AND()::)::COUNT|SUM:a|SUM:b');
 });

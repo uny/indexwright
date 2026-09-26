@@ -4,8 +4,10 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   decodeJsonListen,
+  decodeJsonRunAggregationQuery,
   decodeJsonRunQuery,
   forwardChannelMessages,
+  toAggregationShape,
   toQueryShape,
   WireError,
 } from '../dist/index.js';
@@ -23,6 +25,17 @@ import {
  */
 const { cases } = JSON.parse(
   readFileSync(fileURLToPath(new URL('fixtures/web-sdk.json', import.meta.url)), 'utf8'),
+);
+
+/**
+ * Real `documents:runAggregationQuery` bodies (issue #93), from both the full SDK's
+ * `getCountFromServer`/`getAggregateFromServer` and `firebase/firestore/lite`'s
+ * `getCount`/`getAggregate` — both reach the emulator this same REST way, never over a WebChannel
+ * forward channel; see `scripts/capture-web-fixtures.mjs`'s docblock for why, and
+ * `proxy.test.js` for the end-to-end capture of one. Regenerate with that script.
+ */
+const { cases: webAggregationCases } = JSON.parse(
+  readFileSync(fileURLToPath(new URL('fixtures/web-sdk-aggregation.json', import.meta.url)), 'utf8'),
 );
 
 const EXPECTED_KEYS = new Map([
@@ -296,4 +309,208 @@ test('keys this reader does not expect are ignored, as protobuf ignores an unkno
   const result = decodeJsonRunQuery(Buffer.from(JSON.stringify({ structuredQuery, parent: 'p', newTransaction: {} }), 'utf8'));
   assert.ok(result.ok);
   assert.equal(toQueryShape(result.query).key, 'o::COLLECTION::AND()::');
+});
+
+/**
+ * Real REST `documents:runAggregationQuery` bodies decode to the shape they were captured as
+ * (issue #93) — from both the full SDK and `firebase/firestore/lite`, which are captured
+ * separately and turn out to be byte-identical (see `web-sdk-aggregation.json`'s `note` and
+ * `scripts/capture-web-fixtures.mjs`'s docblock for why: both reach `RestConnection`'s one
+ * non-streaming invoke path). A corrected assumption is worth stating plainly: an earlier version of
+ * this test file asserted that no Firebase SDK reaches this endpoint over HTTP/1.1 at all — reasoning
+ * from `getDocs`'s WebChannel path without checking `count()`/`sum()`/`average()` against the SDK
+ * source, which do reach it, over REST, from *both* builds. They were wrong, and this fixture is the
+ * correction: real bytes, not an assumption.
+ */
+const WEB_AGGREGATION_EXPECTED_KEYS = new Map([
+  ['a bare count', 'aggregate(orders::COLLECTION::AND()::)::COUNT'],
+  ['sum and average together', 'aggregate(orders::COLLECTION::AND()::)::AVG:amount|SUM:amount'],
+  [
+    'a count over a filtered collection-group query',
+    'aggregate(items::COLLECTION_GROUP::AND(sku:EQUAL)::)::COUNT',
+  ],
+]);
+
+function decodeWebAggregationFixture(name, build) {
+  const found = webAggregationCases.find((entry) => entry.name === name);
+  assert.ok(found, `web aggregation fixture "${name}" is missing; regenerate scripts/capture-web-fixtures.mjs`);
+  const body = found[build];
+  const result = decodeJsonRunAggregationQuery(Buffer.from(body.body, 'utf8'));
+  assert.ok(result.ok, `expected "${name}" (${build}) to decode, got ${result.ok ? '' : result.reason}`);
+  return toAggregationShape(result.query);
+}
+
+test('every captured aggregation request — full SDK and lite alike — decodes to the shape it was written as', () => {
+  assert.equal(webAggregationCases.length, WEB_AGGREGATION_EXPECTED_KEYS.size, 'the fixture and the expectations disagree in size');
+  for (const [name, expected] of WEB_AGGREGATION_EXPECTED_KEYS) {
+    assert.equal(decodeWebAggregationFixture(name, 'full').key, expected, `${name} (full)`);
+    assert.equal(decodeWebAggregationFixture(name, 'lite').key, expected, `${name} (lite)`);
+  }
+});
+
+test('the real bodies carry an alias per aggregation, which this reader ignores like any unknown key', () => {
+  const found = webAggregationCases.find((entry) => entry.name === 'sum and average together');
+  const parsed = JSON.parse(found.full.body);
+  for (const aggregation of parsed.structuredAggregationQuery.aggregations) {
+    assert.equal(typeof aggregation.alias, 'string');
+  }
+  // Already decoded above without incident; this asserts the premise that the captured body really
+  // does exercise the alias-tolerance path, rather than happening to omit the field.
+});
+
+/**
+ * Hand-built REST `documents:runAggregationQuery` bodies (issue #93), for spellings and shapes the
+ * real fixtures above do not reach: the original (snake_case) proto field names, which no Firebase
+ * SDK writes but a conforming writer may, and the malformed/edge-case bodies below. The proto3 JSON
+ * mapping is fully documented, and the proxy reads whatever conforms to it — these are checked
+ * against that mapping directly rather than against a client that would never produce them.
+ */
+function decodeAggregation(body) {
+  return decodeJsonRunAggregationQuery(Buffer.from(JSON.stringify(body), 'utf8'));
+}
+
+test('a REST aggregation body decodes to the shape it names', () => {
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'orders' }], where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL' } } },
+      aggregations: [{ count: {} }, { sum: { field: { fieldPath: 'amount' } } }, { avg: { field: { fieldPath: 'amount' } } }],
+    },
+  };
+  const result = decodeAggregation(body);
+  assert.ok(result.ok);
+  const shape = toAggregationShape(result.query);
+  assert.equal(shape.key, 'aggregate(orders::COLLECTION::AND(status:EQUAL)::)::AVG:amount|COUNT|SUM:amount');
+});
+
+test('the original proto field names read as the same aggregation the lowerCamelCase ones do', () => {
+  const camel = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'items', allDescendants: true }] },
+      aggregations: [{ sum: { field: { fieldPath: 'qty' } } }],
+    },
+  };
+  const snake = {
+    structured_aggregation_query: {
+      structured_query: { from: [{ collection_id: 'items', all_descendants: true }] },
+      aggregations: [{ sum: { field: { field_path: 'qty' } } }],
+    },
+  };
+  const expected = 'aggregate(items::COLLECTION_GROUP::AND()::)::SUM:qty';
+  assert.equal(toAggregationShape(decodeAggregation(camel).query).key, expected);
+  assert.equal(toAggregationShape(decodeAggregation(snake).query).key, expected);
+});
+
+test('a request naming no structuredAggregationQuery at all is an unsupported shape', () => {
+  assert.deepEqual(decodeAggregation({ parent: 'p' }), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('an aggregation query naming no structuredQuery is an unsupported shape', () => {
+  const body = { structuredAggregationQuery: { aggregations: [{ count: {} }] } };
+  assert.deepEqual(decodeAggregation(body), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('an aggregation query naming no aggregations, or an empty list, is an unsupported shape', () => {
+  const noMember = { structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'o' }] } } };
+  const empty = { structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'o' }] }, aggregations: [] } };
+  assert.deepEqual(decodeAggregation(noMember), { ok: false, reason: 'unsupported-shape' });
+  assert.deepEqual(decodeAggregation(empty), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('an aggregation naming none of count/sum/avg is an unsupported shape', () => {
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'o' }] },
+      aggregations: [{ alias: 'x' }],
+    },
+  };
+  assert.deepEqual(decodeAggregation(body), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('an aggregation naming more than one of count/sum/avg is undecodable, not resolved by a pick', () => {
+  // Not a message a conforming proto3 JSON writer produces (`operator` is a oneof), so it is
+  // declined outright rather than choosing one and risking a different choice than the binary
+  // reader's "last field number wins" would make for the equivalent wire bytes — see the comment on
+  // `readAggregation` in both decode.ts and decode-json.ts.
+  const query = (aggregation) =>
+    decodeAggregation({
+      structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'o' }] }, aggregations: [aggregation] },
+    });
+  assert.deepEqual(query({ count: {}, sum: { field: { fieldPath: 'a' } } }), {
+    ok: false,
+    reason: 'undecodable-message',
+  });
+  assert.deepEqual(query({ sum: { field: { fieldPath: 'a' } }, avg: { field: { fieldPath: 'a' } } }), {
+    ok: false,
+    reason: 'undecodable-message',
+  });
+  assert.deepEqual(
+    query({ count: {}, sum: { field: { fieldPath: 'a' } }, avg: { field: { fieldPath: 'a' } } }),
+    { ok: false, reason: 'undecodable-message' },
+  );
+});
+
+test('a sum or average naming no field is an unsupported shape', () => {
+  const query = (aggregation) =>
+    decodeAggregation({
+      structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'o' }] }, aggregations: [aggregation] },
+    });
+  assert.deepEqual(query({ sum: {} }), { ok: false, reason: 'unsupported-shape' });
+  assert.deepEqual(query({ avg: {} }), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('a findNearest clause in the inner query of an aggregation is a vector query', () => {
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'o' }], findNearest: {} },
+      aggregations: [{ count: {} }],
+    },
+  };
+  assert.deepEqual(decodeAggregation(body), { ok: false, reason: 'vector-query' });
+});
+
+test('a filter tree in the inner query deeper than the reader descends is declined, not a crash', () => {
+  let where = { fieldFilter: { field: { fieldPath: 'a' }, op: 'EQUAL' } };
+  for (let depth = 0; depth < 200; depth += 1) where = { compositeFilter: { op: 'AND', filters: [where] } };
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'o' }], where },
+      aggregations: [{ count: {} }],
+    },
+  };
+  assert.deepEqual(decodeAggregation(body), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('an aggregation key can never collide with a plain query key over the same inner query', () => {
+  const plain = decodeJsonRunQuery(Buffer.from(JSON.stringify({ structuredQuery: { from: [{ collectionId: 'orders' }] } }), 'utf8'));
+  const plainKey = toQueryShape(plain.query).key;
+  const aggregated = decodeAggregation({
+    structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'orders' }] }, aggregations: [{ count: {} }] },
+  });
+  const aggregatedKey = toAggregationShape(aggregated.query).key;
+  assert.notEqual(aggregatedKey, plainKey);
+  assert.ok(aggregatedKey.startsWith('aggregate('));
+  assert.ok(!plainKey.split('::', 1)[0].includes('('));
+});
+
+test('two aggregations naming the same op and field collapse to one entry, sorted, de-duplicated', () => {
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'o' }] },
+      aggregations: [
+        { sum: { field: { fieldPath: 'b' } } },
+        { count: {} },
+        { sum: { field: { fieldPath: 'b' } } },
+        { sum: { field: { fieldPath: 'a' } } },
+      ],
+    },
+  };
+  const result = decodeAggregation(body);
+  assert.ok(result.ok);
+  const shape = toAggregationShape(result.query);
+  assert.deepEqual(shape.aggregations, [
+    { op: 'COUNT', field: null },
+    { op: 'SUM', field: 'a' },
+    { op: 'SUM', field: 'b' },
+  ]);
+  assert.equal(shape.key, 'aggregate(o::COLLECTION::AND()::)::COUNT|SUM:a|SUM:b');
 });

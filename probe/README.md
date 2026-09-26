@@ -15,6 +15,7 @@ It answered five things at once, which is why it was worth doing before anything
 | Issue #39: the process exits once the report is written | `check`, timed | Untestable with a fake client | **It exits.** Three runs, none hung |
 | `DEFAULT_SETTLE_MS` = 60s | `watch-readiness.mjs` | A guess | Still a guess, now a documented one — see below |
 | Issue #91: do `read` and `explain({ analyze: false })` agree | `oracle.mjs`, on the deployed set (step 5e) | An adopter's reading, never taken here | **All twenty shapes agreed**, on a settled set; the `CREATING` window is not reached |
+| Issue #93: does an aggregation need what its inner query needs | `aggregation.mjs`, on the deployed set (step 5f) | Predicted yes for all three functions | **`COUNT` yes; `SUM`/`AVG` no.** Their field joins the index. Both oracles agreed on all six shapes |
 
 Index builds dominate the wall clock — roughly three and a half minutes each — so the design
 deploys **one** index set and varies the corpus against it. That reaches `check`'s exit 0, 1 and 2
@@ -171,6 +172,7 @@ What the run did settle is the price. The readiness gate restarts on every invoc
 | `differential.mjs` | The §7 instrument: issues the shapes, writes a JSON report to stdout |
 | `limit.mjs` | The #43 instrument: issues each shape bare and with `limit(1)`, and reports what each read |
 | `oracle.mjs` | The #91 instrument: issues each shape's `limit(1)` query through `read` and through `explain`, and compares the verdicts. Step 5e |
+| `aggregation.mjs` | The #93 instrument: issues `count()`/`sum()`/`average()` over S1's and S6's field pairs, through `read` and through `explain`, with no `limit` on either. Step 5f |
 | `expectations.mjs` | Their command line — argv in, the expectation map out. Pure, so what an operator types is testable |
 | `summarise.mjs` | Their stop rule — rows in, findings and an exit code out, for the verdicts and for the read counts alike. Pure, so it can be tested without a database |
 | `expectations.test.mjs`, `summarise.test.mjs` | Tests for the two halves of the stop rule. Run in `npm test` alongside the packages' suites |
@@ -575,6 +577,64 @@ the verdict is read from the status code and never from the message.
 What this does not reach is stated above and bears repeating. The set was settled, so nothing here
 says how `explain` answers while an index is `CREATING`, and that half of issue #91's claim is still
 the adopter's. It is also one collection and one operand, the same limits step 5b states.
+
+### 5f. The aggregation probe, against the same deployed set (issue #93)
+
+**Run on 2026-09-26; the reading is at the end of this step, and one of its predictions was
+wrong.** The step asks two questions. The first is whether an aggregation needs the index its inner
+query needs. SPEC §7 had only said that it need not. The second is whether `read` and `explain`
+agree about an aggregation the way step 5e found they agree about a plain query.
+
+`probe/aggregation.mjs` issues `count()`, `sum(field)`, and `average(field)` over exactly the field
+pairs `S1` (declared, covered) and `S6` (undeclared, uncovered) already establish — the same
+question step 5 answered for a plain read, asked here of an aggregate instead — through both
+oracles, with no `limit` on either: `buildReplayAggregateQuery` sends none (see
+`synthesise.ts`'s `AggregationReplayPlan` docblock), so a probe that added one would be measuring a
+question the shipped code never asks. This step needs no new index build; it runs against whichever
+set step 4's or step 5c's watcher already settled.
+
+```bash
+node probe/aggregation.mjs indexwright-probe '(default)' \
+  --expect-served A1 \
+  --expect-uncovered A2,A3,A4,A5,A6 \
+  > probe/aggregation-after.json
+```
+
+These are the expectations after the run. The first run passed `--expect-served A1,A3,A5`, and it
+exited 2 on A3 and A5. The results below say why.
+
+The stop rule, the exit codes, and the report shape are `oracle.mjs`'s (step 5e): a disagreement
+between `read` and `explain` on any one shape is a falsification of the oracle-agreement claim, and
+a `served`/`uncovered` verdict that does not match the field pair's own plain-query answer (S1 and S6
+in step 5) is a falsification of the selection claim — both are read off `summarise.mjs`'s ordinary
+"not constant" and "against expectation" findings, so no new stop rule is written for this step.
+
+What this step does **not** measure: `--oracle read`'s *cost* for a wide aggregation shape (a
+`count()` over a `!=`-style filter, say) — `AggregateQuerySnapshot` gives no document-count signal
+the way `QuerySnapshot.size` gives `limit.mjs` one, so the read-cost argument in SPEC §7 and in this
+package's README stays a documented inference from how `count()` must work rather than a
+measurement, whatever this step finds.
+
+**Results (2026-09-26).** Run against the same set step 5e was, straight after it. All six shapes
+answered the same through both oracles, so the oracle-agreement claim holds for aggregations as it
+does for plain queries. The selection prediction did not hold, and the run exited 2 on it:
+
+- **A1 (`count()` over `a == · , b > ·`) was served, and A2 (`count()` over `a == · , n > ·`) was
+  not**, exactly as S1 and S6 answer as plain reads. A `COUNT` needs what its inner query needs.
+- **A3 (`sum(amount)`) and A5 (`average(amount)`) over the covered pair answered
+  `FAILED_PRECONDITION`**, under the `(a, b)` composite that serves S1. The create-this-index link
+  in `read`'s error decodes to `(a ASC, b ASC, amount ASC, __name__ ASC)`. The aggregated field is
+  part of the requirement. A4 and A6 were uncovered, as predicted.
+
+This is the case the whole design of issue #93 exists for. Had the corpus recorded the inner query
+alone, as SPEC §7 warned against, `check` would have reported A3 and A5 covered. They would then
+have failed in production, which is the false clean §2 ranks worst. Because `check` replays the
+aggregation itself, it reports them uncovered, which is correct. No code changed; the predictions in
+`aggregation.mjs` and the command above now carry the reading.
+
+What this does not reach: an aggregation over two or more fields, where the sorted order the corpus
+replays in might not be the order the index needs (SPEC §7 flags it), and `read`'s cost for a wide
+aggregation. It is one collection, one operand and one settled set, as in step 5e.
 
 ### 6. Capture the corpus of shapes the target actually covers
 

@@ -21,6 +21,32 @@ again, by its own `corpusVersion`.
   `CREATING` — is measured here for a settled set and not for the window. `probe/README.md` step 5e
   put all twenty probe shapes through both oracles on 2026-09-26 and every one answered the same.
   The `CREATING` half is still the adopter's own reading. See SPEC.md §3 for the full design note.
+- **`RunAggregationQuery` is captured and replayed, instead of declined as `aggregation-query`**
+  (issue #93). `count()`, `sum(field)`, and `average(field)` — both gRPC and the REST
+  `documents:runAggregationQuery` form — decode into a new `aggregations` corpus member holding the
+  inner query plus a sorted, de-duplicated aggregation list; values, aliases, and `Count.up_to` are
+  not recorded, on the same grounds `limit`/`select` are not. The REST form is read from real bodies
+  captured off **both** Web SDK builds, not only `firestore/lite`: `RunAggregationQuery` is
+  server-streaming on the wire, the same as `RunQuery`, but both SDK builds invoke it through
+  `RestConnection`'s unary REST path rather than the WebChannel streaming path they reserve for
+  `Listen`/`Write` — that path collects the streamed responses into one REST POST/response itself,
+  so the full SDK's `getCountFromServer`/`getAggregateFromServer` post to this endpoint exactly as
+  `firestore/lite`'s `getCount`/`getAggregate` do — the two builds' bodies were captured
+  independently and found byte-identical. The entry is keyed
+  `aggregate(<inner key>)::<aggregations>`, which is provably unable to collide with a plain
+  `QueryShape` key over the same inner query — see SPEC.md §7, *Aggregation queries*. `corpusVersion`
+  is bumped to 3; a v3 reader still reads v1 and v2 corpora in full, and `aggregation-query` joins
+  `listen-query` in the legacy skip vocabulary, so a corpus any earlier release wrote — including one
+  that declined this very RPC — still reads whole. `check` replays an aggregation entry through
+  `Query.count()`/`Query.aggregate({...})`, asked via the same `--oracle read|explain` choice a plain
+  entry is, with **no `limit`**: the measurement behind the plain path's `limit(1)` was never taken
+  for an aggregation, and there is nowhere on `.count()`/`.aggregate()` to attach one regardless.
+  `probe/README.md` step 5f ran on 2026-09-26. `read` and `explain` agreed on all six aggregation
+  shapes. `count()` needed only what its inner query needs, while `sum(amount)` and
+  `average(amount)` over the same filter were refused under an `(a, b)` index that serves the plain
+  read, and the error asked for `(a, b, amount, __name__)`. So recording the aggregation with its
+  inner query, rather than the inner query alone, is what keeps such a gap from reporting as covered.
+  Vector search (`find_nearest`) is unaffected and stays declined.
 
 ### Changed
 

@@ -207,15 +207,20 @@ test('query-bearing RPCs that are not RunQuery are counted, and writes are not',
   const capture = await startCapture({ upstream: upstreamAddress });
   try {
     const body = frame(fixtureMessage('no filters and no sort'));
-    for (const method of ['PartitionQuery', 'RunAggregationQuery', 'ExecutePipeline', 'Commit']) {
+    for (const method of ['PartitionQuery', 'ExecutePipeline', 'Commit']) {
       await call(capture.address, `/google.firestore.v1.Firestore/${method}`, body);
     }
+    // `RunAggregationQuery` is captured as of issue #93 rather than declined, so it moved to the
+    // dedicated aggregation-decoding test below (`recordRunAggregationQuery` and its fixtures); a
+    // `RunQueryRequest` body sent to it is not a `RunAggregationQueryRequest`, and decodes as
+    // `unsupported-shape` once the two are read against the right message shape.
+    await call(capture.address, '/google.firestore.v1.Firestore/RunAggregationQuery', body);
     assert.deepEqual(
       [...capture.recorder.skips.entries()].sort(),
       [
-        ['aggregation-query', 1],
         ['partition-query', 1],
         ['unsupported-rpc', 1],
+        ['unsupported-shape', 1],
       ],
     );
     assert.equal(capture.recorder.shapes.length, 0);
@@ -332,6 +337,16 @@ function webFixture(name) {
   return found;
 }
 
+const { cases: webAggregationCases } = JSON.parse(
+  readFileSync(fileURLToPath(new URL('fixtures/web-sdk-aggregation.json', import.meta.url)), 'utf8'),
+);
+
+function webAggregationFixture(name) {
+  const found = webAggregationCases.find((entry) => entry.name === name);
+  assert.ok(found, `web aggregation fixture "${name}" is missing`);
+  return found;
+}
+
 /** An HTTP/1.1 upstream that answers everything with 200 and records each request whole. */
 function stubHttp1Upstream() {
   const seen = [];
@@ -369,6 +384,59 @@ test('a REST documents:runQuery is recorded from its JSON body and forwarded int
       ['items::COLLECTION_GROUP::AND(sku:EQUAL)::qty:ASCENDING|__name__:ASCENDING'],
     );
     assert.equal(capture.recorder.skips.size, 0);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+/**
+ * `documents:runAggregationQuery` over HTTP/1.1, from a real captured body (issue #93).
+ *
+ * Both the full SDK's `getCountFromServer`/`getAggregateFromServer` and `firebase/firestore/lite`'s
+ * `getCount`/`getAggregate` reach the emulator this same way — a plain REST POST, never a WebChannel
+ * forward channel — which `capture-web-fixtures.mjs`'s docblock explains (`RestConnection`'s
+ * non-streaming invoke, shared by both builds) and this repository's own capture confirmed: `full`
+ * and `lite` in `web-sdk-aggregation.json` are byte-identical for every case. So there is no separate
+ * "full SDK aggregation" path for the proxy to route — the REST handling `classifyHttp1` already
+ * gives `documents:runQuery` covers this endpoint too, and this test is what pins that down against
+ * a body neither SDK build was asked to produce for a test; it captured them for real.
+ */
+test('a REST documents:runAggregationQuery is recorded from its JSON body, from both SDK builds', async () => {
+  const upstream = stubHttp1Upstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: () => {} });
+  try {
+    const { full, lite } = webAggregationFixture('sum and average together');
+    // Confirmed here, not merely asserted in the docblock above: if a future SDK release makes the
+    // two builds diverge, this is what would notice.
+    assert.equal(full.body, lite.body);
+
+    const response = await post(capture.address, full.path, full.body, { 'content-type': full.contentType });
+    assert.equal(response.status, 200);
+    assert.equal(capture.recorder.observed, 1);
+    assert.equal(capture.recorder.skips.size, 0);
+    assert.deepEqual(
+      capture.recorder.aggregations.map((shape) => shape.key),
+      ['aggregate(orders::COLLECTION::AND()::)::AVG:amount|SUM:amount'],
+    );
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
+test('the filtered-collection-group aggregation fixture decodes with its where and scope intact', async () => {
+  const upstream = stubHttp1Upstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress, onWarning: () => {} });
+  try {
+    const { full } = webAggregationFixture('a count over a filtered collection-group query');
+    await post(capture.address, full.path, full.body, { 'content-type': full.contentType });
+    assert.deepEqual(
+      capture.recorder.aggregations.map((shape) => shape.key),
+      ['aggregate(items::COLLECTION_GROUP::AND(sku:EQUAL)::)::COUNT'],
+    );
   } finally {
     await capture.close();
     upstream.server.close();
@@ -523,6 +591,10 @@ test('REST calls the corpus cannot model are counted under the reasons gRPC call
   try {
     const documents = '/v1/projects/p/databases/(default)/documents';
     const text = { 'content-type': 'text/plain' };
+    // `runAggregationQuery` is captured as of issue #93; an empty `structuredAggregationQuery` is
+    // not a message a conforming client sends (it carries no inner query), so it counts as
+    // `unsupported-shape` here rather than joining the skip reasons below — see
+    // `decode-json.test.js` for the shapes this endpoint does capture.
     await post(capture.address, `${documents}:runAggregationQuery`, '{"structuredAggregationQuery":{}}', text);
     await post(capture.address, `${documents}:partitionQuery`, '{"structuredQuery":{}}', text);
     await post(capture.address, `${documents}:executePipeline`, '{}', text);
@@ -540,11 +612,11 @@ test('REST calls the corpus cannot model are counted under the reasons gRPC call
     assert.deepEqual(
       [...capture.recorder.skips.entries()].sort(),
       [
-        ['aggregation-query', 1],
         ['partition-query', 1],
         ['undecodable-message', 1],
         ['unsupported-encoding', 1],
         ['unsupported-rpc', 1],
+        ['unsupported-shape', 1],
       ],
     );
   } finally {
@@ -560,7 +632,10 @@ test('classifyHttp1 reads the REST custom method and the WebChannel path, and le
   assert.deepEqual(classifyHttp1('POST', `${documents}/orders/o1:runQuery`), { kind: 'record', method: 'RestRunQuery' });
   assert.deepEqual(classifyHttp1('POST', `${documents}:runQuery?alt=json`), { kind: 'record', method: 'RestRunQuery' });
   assert.deepEqual(classifyHttp1('POST', `${documents}/orders/a:b:runQuery`), { kind: 'record', method: 'RestRunQuery' });
-  assert.deepEqual(classifyHttp1('POST', `${documents}:runAggregationQuery`), { kind: 'skip', reason: 'aggregation-query' });
+  assert.deepEqual(classifyHttp1('POST', `${documents}:runAggregationQuery`), {
+    kind: 'record',
+    method: 'RestRunAggregationQuery',
+  });
   assert.deepEqual(classifyHttp1('POST', `${documents}:partitionQuery`), { kind: 'skip', reason: 'partition-query' });
   assert.deepEqual(classifyHttp1('POST', `${documents}:somethingNew`), { kind: 'skip', reason: 'unsupported-rpc' });
   // REST spells it, the Web SDK never sends it, and it is a query-bearing call this package does not read.

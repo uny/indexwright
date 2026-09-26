@@ -693,7 +693,7 @@ collapsing it to one disjunct would describe a query that was never issued.
 
 ```jsonc
 {
-  "corpusVersion": 2,
+  "corpusVersion": 3,
   "producers": [
     { "name": "orders-service", "revision": "9c1f2ab" }
   ],
@@ -713,15 +713,30 @@ collapsing it to one disjunct would describe a query that was never issued.
       ]
     }
   ],
-  "skipped": ["aggregation-query"]
+  "aggregations": [
+    {
+      "key": "aggregate(orders::COLLECTION::AND()::)::COUNT|SUM:amount",
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "where": { "op": "AND", "filters": [] },
+      "orderBy": [],
+      "aggregations": [
+        { "op": "COUNT", "field": null },
+        { "op": "SUM", "field": "amount" }
+      ]
+    }
+  ],
+  "skipped": ["vector-query"]
 }
 ```
 
 A node carrying `filters` is a composite; a node carrying `fieldPath` is a leaf; no node carries
 both, and none carries neither. Every field is always present, as in §6: `where` is a composite even
 when the query filtered nothing, `orderBy` is `[]` rather than omitted, and `skipped` is `[]` on a
-run that discarded nothing. `queries` is sorted by `key` and `skipped` holds the distinct reasons
-observed, sorted ascending — a set, so that it is as diff-stable as the rest of the file. Both sorts
+run that discarded nothing. `queries` is sorted by `key`, `aggregations` is sorted by its own `key`
+the same way (present as a member only from `corpusVersion` 3 — see *Aggregation queries*, below —
+and `[]` on a corpus naming none), and `skipped` holds the distinct reasons observed, sorted
+ascending — a set, so that it is as diff-stable as the rest of the file. Both sorts
 compare by Unicode code point. Counts for each reason go to stderr.
 
 The stored `where` is the normalised tree the key was computed from, not the tree as it arrived:
@@ -921,6 +936,101 @@ instrument nor replay separates, and it is the shape of a false positive this ru
 A `check` that misreports a shape this section calls value-independent is the observation that would
 overturn it, and it should be read that way rather than as a bug in replay.
 
+### Aggregation queries (v0.4, `corpusVersion` 3)
+
+`count()`, `sum(field)`, and `average(field)` travel as `RunAggregationQuery`, whose
+`StructuredAggregationQuery` carries the same `StructuredQuery` the RPCs above capture, plus a
+`repeated Aggregation` — `count`, `sum`, or `avg`, each with an optional `alias`. v0.2 declined the
+whole RPC: an aggregation's index requirements are not necessarily the inner query's, and recording
+the inner query alone would misreport them. That is still true, and it is why what follows records
+the *pair* rather than the inner query on its own — but declining the RPC left a hole that is not
+small in practice: measured on a prospective adopter's backend, more than half of what a recorder
+observed was a `RunAggregationQuery` it discarded.
+
+**An aggregation entry is its own kind, not a `QueryShape` with an extra member.** It carries the
+inner query's four fields — `collectionGroup`, `queryScope`, `where`, `orderBy` — plus
+`aggregations`, a set of `{ "op", "field" }` pairs: `op` is `COUNT`, `SUM`, or `AVG`; `field` is the
+field path for `SUM`/`AVG` and `null` for `COUNT`, which aggregates the matched document rather than
+one field. The set is sorted and de-duplicated — same-op, same-field aggregations run twice describe
+one query, and index selection does not depend on how many times a suite asked for the same
+aggregate, the same argument *Canonical query key* makes for `AND`/`OR` children.
+
+**The field of a `SUM` or `AVG` is part of the index requirement, and this is measured.** Probe step
+5f (2026-09-26) put `count()`, `sum(amount)` and `average(amount)` over `a == · , b > ·` to a target
+holding the composite `(a, b)`, which serves that query as a plain read. `count()` was served. `sum`
+and `average` answered `FAILED_PRECONDITION`, and the index the error asked for was
+`(a, b, amount, __name__)`. So a `COUNT` needs what its inner query needs, but a `SUM`/`AVG` needs its
+field in the index as well. That is why the entry records the aggregation list together with the
+inner query. An entry recorded as its inner query alone would have reported that shape covered when
+it is not, which is the false clean §2 ranks worst. The corpus keeps each `SUM`/`AVG` field in the
+key for that reason.
+
+What step 5f did not reach is an aggregation over **two or more** fields. Sorting the set assumes
+that the order the aggregations were listed in does not change which index is required. If two
+aggregated fields must appear in the index in the order the client listed them, the sort would
+replay a different query from the one recorded. That is unmeasured. It is the next thing to probe
+before a corpus with multi-field aggregations is reported on with confidence.
+
+**Values, aliases, and `Count.up_to` are not recorded**, on the same grounds *What a shape is*
+gives for recording no `limit`/`offset`/`select`: none of the three changes which index serves the
+query.
+`up_to` bounds the count's scan and does not change index selection; an `alias` is a client-chosen
+string with no bearing on the index at all, and recording it would be exactly the kind of
+free-of-invention wire text §6 already refuses for `skipped`.
+
+**The canonical key is `aggregate(<inner key>)::<aggregations>`**, where `<inner key>` is the plain
+`<collectionGroup>::<queryScope>::<where>::<orderBy>` key the inner query would have on its own, and
+`<aggregations>` is `<op>` or `<op>:<fieldPath>` per entry, escaped and joined by `|` the way a
+filter leaf is. This key can never collide with a plain `QueryShape` key over the same inner query,
+and the proof is in what `escapeComponent` cannot produce: it escapes every `(` in its input to the
+two-character sequence `\(`, so a plain key's first component — `escapeComponent(collectionGroup)`,
+read up to its first unescaped `::` — never contains a raw `(` at all, whatever the collection is
+named, including literally `aggregate`. The `aggregate(` prefix's raw `(` therefore sits at an offset
+no plain key can reach. `queries` and `aggregations` are consequently disjoint namespaces by
+construction, not by convention, and a corpus may hold a plain entry and an aggregation entry over
+the identical inner query without either shadowing the other.
+
+**`corpusVersion` is 3.** `aggregations` is a corpus member present only from this version, on the
+same terms `producers` is present only from version 2 — omitted below the version that defines it,
+refused if present below it, and read as `[]` on a corpus that names none. `aggregation-query` moves
+to the reasons *What is not captured* accepts but no longer writes: a corpus committed by v0.2 or
+v0.3, which declined every `RunAggregationQuery` under that name, still reads whole. An `Aggregation`
+naming none of `count`/`sum`/`avg` — a message no SDK at the pinned client version emits — is skipped
+as `unsupported-shape` rather than under a name of this specification's own invention; the vocabulary
+stays closed. The inner query is read through the same path `RunQuery`'s is, so the filter-depth
+ceiling and the `find_nearest` refusal (*What is not captured*, below) apply to it unchanged.
+
+**Replay asks the identical aggregation, through `Query.count()` or `Query.aggregate({...})`,
+depending on which oracle is asked (§3, issue #91's `--oracle read|explain`).** The inner query is
+planned exactly as a plain entry's is; `count()` is used for a bare `COUNT` and `aggregate()`
+otherwise, with invented, call-scoped alias keys — never the wire's `alias`, which was never
+recorded and would not have been a safe re-use even if it had been, since two entries may have
+reused one alias for different aggregations. That an aggregation is served by replaying the
+aggregation, with Firestore deciding, is consistent with §3: nothing about index *matching* is
+reimplemented, only which SDK call is issued.
+
+**No `limit` is applied to an aggregation replay, under either oracle.** *Replay without values*
+measured `limit(1)` against eight plain shapes before applying it there; no equivalent measurement
+exists for an aggregation, and the reasoning does not carry over even provisionally. A `count()` or
+`aggregate()` call has no `.limit()` to attach one to, and reasoning about what a limit would mean is
+moot for `explain`, which reads nothing regardless. Under `--oracle read`, though, an aggregation
+over a shape like `!=` is *inferred* to scan the matching index range to produce its number, on what
+a `count()`/`sum()`/`average()` must do to answer correctly — a plain query's `limit(1)` stops at the
+first document, and nothing analogous bounds an aggregate's own scan. That inference is not a
+measurement: no read-cost signal comparable to `limit.mjs`'s document counts has been taken for an
+aggregation (`AggregateQuerySnapshot` gives no count to read one off), and probe step 5f, which
+measured selection and oracle agreement, says it did not measure cost. The package README's guidance to prefer
+`--oracle explain` for a corpus carrying aggregation entries follows from the inference and applies
+with particular force to it regardless, on the same conservative footing every other unmeasured
+assumption in this section is held to.
+
+**What probe step 5f measured (2026-09-26).** `count`/`sum`/`avg` over a covered and an uncovered
+field pair, under both oracles. `read` and `explain` agreed on every one of the six shapes. Selection
+is as stated above: `COUNT` follows the inner query, and `SUM`/`AVG` also need the aggregated field.
+Read cost was not measured.
+
+Vector search (`find_nearest`) is unaffected and stays declined — see *What is not captured*, below.
+
 ### What is not captured
 
 `record` captures `RunQuery`, and the query a `Listen` target carries. A snapshot listener issues
@@ -944,20 +1054,30 @@ arrive under either name the mapping gives them — the lowerCamelCase one the F
 the original proto name a conforming writer may — and enums arrive as names rather than numbers;
 nothing about what a shape is changes,
 and the corpus does not say which transport carried an entry any more than it says which RPC did.
-The REST spellings of the calls declined below are declined under the same reasons — a
-`documents:runAggregationQuery` is an `aggregation-query` — and a custom method the vocabulary has
-never heard of is `unsupported-rpc` whether it arrives as a gRPC `:path` or a REST suffix. The Web
-SDK does normalise a query before sending it, and *Implicit fields are not materialised* above says
-what that means for the file.
+The REST spelling of `RunAggregationQuery`, `documents:runAggregationQuery`, is read under the same
+rules as its gRPC form — see *Aggregation queries*, below — and the REST spellings of the calls
+declined below are declined under the same reasons; a custom method the vocabulary has never heard
+of is `unsupported-rpc` whether it arrives as a gRPC `:path` or a REST suffix. **This is the one call
+both Web SDK builds reach the same way, and not because the RPC is unary.** `RunAggregationQuery` is
+server-streaming in the v1 proto, `returns (stream RunAggregationQueryResponse)`, the same as
+`RunQuery` — this package's own decoder comments (`proxy.ts`, `recorder.ts`) say so, since the corpus
+reads whichever transport carries it. The Web SDK nonetheless invokes it through
+`RestConnection`'s *unary* `invokeRPC` path rather than the WebChannel streaming path it reserves for
+`Listen`/`Write`: that path issues one REST POST and collects the streamed responses into a single
+reply itself — the SDK's own comment on it: "the REST API automatically aggregates all of the
+streamed results, so we can just use the normal invoke() method." `count()`/`sum()`/`average()`
+therefore post to `documents:runAggregationQuery` from the full SDK's browser build —
+`getCountFromServer`, `getAggregateFromServer` — exactly as they do from `firestore/lite`'s
+`getCount`/`getAggregate`; neither goes out on the WebChannel forward channel a plain query does.
+The two builds' bodies were captured independently and are byte-identical, which is a fact about this
+one release of the shared internals rather than a guarantee — see
+`packages/record/scripts/capture-web-fixtures.mjs`. The Web SDK does normalise a query before
+sending it, and *Implicit fields are not materialised* above says what that means for the file.
 
 Everything else the proxy sees, it counts under one of the reasons below and records nothing:
 
 - **`PartitionQuery`** — carries a `StructuredQuery` the same way, but as a bulk-read entry point
   rather than an application query. Counted as `partition-query`.
-- **`RunAggregationQuery`** — `count()`, `sum()`, and `average()` carry a `StructuredQuery` and have
-  their own index requirements, which are not necessarily those of the underlying query. Recording
-  the inner query would misreport them, so v0.2 counts them as `aggregation-query`. Capturing them
-  properly is a v0.3-or-later extension.
 - **`find_nearest`** — vector search is counted as `vector-query` for the same reason: it is served
   by a `vectorConfig` index whose matching rule this specification does not yet model.
 - **A shape the vocabulary cannot express** — an unrecognised or unspecified enum value, or a `from`

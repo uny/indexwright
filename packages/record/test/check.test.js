@@ -11,6 +11,7 @@ import {
   DEFAULT_SETTLE_MS,
   parseCorpus,
   serialiseCorpus,
+  toAggregationShape,
   toQueryShape,
 } from '../dist/index.js';
 
@@ -101,6 +102,34 @@ function corpusOf(...wheres) {
   return serialiseCorpus(buildCorpus(shapes, []));
 }
 
+/**
+ * A real `corpusVersion` 2 corpus (issue #93): `producers` present, `aggregations` absent — the
+ * shape a recorder from before this release actually wrote, and distinct from `corpusOf`'s v3
+ * output only in that member set. Built through `buildCorpus`/`serialiseCorpus` rather than by
+ * hand, so it is held to the same round-trip discipline every other corpus in this file is.
+ */
+function v2CorpusOf(...wheres) {
+  const shapes = wheres.map((where) =>
+    toQueryShape({ collectionGroup: 'orders', queryScope: 'COLLECTION', where, orderBy: [] }),
+  );
+  return serialiseCorpus({ ...buildCorpus(shapes, []), corpusVersion: 2 });
+}
+
+/** A corpus of one aggregation entry over `orders` (issue #93), optionally beside a plain query too. */
+function aggregationCorpusOf(aggregations, { where: plainWhere } = {}) {
+  const aggregationShapes = [toAggregationShape({ query: { collectionGroup: 'orders', queryScope: 'COLLECTION', where: null, orderBy: [] }, aggregations })];
+  const shapes =
+    plainWhere === undefined
+      ? []
+      : [toQueryShape({ collectionGroup: 'orders', queryScope: 'COLLECTION', where: plainWhere, orderBy: [] })];
+  return serialiseCorpus(buildCorpus(shapes, [], [], aggregationShapes));
+}
+
+/** The §7 key for a bare aggregation over `orders`, which is what `aggregationCorpusOf` builds. */
+function aggregationKeyOf(aggregations) {
+  return toAggregationShape({ query: { collectionGroup: 'orders', queryScope: 'COLLECTION', where: null, orderBy: [] }, aggregations }).key;
+}
+
 /** `ONE_QUERY`, but produced by `producers`. */
 function producedBy(...producers) {
   return serialiseCorpus(
@@ -141,7 +170,7 @@ function keyOf(field) {
   }).key;
 }
 
-function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses = [], corpus = ONE_QUERY, corpora, declared = DECLARED, baseline, requireIdentity = false, oracle = 'read', ...rest } = {}) {
+function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses = [], aggregationStatuses = [], corpus = ONE_QUERY, corpora, declared = DECLARED, baseline, requireIdentity = false, oracle = 'read', ...rest } = {}) {
   // `corpora` names several parts as `{ path: text }`; `corpus` is the one-part shorthand every test
   // written before issue #56 uses, and is the same thing with one entry under the default path.
   const files = corpora ?? { [COMMAND.corpus[0]]: corpus };
@@ -149,6 +178,7 @@ function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses 
   const said = [];
   const closed = { lister: 0, replayer: 0 };
   const replayed = [];
+  const replayedAggregations = [];
   const replayerCalls = [];
   const slept = [];
   let clock = 0;
@@ -156,6 +186,7 @@ function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses 
   // The field listing, queued the same way: each poll takes one, and the last repeats.
   const fieldQueue = [...fieldListings];
   const outcomes = [...statuses];
+  const aggregationOutcomes = [...aggregationStatuses];
 
   const options = {
     now: () => clock,
@@ -196,6 +227,10 @@ function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses 
           replayed.push(plan);
           return outcomes.shift() ?? { kind: 'served' };
         },
+        runAggregation: async (plan) => {
+          replayedAggregations.push(plan);
+          return aggregationOutcomes.shift() ?? { kind: 'served' };
+        },
         close: async () => {
           closed.replayer += 1;
         },
@@ -208,6 +243,7 @@ function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses 
   return {
     closed,
     replayed,
+    replayedAggregations,
     replayerCalls,
     slept,
     said: () => said.join(''),
@@ -231,6 +267,85 @@ test('a corpus the candidate set covers exits 0, having asked the target about e
   assert.equal(await h.run(), 0);
   assert.equal(h.replayed.length, 1);
   assert.match(h.said(), /1 query replayed, 0 not served/);
+});
+
+/**
+ * End-to-end aggregation coverage (issue #93), through the same fake replayer every other `check`
+ * test uses — `run` for a plain entry, `runAggregation` for an aggregation one — so these tests are
+ * about `check.ts`'s own dispatch and report, not about a real client.
+ */
+
+test('a corpus holding only an aggregation is asked through runAggregation, and served exits 0', async () => {
+  const h = harness({ corpus: aggregationCorpusOf([{ op: 'COUNT', field: null }]) });
+  assert.equal(await h.run(), 0);
+  assert.equal(h.replayed.length, 0);
+  assert.equal(h.replayedAggregations.length, 1);
+  assert.match(h.said(), /1 query replayed, 0 not served/);
+});
+
+test('an aggregation the candidate set cannot serve is the finding, reported under its own key', async () => {
+  const key = aggregationKeyOf([{ op: 'SUM', field: 'amount' }]);
+  const h = harness({
+    corpus: aggregationCorpusOf([{ op: 'SUM', field: 'amount' }]),
+    aggregationStatuses: [{ kind: 'uncovered', message: 'needs an index' }],
+  });
+  assert.equal(await h.run(), 1);
+  assert.match(h.said(), new RegExp(`not served: "${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+  assert.match(h.said(), /needs an index/);
+});
+
+test('a plain query and an aggregation in the same corpus are both replayed, each through its own method', async () => {
+  const h = harness({
+    corpus: aggregationCorpusOf([{ op: 'COUNT', field: null }], { where: { op: 'AND', filters: [equals('status')] } }),
+  });
+  assert.equal(await h.run(), 0);
+  assert.equal(h.replayed.length, 1);
+  assert.equal(h.replayedAggregations.length, 1);
+  assert.match(h.said(), /2 quer(?:y|ies) replayed, 0 not served/);
+});
+
+test('an aggregation runAggregation reports unbuildable is counted as incomplete, like an unreplayable query', async () => {
+  const h = harness({
+    corpus: aggregationCorpusOf([{ op: 'COUNT', field: null }]),
+    aggregationStatuses: [{ kind: 'unbuildable', message: 'a defect in this tool' }],
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /cannot replay:.*a defect in this tool/);
+  assert.match(h.said(), /this report is incomplete/);
+});
+
+test('an aggregation baseline entry that no longer reproduces is withdrawn, the same way a plain one is', async () => {
+  const key = aggregationKeyOf([{ op: 'COUNT', field: null }]);
+  const h = harness({
+    corpus: aggregationCorpusOf([{ op: 'COUNT', field: null }]),
+    baseline: JSON.stringify({ baselineVersion: 1, accepted: [{ key, reason: 'accepted while #101 is open' }] }),
+  });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /in the baseline, but served/);
+});
+
+/**
+ * A real `corpusVersion` 2 corpus — no `aggregations` member at all, the file every recorder before
+ * this release wrote — replays end-to-end exactly as a v3 one does, both to a served verdict and to
+ * an uncovered one (issue #93). `parseCorpus` already tests that this reads as `aggregations: []`;
+ * these two are that reading carried all the way through `check`'s own gates, rather than stopping
+ * at the parse.
+ */
+test('a lone v2 corpus (no aggregations member) replays end-to-end to a served verdict', async () => {
+  const h = harness({ corpus: v2CorpusOf({ op: 'AND', filters: [equals('status')] }) });
+  assert.equal(await h.run(), 0);
+  assert.equal(h.replayed.length, 1);
+  assert.match(h.said(), /1 query replayed, 0 not served/);
+});
+
+test('a lone v2 corpus (no aggregations member) replays end-to-end to an uncovered verdict', async () => {
+  const h = harness({
+    corpus: v2CorpusOf({ op: 'AND', filters: [equals('unindexed')] }),
+    statuses: [{ kind: 'uncovered', message: '"the query requires an index"' }],
+  });
+  assert.equal(await h.run(), 1);
+  assert.match(h.said(), /not served: "orders::COLLECTION/);
+  assert.match(h.said(), /1 query replayed, 1 not served/);
 });
 
 test('a query the candidate set cannot serve is the finding, and exits 1', async () => {
@@ -1236,7 +1351,7 @@ test('--require-identity refuses a corpus that names no producer, and exits 2', 
 test('--require-identity refuses a version-1 corpus, which is the case it exists for', async () => {
   // The motivating file: one committed before the format carried an identity at all, reaching the
   // guard through the version-1 branch of the reader rather than through an empty `producers` list.
-  const { producers, ...rest } = JSON.parse(ONE_QUERY);
+  const { producers, aggregations, ...rest } = JSON.parse(ONE_QUERY);
   const version1 = JSON.stringify({ ...rest, corpusVersion: 1 });
   const h = harness({ requireIdentity: true, corpus: version1 });
   assert.equal(await h.run(), 2);
@@ -1412,7 +1527,23 @@ test('a part at a different corpusVersion is refused, and the refusal names both
     lister: async () => assert.fail('no client should be built on this path'),
   });
   assert.equal(await h.run(), 2);
-  assert.match(h.said(), /the corpus at "b\.queries\.json" is at corpusVersion 1 and the one at "a\.queries\.json" is at 2/);
+  assert.match(h.said(), /the corpus at "b\.queries\.json" is at corpusVersion 1 and the one at "a\.queries\.json" is at 3/);
+});
+
+test('a real v2 corpus and a v3 one passed as two --corpus arguments are refused, naming the file to re-record', async () => {
+  // Distinct from the test above: that one pairs a hand-adjusted version-1 file (no `producers` at
+  // all) with the default v3 output. This is the pairing #93 actually introduces — a genuine
+  // `corpusVersion` 2 file, `producers` and all, next to one carrying `aggregations` — and it is
+  // refused the same way, naming the older file as the one to re-record.
+  const h = harness({
+    corpora: {
+      'a.queries.json': corpusOf({ op: 'AND', filters: [equals('status')] }),
+      'b.queries.json': v2CorpusOf({ op: 'AND', filters: [equals('status')] }),
+    },
+    lister: async () => assert.fail('no client should be built on this path'),
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /the corpus at "b\.queries\.json" is at corpusVersion 2 and the one at "a\.queries\.json" is at 3/);
 });
 
 test('a second corpus that cannot be read stops the run before the first one is announced', async () => {
