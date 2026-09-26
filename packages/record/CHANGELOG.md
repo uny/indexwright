@@ -22,6 +22,13 @@ again, by its own `corpusVersion`.
   target from this repository; `probe/README.md` step 5e is the runbook for doing so, and its
   results section is marked not yet run pending that. See SPEC.md §3 for the full design note.
 
+### Changed
+
+- **`CheckCommand` gains a required `oracle` member, and `replayClient` a required third
+  argument** (issue #91). A caller that builds a `CheckCommand` by hand, or passes its own
+  `CheckOptions.replayer`, has to name the oracle rather than inherit one. `parseArgs` fills in
+  `read` as before. This is a type change to the provisional JS API (SPEC §10), not to the CLI.
+
 ## [0.10.1] — 2026-09-23
 
 A patch for a path the JS API left unbounded. A corpus built by hand is now held to the filter depth
