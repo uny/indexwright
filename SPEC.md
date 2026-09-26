@@ -170,6 +170,47 @@ Firestore connection.
   missed the second variable entirely, and the reason it missed it is that it reasoned about a client
   it was not using.
 
+  **A shared, live target is a different question, and `check` can be asked it instead (issue #92).**
+  Everything above assumes the throwaway database this verb was designed for: one thing deploys the
+  candidate set to it, one thing measures it, and the strict, both-directions reconcile against
+  `--indexes` is the only reading of "is this covered" worth giving. A project whose validation
+  environments are shared — a dev database that deliberately keeps `HEAD ∪ indexes from unmerged
+  branches` alive, a prod database a second, hand-maintained tool also writes to between drift runs —
+  fails that reconcile *by construction*, on both of its shared targets, for reasons that have nothing
+  to do with whether the corpus is covered. `--target-set live` answers the question such a target
+  actually poses: not "does this file match what is live," but "does what is live right now cover the
+  corpus." It gives up the file-matching question entirely — `--indexes` becomes optional, and when it
+  is given, every live index or override the file does not declare is reported as part of what this
+  pass's coverage *depends on*, and every declaration the target does not hold is reported as absent
+  from the target, so that no query the pass answered went through it. Neither line is a divergence, and neither may be read as one: a pass under
+  this mode says nothing about whether the file's declarations are needed elsewhere, and nothing here
+  authorises removing anything (§2, §8). `--allow-extra <file>` keeps the strict reconcile instead,
+  with a named exception: a file of accepted extras, each entry carrying a `reason` exactly as
+  `--baseline` requires one, mirrors `--baseline`'s shape and consumes only the `extra` half of the
+  reconcile — a declaration the target does not hold still declines the run under this flag, on either
+  side of it, in both the pre-replay gate and the post-replay confirmation. The two are refused
+  together: `--allow-extra` names extras excused from a strict reconcile, and there is no strict
+  reconcile under `--target-set live` for it to excuse anything from.
+
+  Readiness and the post-replay second look (issue #50) are unaffected by either mode, and that is
+  worth being precise about rather than assumed. `establishReadiness` gates on the *whole* live
+  listing — composites and the overrides' nested indexes together — never on the candidate
+  declarations; it says as much of its own accord, since presence needs a file and readiness does not.
+  So a stranger's index still `CREATING` on a shared dev database blocks a `--target-set live` or
+  `--allow-extra` run exactly as it would block the default strict one, until the deadline. That is
+  correct per this section's own readiness rule — a false `FAILED_PRECONDITION` is not less false for
+  arriving on a shared target — but it is a real cost of the dev use case these two flags exist for,
+  and worth a project's own note rather than a surprise met once. The post-replay second look is
+  likewise the same look in every mode: it compares the live listing before replay to the live listing
+  after by resource name and state (added, removed, re-created, regressed from `READY`), which is a
+  question about the target, not about a declaration — so `--target-set live`'s second look withdraws
+  a verdict on exactly the same set of moves the default mode's does, without ever reconciling against
+  a file.
+
+  The target line `check` prints before anything is dialled (§4) names the mode beside the target,
+  in every mode including the default, for the reason it names the target at all: a report from either
+  of these two must never be read as the plain strict pass that is this verb's default.
+
 The v0.2/v0.3 split is deliberate: capture is cheap and offline, while the coverage decision is
 delegated to the platform. Reimplementing index matching would risk emitting false
 `FAILED_PRECONDITION` verdicts and blocking development on a rule that is not published.

@@ -14,10 +14,23 @@ export {
   listLiveIndexes,
   type IndexLister,
 } from './admin.js';
-// The type of `check`'s first parameter. `args.ts` is otherwise the CLI's own business — nothing
-// else from it is published — but a caller that can reach `check` and not name what to pass it has
-// to write `Parameters<typeof check>[0]`.
-export type { CheckCommand } from './args.js';
+// The type of `check`'s first parameter, and the two constants a caller building one by hand needs
+// to name a `targetSet` with. `args.ts` is otherwise the CLI's own business — nothing else from it is
+// published — but a caller that can reach `check` and not name what to pass it has to write
+// `Parameters<typeof check>[0]`.
+export {
+  TARGET_SET_CANDIDATE,
+  TARGET_SET_LIVE,
+  type CheckCommand,
+  type TargetSet,
+} from './args.js';
+export {
+  ALLOW_EXTRA_VERSION,
+  AllowExtraError,
+  parseAllowExtra,
+  type AllowedExtra,
+  type AllowExtra,
+} from './allow-extra.js';
 export {
   BASELINE_VERSION,
   BaselineError,

@@ -21,6 +21,7 @@ const COMMAND = {
   project: 'indexwright-probe',
   database: '(default)',
   corpus: ['firestore.queries.json'],
+  targetSet: 'candidate',
   indexes: 'firestore.indexes.json',
   requireIdentity: false,
 };
@@ -121,12 +122,21 @@ const ONE_QUERY = corpusOf({ op: 'AND', filters: [equals('status')] });
  * every wait the verb takes visible to the test rather than merely slow.
  */
 const BASELINE_PATH = 'firestore.accepted.json';
+const ALLOW_EXTRA_PATH = 'firestore.allow-extra.json';
 
 /** A baseline file naming `keys`, each with a reason, in the shape the reader accepts. */
 function baselineOf(...keys) {
   return JSON.stringify({
     baselineVersion: 1,
     accepted: keys.map((key) => ({ key, reason: `accepted while #101 is open` })),
+  });
+}
+
+/** An `--allow-extra` file naming `keys`, each with a reason, in the shape the reader accepts. */
+function allowExtraOf(...keys) {
+  return JSON.stringify({
+    allowExtraVersion: 1,
+    allowed: keys.map((key) => ({ key, reason: `known extra, tracked in #92` })),
   });
 }
 
@@ -140,7 +150,25 @@ function keyOf(field) {
   }).key;
 }
 
-function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses = [], corpus = ONE_QUERY, corpora, declared = DECLARED, baseline, requireIdentity = false, ...rest } = {}) {
+function harness(opts = {}) {
+  const {
+    listings = [READY],
+    fieldListings = [NO_OVERRIDES],
+    statuses = [],
+    corpus = ONE_QUERY,
+    corpora,
+    declared = DECLARED,
+    baseline,
+    allowExtra,
+    requireIdentity = false,
+    targetSet = 'candidate',
+    indexes: indexesOpt,
+    ...rest
+  } = opts;
+  // Not a destructuring default: `indexes: undefined` is how a `--target-set live` test asks for no
+  // candidate file at all (issue #92), and a destructuring default cannot tell that apart from the
+  // property being left out altogether — both read as `undefined` to it. `in` can.
+  const indexes = 'indexes' in opts ? indexesOpt : COMMAND.indexes;
   // `corpora` names several parts as `{ path: text }`; `corpus` is the one-part shorthand every test
   // written before issue #56 uses, and is the same thing with one entry under the default path.
   const files = corpora ?? { [COMMAND.corpus[0]]: corpus };
@@ -162,9 +190,13 @@ function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses 
       clock += ms;
     },
     readFile: (path) => {
-      if (path === COMMAND.indexes) return JSON.stringify(declared);
+      // `indexes` is `undefined` for a `--target-set live` test that named no `--indexes`; there is
+      // then no path for this branch to answer to, and this fake must never be asked for one — see
+      // the tests that assert nothing was read under that combination.
+      if (indexes !== undefined && path === indexes) return JSON.stringify(declared);
       if (path in files) return files[path];
       if (baseline !== undefined && path === BASELINE_PATH) return baseline;
+      if (allowExtra !== undefined && path === ALLOW_EXTRA_PATH) return allowExtra;
       throw new Error(`ENOENT: no such file or directory, open '${path}'`);
     },
     lister: async () => ({
@@ -210,8 +242,14 @@ function harness({ listings = [READY], fieldListings = [NO_OVERRIDES], statuses 
         {
           ...COMMAND,
           corpus: paths,
+          targetSet,
           requireIdentity,
+          // Set outright, possibly to `undefined`, rather than spread-if-defined: `COMMAND` above
+          // already carries an `indexes` of its own, and a conditional spread of `{}` does not erase
+          // an inherited property the way it omits one that was never there.
+          indexes,
           ...(baseline === undefined ? {} : { baseline: BASELINE_PATH }),
+          ...(allowExtra === undefined ? {} : { allowExtra: ALLOW_EXTRA_PATH }),
         },
         streams,
         options,
@@ -751,6 +789,320 @@ test('a set that could not be compared again is not reported as a set that chang
   assert.match(alsoAdded.said(), /the index set changed while the queries were being answered/);
   assert.match(alsoAdded.said(), /on the target but not declared:/);
   assert.match(alsoAdded.said(), /could not be read \(fields-missing\)/);
+});
+
+// --target-set live (issue #92): vouch for whatever the target holds, rather than for the candidate
+// file matching it exactly. Readiness and the post-replay second look still run against the live
+// listing, as they do by default — `establishReadiness` and `stillHeld` never look at `candidate` at
+// all — so what changes here is only whether `check` gates on a declared reconciliation before and
+// after replay.
+
+test('a live target holding a superset of the candidate file still passes, under --target-set live', async () => {
+  // The dev-database case the issue is about: `HEAD ∪ strangers`, and the candidate file names only
+  // `HEAD`. Under the default strict mode this is exactly the "quiet failure" §2 exists to catch —
+  // see the sibling test a few hundred lines up, which declines on the very same listing. Here it
+  // does not, on purpose: this mode vouches for what is live, not for the file matching it.
+  const stranger = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/carts/indexes/qa-branch',
+    fields: [
+      { fieldPath: 'owner', order: 'ASCENDING' },
+      { fieldPath: '__name__', order: 'ASCENDING' },
+    ],
+  };
+  const h = harness({ targetSet: 'live', listings: [[...READY, stranger], [...READY, stranger], [...READY, stranger]] });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /vouching for that set as it stands \(--target-set=live\)/);
+});
+
+test('--target-set live never declines over the file diverging, missing --indexes included', async () => {
+  // No candidate file at all: `--indexes` is optional in this mode (issue #92), and nothing about
+  // the run should behave as though a file that names nothing had failed to match the target.
+  const noFile = harness({ targetSet: 'live', indexes: undefined });
+  assert.equal(await noFile.run(), 0);
+  assert.doesNotMatch(noFile.said(), /could not read the candidate indexes/);
+  assert.doesNotMatch(noFile.said(), /this coverage depends on/);
+  assert.doesNotMatch(noFile.said(), /no query this pass answered went through it/);
+
+  // The candidate file is still read when given, but only to describe what the coverage depends on
+  // — never as a gate. A file naming a *different* index from what is live still passes.
+  const differentFile = harness({
+    targetSet: 'live',
+    declared: {
+      indexes: [
+        {
+          collectionGroup: 'orders',
+          queryScope: 'COLLECTION',
+          fields: [{ fieldPath: 'placed', order: 'ASCENDING' }],
+        },
+      ],
+    },
+  });
+  assert.equal(await differentFile.run(), 0);
+});
+
+test('with --indexes, --target-set live reports what the pass depends on, never as unneeded', async () => {
+  const extra = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/carts/indexes/extra',
+    fields: [
+      { fieldPath: 'owner', order: 'ASCENDING' },
+      { fieldPath: '__name__', order: 'ASCENDING' },
+    ],
+  };
+  const h = harness({
+    targetSet: 'live',
+    listings: [[...READY, extra], [...READY, extra], [...READY, extra]],
+    declared: {
+      indexes: [
+        ...DECLARED.indexes,
+        {
+          collectionGroup: 'orders',
+          queryScope: 'COLLECTION',
+          fields: [{ fieldPath: 'placed', order: 'ASCENDING' }],
+        },
+      ],
+    },
+  });
+  assert.equal(await h.run(), 0);
+  // The live extra is named as a dependency, not as surplus.
+  assert.match(h.said(), /this coverage depends on, beyond .*firestore\.indexes\.json.*: "carts::COLLECTION/);
+  // The declaration the target does not hold is named as absent from the target, not as wrong or unneeded.
+  assert.match(h.said(), /declared at .*firestore\.indexes\.json.*, not on the target, so no query this pass answered went through it: "orders::COLLECTION::placed:ASCENDING"/);
+  // SPEC §2/§8: never phrased as removable.
+  for (const word of ['unused', 'remove', 'delete', 'unnecessary', 'unneeded']) {
+    assert.doesNotMatch(h.said(), new RegExp(word, 'i'));
+  }
+});
+
+test('--target-set live still withdraws the verdict when the live set moves mid-run (#50, #92)', async () => {
+  const uncovered = { kind: 'uncovered', message: '"needs an index"' };
+
+  // Added: an extra index appears mid-run.
+  const added = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/indexes/added',
+    fields: [
+      { fieldPath: 'status', order: 'ASCENDING' },
+      { fieldPath: 'placed', order: 'ASCENDING' },
+      { fieldPath: '__name__', order: 'ASCENDING' },
+    ],
+  };
+  const grew = harness({ targetSet: 'live', listings: [READY, READY, [...READY, added]], statuses: [uncovered] });
+  assert.equal(await grew.run(), 2);
+  assert.match(grew.said(), /the index set changed while the queries were being answered/);
+
+  // Removed.
+  const shrank = harness({ targetSet: 'live', listings: [READY, READY, []], statuses: [uncovered] });
+  assert.equal(await shrank.run(), 2);
+  assert.match(shrank.said(), /the index set changed while the queries were being answered/);
+
+  // Recreated: gone and appeared under a different name, same fields.
+  const recreated = [{ ...READY[0], name: `${READY[0].name}2` }];
+  const swapped = harness({ targetSet: 'live', listings: [READY, READY, recreated], statuses: [uncovered] });
+  assert.equal(await swapped.run(), 2);
+  assert.match(swapped.said(), /1 index re-created/);
+
+  // Regressed from READY.
+  const regressed = [{ ...READY[0], state: 'NEEDS_REPAIR' }];
+  const damaged = harness({ targetSet: 'live', listings: [READY, READY, regressed], statuses: [uncovered] });
+  assert.equal(await damaged.run(), 2);
+  assert.match(damaged.said(), /1 index in NEEDS_REPAIR/);
+
+  // Held: the same names, all READY — the verdict stands.
+  const held = harness({ targetSet: 'live', listings: [READY, READY, READY], statuses: [uncovered] });
+  assert.equal(await held.run(), 1);
+  assert.match(held.said(), /1 query replayed, 1 not served by the live set/);
+});
+
+test('--target-set live still withdraws when a field override moves mid-run, not only a composite', async () => {
+  // `stillHeld` flattens the overrides' nested indexes in beside the composites (`readiness.ts`'s
+  // `liveSingleFieldIndexes`), so a `fieldOverrides` change is exactly as visible to the second look
+  // as a composite one is — this is the coverage gap review of #96 asked for: every prior live-mode
+  // second-look test moved a composite, and none moved an override.
+  const uncovered = { kind: 'uncovered', message: '"needs an index"' };
+  const rebuilding = harness({
+    targetSet: 'live',
+    declared: DECLARED_WITH_OVERRIDE,
+    fieldListings: [[DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride('CREATING')]],
+    statuses: [uncovered],
+  });
+  assert.equal(await rebuilding.run(), 2);
+  assert.match(
+    rebuilding.said(),
+    /cannot report: the index set changed while the queries were being answered: 1 index still building: ".*\/fields\/tags#COLLECTION_GROUP:CONTAINS"/,
+  );
+  assert.doesNotMatch(rebuilding.said(), /not served by the live set/);
+
+  // And held — the override in place, unchanged — still stands, the same as a composite's own test.
+  const held = harness({
+    targetSet: 'live',
+    declared: DECLARED_WITH_OVERRIDE,
+    fieldListings: [[DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()], [DEFAULT_FIELD, tagsOverride()]],
+    statuses: [uncovered],
+  });
+  assert.equal(await held.run(), 1);
+  assert.match(held.said(), /1 query replayed, 1 not served by the live set/);
+});
+
+// --allow-extra (issue #92): the strict reconcile, kept, with a named exception carved out of the
+// `extra` half alone. `missing` is never excused by it, on either side of the pre-replay gate or the
+// post-replay confirmation.
+
+test('--allow-extra accepts a listed extra and still declines an unlisted one', async () => {
+  const known = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/carts/indexes/known',
+    fields: [
+      { fieldPath: 'owner', order: 'ASCENDING' },
+      { fieldPath: '__name__', order: 'ASCENDING' },
+    ],
+  };
+  const knownKey = 'carts::COLLECTION::owner:ASCENDING';
+  const listed = harness({
+    allowExtra: allowExtraOf(knownKey),
+    listings: [[...READY, known], [...READY, known], [...READY, known]],
+  });
+  assert.equal(await listed.run(), 0);
+  assert.match(listed.said(), /on the target but not declared, allowed by --allow-extra: "carts::COLLECTION/);
+  assert.match(listed.said(), /with 1 extra\(s\) allowed by --allow-extra/);
+
+  const stranger = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/carts/indexes/stranger',
+    fields: [
+      { fieldPath: 'placed', order: 'ASCENDING' },
+      { fieldPath: '__name__', order: 'ASCENDING' },
+    ],
+  };
+  const both = harness({
+    allowExtra: allowExtraOf(knownKey),
+    listings: [[...READY, known, stranger], [...READY, known, stranger], [...READY, known, stranger]],
+  });
+  assert.equal(await both.run(), 2);
+  assert.match(both.said(), /on the target but not declared, allowed by --allow-extra: "carts::COLLECTION::owner:ASCENDING"/);
+  // The unlisted one still blocks, named the ordinary way.
+  assert.match(both.said(), /on the target but not declared: "carts::COLLECTION::placed:ASCENDING"/);
+});
+
+test('--allow-extra never excuses a missing declaration, on either side of the flag', async () => {
+  const h = harness({ allowExtra: allowExtraOf('nomatch::COLLECTION::x:ASCENDING'), listings: [[]] });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /declared but not on the target: "orders::COLLECTION/);
+});
+
+test('--allow-extra refuses an entry with no reason, mirroring --baseline', async () => {
+  const h = harness({
+    allowExtra: JSON.stringify({ allowExtraVersion: 1, allowed: [{ key: 'k', reason: '' }] }),
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /could not read the allow-extra file/);
+  assert.match(h.said(), /allowed\[0\]\.reason is empty/);
+});
+
+test('a stale --allow-extra entry that names no extra at all is reported, honestly', async () => {
+  // "No longer matches an extra on the target" — not "gone", since this run cannot tell an entry
+  // that left from one that was never an extra in the first place, or one whose live counterpart
+  // just became unreadable (see the sibling tests below for those two more specific cases).
+  const h = harness({ allowExtra: allowExtraOf('carts::COLLECTION::owner:ASCENDING') });
+  assert.equal(await h.run(), 0);
+  assert.match(
+    h.said(),
+    /in the --allow-extra file, but no longer matches an extra on the target: "carts::COLLECTION::owner:ASCENDING"/,
+  );
+});
+
+test('a stale --allow-extra entry the candidate file now declares is named as matched, not as absent', async () => {
+  // The file caught up with what used to be an extra: it is `matched`, not `extra`, and saying "not
+  // on the target" about an index the target plainly holds would be exactly the false claim this
+  // wording exists to avoid (review of #96).
+  const known = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/indexes/second',
+    fields: [
+      { fieldPath: 'placed', order: 'ASCENDING' },
+      { fieldPath: '__name__', order: 'ASCENDING' },
+    ],
+  };
+  const knownKey = 'orders::COLLECTION::placed:ASCENDING';
+  const h = harness({
+    allowExtra: allowExtraOf(knownKey),
+    listings: [[...READY, known], [...READY, known], [...READY, known]],
+    declared: {
+      indexes: [...DECLARED.indexes, { collectionGroup: 'orders', queryScope: 'COLLECTION', fields: [{ fieldPath: 'placed', order: 'ASCENDING' }] }],
+    },
+  });
+  assert.equal(await h.run(), 0);
+  assert.match(
+    h.said(),
+    /in the --allow-extra file, but now declared and matched on the target rather than extra: "orders::COLLECTION::placed:ASCENDING"/,
+  );
+  // Not reported under the plain "no longer matches" wording too.
+  assert.doesNotMatch(h.said(), /no longer matches an extra on the target: "orders::COLLECTION::placed:ASCENDING"/);
+});
+
+test('a stale --allow-extra entry names the unreadable-entry ambiguity when one is present', async () => {
+  // A live index this version cannot read (a non-default `unique`, here) carries no identity to be
+  // matched against, so a key that stopped being an extra cannot be told from one whose live
+  // counterpart just became unreadable. The run still declines overall (an unreadable entry makes
+  // the half `indeterminate`), but the stale line itself is checked before that verdict is reached.
+  const unreadable = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/indexes/weird',
+    unique: true,
+  };
+  const h = harness({
+    allowExtra: allowExtraOf('carts::COLLECTION::owner:ASCENDING'),
+    listings: [[...READY, unreadable], [...READY, unreadable], [...READY, unreadable]],
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(
+    h.said(),
+    /in the --allow-extra file, but no longer matches an extra on the target — or its live counterpart could not be compared, since some entries could not be read this run: "carts::COLLECTION::owner:ASCENDING"/,
+  );
+});
+
+test('an allowed extra still withdraws the verdict if it stops being excusable mid-run', async () => {
+  // The extra that was allowed disappears, and an *unlisted* one takes its place in the same run.
+  // The post-replay netting must still see it as blocking rather than passing on the strength of the
+  // pre-replay look.
+  const known = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/carts/indexes/known',
+    fields: [
+      { fieldPath: 'owner', order: 'ASCENDING' },
+      { fieldPath: '__name__', order: 'ASCENDING' },
+    ],
+  };
+  const unlisted = { ...known, name: `${known.name}-2`, fields: [
+    { fieldPath: 'placed', order: 'ASCENDING' },
+    { fieldPath: '__name__', order: 'ASCENDING' },
+  ] };
+  const knownKey = 'carts::COLLECTION::owner:ASCENDING';
+  const h = harness({
+    allowExtra: allowExtraOf(knownKey),
+    listings: [[...READY, known], [...READY, known], [...READY, unlisted]],
+  });
+  assert.equal(await h.run(), 2);
+  // Said once, against the pre-replay look, and not repeated for the post-replay confirmation. (The
+  // pass summary's own "N extra(s) allowed by --allow-extra" is not printed here at all, since the
+  // run declines — so it is not a second match to guard against, but checked by name all the same.)
+  const occurrences = (h.said().match(/on the target but not declared, allowed by --allow-extra:/g) ?? []).length;
+  assert.equal(occurrences, 1);
+});
+
+test('--target-set live and --allow-extra are refused together by the exported check(), not only by the CLI parser', async () => {
+  // The boundary an untyped caller presents `parseCheck`'s own refusal at, for a caller that builds
+  // a `CheckCommand` directly rather than through the command line (issue #92).
+  const h = harness({ targetSet: 'live', allowExtra: allowExtraOf('k') });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /--allow-extra names extras excused from a strict reconcile/);
+});
+
+test('--target-set candidate with no --indexes is refused by the exported check() too', async () => {
+  const h = harness({ indexes: undefined });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /--indexes is required under --target-set=candidate/);
 });
 
 test('a declared override the target holds is vouched for beside the composites, and counted', async () => {

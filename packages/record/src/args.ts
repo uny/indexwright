@@ -29,6 +29,20 @@ export interface RecordCommand {
   readonly revision?: string;
 }
 
+/**
+ * What `check` vouches for, once it has established readiness (SPEC §3, issue #92).
+ *
+ * `'candidate'` is the default and the verb's original shape: the target must hold exactly the file
+ * at `--indexes`, in both directions, or the run declines. `'live'` gives that question up and vouches
+ * instead for whatever set the target holds at the moment it is asked — see `check.ts` and SPEC §3's
+ * *live target* section for what that does and, just as importantly, does not claim.
+ */
+export const TARGET_SET_CANDIDATE = 'candidate';
+export const TARGET_SET_LIVE = 'live';
+export const TARGET_SET_OPTION = '--target-set';
+export const ALLOW_EXTRA_OPTION = '--allow-extra';
+export type TargetSet = typeof TARGET_SET_CANDIDATE | typeof TARGET_SET_LIVE;
+
 export interface CheckCommand {
   readonly kind: 'check';
   /** The project the replay target lives in. Never resolved from the environment — see `parseCheck`. */
@@ -45,8 +59,25 @@ export interface CheckCommand {
    * was not, which is the ordinary shape of the failure this tool exists to catch (issue #56).
    */
   readonly corpus: readonly string[];
-  /** The candidate index declarations the target is supposed to be carrying. */
-  readonly indexes: string;
+  /**
+   * Which set `check` vouches for. `'candidate'` unless `--target-set live` was given.
+   *
+   * @see TargetSet
+   */
+  readonly targetSet: TargetSet;
+  /**
+   * The candidate index declarations the target is supposed to be carrying, or `undefined`.
+   *
+   * Required and defaulted under `targetSet: 'candidate'`, where it is the whole basis of the verdict
+   * — this member is a plain `string` there in every command `parseCheck` returns. Optional under
+   * `targetSet: 'live'`: that mode vouches for the live set whether or not a file is named, and a file
+   * there is read only to describe what the live set is depended on for, never to gate on. Left
+   * `undefined` rather than defaulted to `DEFAULT_INDEXES` in that case, on the same principle
+   * `baseline` is left undefined — a default path that happened to exist would change what is
+   * *reported* (though never, in live mode, what is vouched for) because of a file nobody pointed at,
+   * the ambient-input failure issue #8 is about.
+   */
+  readonly indexes?: string;
   /**
    * Gaps this project has already accepted, or `undefined` when none were named.
    *
@@ -57,6 +88,14 @@ export interface CheckCommand {
    * about, arriving through the filesystem instead of the environment.
    */
   readonly baseline?: string;
+  /**
+   * Extras this project has already accepted on a shared target, or `undefined` when none were named.
+   *
+   * Meaningful only under `targetSet: 'candidate'` — see `parseCheck`'s refusal of the two together.
+   * Same no-default rule as `baseline`, and the same reason: which extras are excused must come from
+   * a file somebody named, never from one that happened to be sitting in the working directory.
+   */
+  readonly allowExtra?: string;
   /**
    * Whether the run refuses a corpus that names no producer.
    *
@@ -317,8 +356,14 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
   // whatever `firestore.queries.json` happens to be sitting in the working directory — which is the
   // ambient-input failure #8 is about, arriving through a default instead of the environment.
   const corpora: string[] = [];
-  let indexes = DEFAULT_INDEXES;
+  let indexes: string | undefined;
+  // Tracked separately from `indexes` itself: under `targetSet: 'live'` the default must not be
+  // filled in at all (see `CheckCommand.indexes`), so this parser needs to know whether the value it
+  // is holding at the end of the loop is one the caller wrote or the one it is about to invent.
+  let indexesGiven = false;
   let baseline: string | undefined;
+  let allowExtra: string | undefined;
+  let targetSet: TargetSet = TARGET_SET_CANDIDATE;
   let requireIdentity = false;
 
   for (let i = 0; i < options.length; i += 1) {
@@ -373,10 +418,24 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
       }
       case '--indexes':
         indexes = requirePath(takeValue(), name);
+        indexesGiven = true;
         break;
       case '--baseline':
         baseline = requirePath(takeValue(), name);
         break;
+      case ALLOW_EXTRA_OPTION:
+        allowExtra = requirePath(takeValue(), name);
+        break;
+      case TARGET_SET_OPTION: {
+        const value = takeValue();
+        if (value !== TARGET_SET_CANDIDATE && value !== TARGET_SET_LIVE) {
+          throw new UsageError(
+            `${name} must be "${TARGET_SET_CANDIDATE}" or "${TARGET_SET_LIVE}", got ${render(value)}`,
+          );
+        }
+        targetSet = value;
+        break;
+      }
       case REQUIRE_IDENTITY:
         // Takes no value, for the reason `--allow-remote-emulator` does not: with the `=value`
         // already split off, `--require-identity=false` would read as "off" and turn the guard on.
@@ -393,6 +452,28 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
   // that saying which one is absent is the difference between a fix and a re-read of the usage.
   if (project === undefined) throw new UsageError('--project is required; check does not infer the target');
   if (database === undefined) throw new UsageError('--database is required; the default database is named "(default)"');
+
+  // Refused as a combination, before either mode's own defaults are filled in. `--allow-extra` is the
+  // throwaway model's strictness kept, with a named exception carved out of the extra half — and
+  // under `--target-set live` there is no strictness left for it to except anything from: that mode
+  // vouches for whatever the target holds, extras and all, so a list of extras to excuse would be
+  // read against a question this run is not asking. Refusing legibly here, rather than silently
+  // ignoring `--allow-extra`, is what keeps a report from being read as stricter than it was — the
+  // same reason the target line names the mode at all.
+  if (targetSet === TARGET_SET_LIVE && allowExtra !== undefined) {
+    throw new UsageError(
+      `${ALLOW_EXTRA_OPTION} names extras excused from a strict reconcile, and ${TARGET_SET_OPTION}=${TARGET_SET_LIVE} ` +
+        'runs no strict reconcile for them to be excused from; pass one or the other',
+    );
+  }
+
+  // Defaulted here, once the mode is settled, rather than up front: `targetSet: 'live'` with no
+  // `--indexes` leaves the member unset (see `CheckCommand.indexes`), and filling in
+  // `DEFAULT_INDEXES` for it would be exactly the ambient-input failure `--baseline` avoids and this
+  // parser's own docstring warns about.
+  if (!indexesGiven && targetSet === TARGET_SET_CANDIDATE) {
+    indexes = DEFAULT_INDEXES;
+  }
 
   // Refused after the target is known, so the message can name the database that would have been
   // announced but not measured — which is the whole of what is wrong, and is not obvious from the
@@ -416,17 +497,19 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
     );
   }
 
-  // Spread rather than set to `undefined`, so a command built without a baseline has no member for
-  // one. The two are the same to every reader here; they are not the same to a test that compares
-  // the parsed command against a literal.
+  // Spread rather than set to `undefined`, so a command built without a baseline, an allow-extra
+  // file, or (under live mode) an indexes file has no member for one. The two are the same to every
+  // reader here; they are not the same to a test that compares the parsed command against a literal.
   return {
     kind: 'check',
     project,
     database,
     corpus: corpora.length === 0 ? [DEFAULT_CORPUS] : corpora,
-    indexes,
+    targetSet,
     requireIdentity,
+    ...(indexes === undefined ? {} : { indexes }),
     ...(baseline === undefined ? {} : { baseline }),
+    ...(allowExtra === undefined ? {} : { allowExtra }),
   };
 }
 
@@ -579,6 +662,30 @@ export function canonicalTarget(command: Pick<CheckCommand, 'project' | 'databas
 }
 
 /**
+ * What `check` is about to vouch for, said in the same breath as the target itself.
+ *
+ * `cli.ts` prints this beside `canonicalTarget` before anything is dialled, for the reason it prints
+ * the target at all: it is the other half of what a report cannot be read correctly without, and both
+ * are silent by construction if nobody says them (issue #8, and #92 for this half specifically). A
+ * pass under `--target-set live` says nothing about whether the candidate file's declarations are
+ * needed (SPEC §2, §8), and a pass under `--allow-extra` excuses only the named extras — so a reader
+ * seeing only the target line, with no mode named beside it, would read either as the plain strict
+ * pass that is this verb's default and the one report every other line was written to describe. Said
+ * on every run, including the default, rather than only on the two that depart from it: a rule that
+ * is quiet on the common case and only speaks up on the uncommon one teaches its own silence to be
+ * read as "nothing unusual", which is the reading issue #8's own target line exists to take away.
+ */
+export function targetSetLabel(command: Pick<CheckCommand, 'targetSet' | 'allowExtra'>): string {
+  if (command.targetSet === TARGET_SET_LIVE) {
+    return `vouching for the live index set (${TARGET_SET_OPTION}=${TARGET_SET_LIVE})`;
+  }
+  if (command.allowExtra !== undefined) {
+    return `vouching for the candidate index set (${ALLOW_EXTRA_OPTION} in effect)`;
+  }
+  return 'vouching for the candidate index set';
+}
+
+/**
  * The host half of an emulator address, or a usage error naming what was wrong with it.
  *
  * The proxy parses the same string with the same function, so a value this accepts is one it will
@@ -658,9 +765,26 @@ export function usage(): string {
     '                          one index set consumed by several suites is checked against all of',
     '                          their corpora merged, since a set can satisfy every corpus checked',
     '                          while failing the one that was not',
-    `  --indexes <file>        the candidate index declarations (default: ${DEFAULT_INDEXES})`,
+    `  --indexes <file>        the candidate index declarations (default: ${DEFAULT_INDEXES} under`,
+    `                          ${TARGET_SET_OPTION}=${TARGET_SET_CANDIDATE}; no default, and optional, under`,
+    `                          ${TARGET_SET_OPTION}=${TARGET_SET_LIVE})`,
     '  --baseline <file>       gaps already accepted by this project (no default). An entry in it',
     '                          is reported and does not fail the run; anything else exits 1',
+    `  ${TARGET_SET_OPTION} <${TARGET_SET_CANDIDATE}|${TARGET_SET_LIVE}>`,
+    `                          what to vouch for once the target is ready (default: ${TARGET_SET_CANDIDATE}).`,
+    `                          ${TARGET_SET_CANDIDATE} declines unless the target holds exactly --indexes, in`,
+    `                          both directions. ${TARGET_SET_LIVE} vouches for whatever set the target`,
+    '                          holds instead, and never declines over what it holds beyond that —',
+    '                          the right question for a shared target a second tool also writes to.',
+    '                          A pass under it says nothing about whether --indexes, when given, is',
+    '                          needed; with it, every live index or override not in the file is',
+    '                          reported as depended on, and every declaration not on the target is',
+    '                          reported as absent from it (a fact about the target, not the file)',
+    `  ${ALLOW_EXTRA_OPTION} <file>    extras already accepted by this project (no default; refused together`,
+    `                          with ${TARGET_SET_OPTION}=${TARGET_SET_LIVE}, which excuses every extra already). The`,
+    '                          candidate set otherwise still has to match the target exactly; an',
+    '                          extra named in the file is reported and does not fail the run on its',
+    '                          own — a missing declaration still does, on either side of this flag',
     `  ${REQUIRE_IDENTITY}      refuse a corpus that names no producer, rather than replaying it.`,
     '                          Off by default: a corpus written before the format carried an',
     '                          identity names none, and requiring it always would refuse them all',
@@ -678,11 +802,11 @@ export function usage(): string {
     'Exit codes:',
     '  record  the exit code of <command>, so a failing suite still fails',
     '          2  usage error, or the corpus could not be written',
-    '  check   0  every entry in the corpus was served by the candidate set, or is in the baseline',
+    '  check   0  every entry in the corpus was served by the vouched-for set, or is in the baseline',
     '          1  at least one was not, and is not in the baseline; that is the finding, and the',
     '             oracle is Firestore itself',
     '          2  usage error, or the run could not answer: a file it could not read, a readiness',
-    '             it could not establish, a set that is not the candidate set, an entry it could',
-    '             not replay, or a status it cannot interpret',
+    '             it could not establish, a set this run cannot vouch for, an entry it could not',
+    '             replay, or a status it cannot interpret',
   ].join('\n');
 }

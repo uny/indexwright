@@ -67,14 +67,20 @@ Options:
   --project <id>          project holding the database to replay against (required)
   --database <name>       database within it (required; the default one is named "(default)")
   --corpus <file>         a corpus to replay (default: firestore.queries.json). Repeatable
-  --indexes <file>        the candidate index declarations (default: firestore.indexes.json)
+  --indexes <file>        the candidate index declarations (default: firestore.indexes.json
+                          under --target-set candidate; no default, and optional, under
+                          --target-set live)
   --baseline <file>       gaps already accepted by this project (no default)
+  --target-set <candidate|live>
+                          what to vouch for once the target is ready (default: candidate)
+  --allow-extra <file>    extras already accepted on a shared target (no default; refused
+                          together with --target-set live)
   --require-identity      refuse a corpus that names no producer (off by default)
 ```
 
 | Exit | Meaning |
 |-----:|:--------|
-| 0 | Every entry in the corpus was served by the candidate set, or is in the baseline. |
+| 0 | Every entry in the corpus was served by the vouched-for set (the candidate file by default; the live set under `--target-set live`), or is in the baseline. |
 | 1 | At least one was not, and is not in the baseline. That is the finding. |
 | 2 | Usage error, or the run could not answer. |
 
@@ -232,6 +238,54 @@ moment before the run is waited on too. `ttl` is carried and not compared. The d
 `__default__/*`, is never declared and is not compared either; when it is listed — and every
 observed listing carries it — `check` checks that it holds the three documented indexes, and
 declines if it does not.
+
+**A shared, live target can be vouched for instead, with `--target-set live`.** Everything above
+assumes a throwaway database: one thing deploys the candidate set, one thing measures it, and the
+strict both-directions reconcile is the only useful answer to "is this covered". A validation
+environment that is shared instead — a dev database that deliberately keeps `HEAD ∪ indexes from
+unmerged branches` alive, a prod database a second tool also writes to between drift runs — fails
+that reconcile by construction, for reasons that have nothing to do with the corpus. `--target-set
+live` asks the question such a target actually poses: not "does the file match what's live," but
+"does what's live right now cover the corpus." `--indexes` becomes optional under it; when given,
+every live index or override the file does not declare is reported as part of what this pass's
+coverage *depends on* — never as unneeded or removable — and every declaration the target does not
+hold is reported as not on the target, so no query this pass answered went through it — a fact
+about the target and this run, never a verdict that the declaration is unneeded. Readiness and the post-replay second look still run against the live listing exactly as
+they do by default — including the cost that follows: `check` gates readiness on the *whole* live
+listing, not on the candidate declarations, so a stranger's index still building on a shared dev
+database blocks a `--target-set live` run until the deadline too. **A pass under `--target-set live`
+says nothing about whether the candidate file's declarations are needed elsewhere**, and authorises
+deleting nothing.
+
+**`--allow-extra <file>` keeps the strict reconcile, with named exceptions.** Where `--target-set
+live` gives up the file-matching question, `--allow-extra` keeps it and carves out only the extras a
+project already knows about — the throwaway model's strictness, minus a known, reasoned list of
+surpluses. It mirrors `--baseline`'s shape and rules: every entry names a canonical index or override
+key (SPEC §5) and a non-empty `reason`, printed back on every run that relies on it, and a stale entry
+— one that no longer matches anything extra on the target — is reported so the file can shrink.
+
+```json
+{
+  "allowExtraVersion": 1,
+  "allowed": [
+    { "key": "carts::COLLECTION::owner:ASCENDING", "reason": "dev-only index from #204, not yet merged" }
+  ]
+}
+```
+
+It excuses only the `extra` half of the reconcile, on both the pre-replay gate and the post-replay
+confirmation: a declaration the target does not hold still declines the run regardless of what
+`--allow-extra` names, on either side of the flag. `--target-set live` and `--allow-extra` are
+refused together, legibly: the first runs no strict reconcile for the second to carve an exception
+out of.
+
+**The target line names the mode**, in every run including the default, so a report from either of
+these cannot be read as the plain strict pass this verb defaults to:
+
+```console
+$ indexwright-record check --project p --database dev --target-set live
+indexwright-record: target projects/p/databases/dev, vouching for the live index set (--target-set=live)
+```
 
 **The target is never inferred.** `GOOGLE_CLOUD_PROJECT`, a `gcloud config` default, and the project
 inside application default credentials are all whatever the person running this last worked against

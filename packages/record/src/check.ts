@@ -5,8 +5,10 @@
  * index set may be reported on, `reconcile.ts` and `overrides.ts` decide whether it is the
  * *candidate* set — the composite and the single-field halves of it — `synthesise.ts` decides what
  * a corpus entry replays as, `replay.ts` asks Firestore — the oracle — whether the set covers it,
- * and `baseline.ts` says which gaps this project has already accepted.
- * What is left here is the order they are asked in, the two client lifetimes, and the report.
+ * `baseline.ts` says which gaps this project has already accepted, and `allow-extra.ts` says which
+ * presence divergences it has (SPEC §3, *live target*; issue #92).
+ * What is left here is the order they are asked in, which of the candidate-file questions
+ * `--target-set live` chooses not to ask, and the report.
  *
  * The order is a gate rather than a sequence, and the gating is the point. A report that goes out
  * before readiness is established, or before the observed set is known to be the candidate set, is
@@ -21,13 +23,28 @@ import { readFileSync } from 'node:fs';
 import { normalize, resolve } from 'node:path';
 import { analyse, analyseOverrides, parseDocument, type AnalysedIndex, type AnalysedOverride } from 'indexwright';
 import { adminLister, AdminError, listLiveFields, listLiveIndexes, type IndexLister } from './admin.js';
-import { canonicalTarget, REQUIRE_IDENTITY, render, type CheckCommand } from './args.js';
+import {
+  ALLOW_EXTRA_OPTION,
+  canonicalTarget,
+  REQUIRE_IDENTITY,
+  render,
+  TARGET_SET_LIVE,
+  TARGET_SET_OPTION,
+  type CheckCommand,
+} from './args.js';
+import { parseAllowExtra } from './allow-extra.js';
 import { parseBaseline } from './baseline.js';
 import { messageOf } from './client.js';
 import { mergeCorpora, parseCorpus } from './corpus.js';
 import { liveSingleFieldIndexes, reconcileOverrides, type LiveField, type OverrideReconciliation } from './overrides.js';
 import { isReportable, isTransient, ReadinessGate, stillHeld, DEFAULT_SETTLE_MS, type Held, type LiveIndex, type Readiness } from './readiness.js';
-import { isVouched, reconcile, type LiveCompositeIndex, type Reconciliation } from './reconcile.js';
+import {
+  isVouched,
+  reconcile,
+  type LiveCompositeIndex,
+  type Reconciliation,
+  type ReconciliationVerdict,
+} from './reconcile.js';
 import { planReplay, ReplayError, type ReplayPlan } from './synthesise.js';
 import { replayClient, TargetError, type Replayer } from './replay.js';
 import type { Corpus, Producer, QueryShape } from './types.js';
@@ -86,17 +103,19 @@ interface Planned {
 /**
  * Run the verb, and return the process exit code.
  *
- * - `0` — every entry in the corpus was served by the candidate set, or is named by the baseline.
+ * - `0` — every entry in the corpus was served by the vouched-for set (SPEC §3's *candidate set* by
+ *   default; the *live set*, whatever it turns out to hold, under `--target-set live` — see
+ *   `CheckCommand.targetSet` and issue #92), or is named by the baseline.
  * - `1` — at least one was not, and is not named by the baseline. That is the finding, and the
  *   oracle is Firestore rather than a rule this package applies, so unlike `lint` it is worth
  *   failing a pipeline on by default.
  * - `2` — the run could not answer: a file it could not read, a readiness it could not establish, a
- *   set that is not the candidate set, an entry it could not replay, a status it cannot interpret.
- *   It takes precedence over `1`, because a report that is missing entries is not a clean report
- *   with a caveat — an operator who sees `1` should be able to read it as "these and no others".
+ *   set this run cannot vouch for, an entry it could not replay, a status it cannot interpret. It
+ *   takes precedence over `1`, because a report that is missing entries is not a clean report with a
+ *   caveat — an operator who sees `1` should be able to read it as "these and no others".
  *
- * The target line is written by the caller before this is reached (see `cli.ts`), so that it is on
- * the stream before anything at all happens.
+ * The target line is written by the caller before this is reached (see `cli.ts`), and names the mode
+ * beside the target for the same reason the target itself is named there — see `targetSetLabel`.
  */
 export async function check(
   command: CheckCommand,
@@ -142,19 +161,45 @@ export async function check(
     named.add(normalised);
   }
 
+  const targetSetIsLive = command.targetSet === TARGET_SET_LIVE;
+
+  // The rest of the boundary `parseCheck` presents an untyped caller (issue #92): the two members
+  // `parseCheck` never produces together, and the one member `parseCheck` never leaves unset for the
+  // mode it built. Checked before anything is read, on the same principle the corpus checks above
+  // are — a caller that built its own `CheckCommand` gets the same legible refusal a command line
+  // does, rather than a run that silently reads one flag and ignores the other.
+  if (targetSetIsLive && command.allowExtra !== undefined) {
+    say(
+      `cannot report: ${ALLOW_EXTRA_OPTION} names extras excused from a strict reconcile, and ` +
+        `${TARGET_SET_OPTION}=${TARGET_SET_LIVE} runs no strict reconcile for them to be excused from`,
+    );
+    return 2;
+  }
+  if (!targetSetIsLive && command.indexes === undefined) {
+    say(`cannot report: --indexes is required under ${TARGET_SET_OPTION}=candidate`);
+    return 2;
+  }
+
   // Read and plan before anything is constructed, let alone dialled. Everything up to the first
   // client is offline and costs milliseconds, and everything after it costs a minute of settling at
   // the least — so a mistyped path or an unreplayable corpus should be found on the near side of
   // that wait rather than the far side.
-  let candidate: AnalysedIndex[];
-  let overrides: AnalysedOverride[];
-  try {
-    const document = parseDocument(readFile(command.indexes));
-    candidate = analyse(document);
-    overrides = analyseOverrides(document);
-  } catch (error) {
-    say(`could not read the candidate indexes at ${render(command.indexes)}: ${detail(error)}`);
-    return 2;
+  //
+  // Under `--target-set live` with no `--indexes`, there is nothing to read here: that mode vouches
+  // for the live set regardless of any file, so an empty candidate is not a stand-in for a file that
+  // could not be read, it is the accurate description of "no file was named". See `reportDependencies`
+  // for what an empty candidate does to the dependency report once the live listing is in hand.
+  let candidate: AnalysedIndex[] = [];
+  let overrides: AnalysedOverride[] = [];
+  if (command.indexes !== undefined) {
+    try {
+      const document = parseDocument(readFile(command.indexes));
+      candidate = analyse(document);
+      overrides = analyseOverrides(document);
+    } catch (error) {
+      say(`could not read the candidate indexes at ${render(command.indexes)}: ${detail(error)}`);
+      return 2;
+    }
   }
 
   // Every part read before any is reported on, so that an unreadable second corpus is found before
@@ -292,6 +337,20 @@ export async function check(
     }
   }
 
+  // Read on the same principle: an unreadable `--allow-extra` file is worth finding on the near side
+  // of the settling period, not after it. `command.allowExtra` and `command.targetSet` cannot both
+  // point away from the strict reconcile — the refusal above already returned — so this is reachable
+  // only under the mode `--allow-extra` was built for.
+  let allowedExtra: Map<string, string> | undefined;
+  if (command.allowExtra !== undefined) {
+    try {
+      allowedExtra = new Map(parseAllowExtra(readFile(command.allowExtra)).allowed.map((e) => [e.key, e.reason]));
+    } catch (error) {
+      say(`could not read the allow-extra file at ${render(command.allowExtra)}: ${detail(error)}`);
+      return 2;
+    }
+  }
+
   // Said before anything is dialled, because nothing that follows bears on it. A key the corpus
   // does not hold is accounted for by the corpus alone — no listing, no replay, and no verdict this
   // run might later withdraw can change the answer. It is one of the two ways an entry stops
@@ -328,16 +387,50 @@ export async function check(
     throw error;
   }
 
-  const reconciliation = reconcileBoth(candidate, overrides, live);
-  if (!isVouchedBoth(reconciliation)) {
-    reportDivergence(reconciliation, command.indexes, say);
-    return 2;
+  // The set this run consumed by the two reconciliations to come — the pre-replay gate immediately
+  // below, and the post-replay confirmation in `confirmSetHeld` — is tracked across both so a stale
+  // `--allow-extra` entry (issue #92) is reported once, against everything a full run could have
+  // matched it to, rather than once per reconciliation with the second occurrence read as a second
+  // finding.
+  const excusedKeys = new Set<string>();
+
+  if (targetSetIsLive) {
+    // `--target-set live` gives up the question the block below asks — "is the target's set the
+    // candidate file's set" — in favour of vouching for whatever the target holds. Nothing here
+    // declines on `reconciliation`'s `missing`, `extra`, `unreadable`, or `incomparable`; they are
+    // read only for the dependency report SPEC §3 and the issue ask for, and only when a file was
+    // named at all. §2 and §8 stay governing: a report from this branch never says a declaration is
+    // unneeded, only what the coverage that follows depends on.
+    if (command.indexes !== undefined) {
+      reportDependencies(reconcileBoth(candidate, overrides, live), command.indexes, say);
+    }
+    say(
+      `${count(live.indexes.length, 'index', 'indexes')} and ` +
+        `${count(live.fields.length, 'field', 'fields')} listed on the target; vouching for that set as ` +
+        `it stands (${TARGET_SET_OPTION}=${TARGET_SET_LIVE})`,
+    );
+  } else {
+    // Guaranteed by the boundary check near the top of this function — `!targetSetIsLive &&
+    // command.indexes === undefined` already returned 2 — but that guarantee is a fact about two
+    // independent fields together, which is not something `command.indexes`'s own narrowing carries
+    // across an unrelated `if (targetSetIsLive)`. Cast rather than re-checked, on the same principle
+    // `parseArgs` casts an index it has already bounds-checked in its own loop.
+    const indexesPath = command.indexes as string;
+    const reconciliation = excuseExtras(reconcileBoth(candidate, overrides, live), allowedExtra, excusedKeys, say, true);
+    if (allowedExtra !== undefined) {
+      reportStaleAllowExtra(allowedExtra, excusedKeys, reconciliation, say);
+    }
+    if (!isVouchedBoth(reconciliation)) {
+      reportDivergence(reconciliation, indexesPath, say);
+      return 2;
+    }
+    say(
+      `${count(live.indexes.length, 'index', 'indexes')} and ` +
+        `${count(reconciliation.overrides.matched.length, 'field override', 'field overrides')} on the target, ` +
+        `and the candidate set at ${render(indexesPath)} is the set that is there` +
+        (allowedExtra === undefined ? '' : `, with ${excusedKeys.size} extra(s) allowed by ${ALLOW_EXTRA_OPTION}`),
+    );
   }
-  say(
-    `${count(live.indexes.length, 'index', 'indexes')} and ` +
-      `${count(reconciliation.overrides.matched.length, 'field override', 'field overrides')} on the target, ` +
-      `and the candidate set at ${render(command.indexes)} is the set that is there`,
-  );
 
   let replayer: Replayer;
   try {
@@ -412,7 +505,7 @@ export async function check(
 
   let held: Confirmation;
   try {
-    held = await confirmSetHeld(target, command.project, candidate, overrides, live, say, {
+    held = await confirmSetHeld(target, command.project, targetSetIsLive, candidate, overrides, live, say, {
       lister: options.lister ?? adminLister,
     });
   } catch (error) {
@@ -423,16 +516,34 @@ export async function check(
     say(`cannot report: the target could not be listed again after replay: ${error.message}`);
     return 2;
   }
-  if (!isVouchedBoth(held.declared)) {
-    reportDivergence(held.declared, command.indexes, say, withdrawal(held.declared));
-    return 2;
+  // `held.declared` is `undefined` exactly under `--target-set live` (see `confirmSetHeld`): that
+  // mode never gated on a declared reconciliation before replay either, so there is nothing here for
+  // it to withdraw. `held.identity` — the name-and-state second look, issue #50 — is asked in every
+  // mode, live included, and is the whole of what the second look establishes there: added, removed,
+  // recreated, or regressed from `READY` all show up as a name that changed or a state that did.
+  if (held.declared !== undefined) {
+    // `report: false` — the "allowed by" lines were already said once, against the pre-replay
+    // listing, and this is the same run rather than a new one; baseline's "print the reason on every
+    // match" is about every run that *relies* on an entry, not about saying the same fact twice
+    // inside one run. Netted all the same, so a `--allow-extra` entry that stopped excusing anything
+    // — the extra it named disappeared and a *different*, unlisted one appeared in the same slot —
+    // still blocks here rather than passing on the strength of the first look.
+    const nettedAfter = excuseExtras(held.declared, allowedExtra, excusedKeys, say, false);
+    if (!isVouchedBoth(nettedAfter)) {
+      // `held.declared !== undefined` holds exactly when `!targetSetIsLive`, which is also the one
+      // case `command.indexes` is guaranteed defined — see the cast where `indexesPath` was built
+      // above, and the same reason for it.
+      reportDivergence(nettedAfter, command.indexes as string, say, withdrawal(nettedAfter));
+      return 2;
+    }
   }
   if (held.identity.kind !== 'held') {
     say(`cannot report: ${describeHeld(held.identity)}`);
     return 2;
   }
 
-  return reportReplay(attempted, uncovered, accepted, served, invalid, cannotReplay, halted, say);
+  const setLabel = targetSetIsLive ? 'live set' : 'candidate set';
+  return reportReplay(attempted, uncovered, accepted, served, invalid, cannotReplay, halted, setLabel, say);
 }
 
 /**
@@ -468,10 +579,19 @@ export async function check(
  * The lister is built again rather than held open across the replay, which keeps #39's invariant
  * that at most one channel is open at a time. A second construction is the price, and it is a small
  * one against a run that has already waited out a settling period.
+ *
+ * `declared` is only computed under `targetSetIsLive === false`. `--target-set live` (issue #92)
+ * never asked the pre-replay question this reconciliation is the second half of — it vouches for
+ * whatever the target holds rather than for a file's declarations — so there is nothing here for it
+ * to answer either; `held.identity`, asked unconditionally below, is the whole of what live mode's
+ * second look establishes. It is asked from the same `before`/`after` pair and the same `stillHeld`
+ * either way, because an index that regressed, or was deleted and recreated, is exactly as much a
+ * moved set when nothing declared it as when something did.
  */
 async function confirmSetHeld(
   target: string,
   project: string,
+  targetSetIsLive: boolean,
   candidate: readonly AnalysedIndex[],
   overrides: readonly AnalysedOverride[],
   before: Listing,
@@ -486,14 +606,18 @@ async function confirmSetHeld(
     await release('index lister', lister, say);
   }
   return {
-    declared: reconcileBoth(candidate, overrides, after),
+    declared: targetSetIsLive ? undefined : reconcileBoth(candidate, overrides, after),
     identity: stillHeld(flatten(before), flatten(after)),
   };
 }
 
-/** What the confirmation after replay establishes: the two reconciliations, and the second look. */
+/**
+ * What the confirmation after replay establishes: the two reconciliations, and the second look.
+ *
+ * `declared` is `undefined` under `--target-set live`, which never asks it — see `confirmSetHeld`.
+ */
 interface Confirmation {
-  readonly declared: Both;
+  readonly declared: Both | undefined;
   readonly identity: Held;
 }
 
@@ -558,6 +682,211 @@ function reconcileBoth(
 
 function isVouchedBoth(both: Both): boolean {
   return isVouched(both.indexes) && isVouched(both.overrides);
+}
+
+/**
+ * What `--target-set live` reports instead of a verdict, when `--indexes` named a file (issue #92).
+ *
+ * `reconcile`'s `extra` — every live entry the file does not declare — is the coverage this run's
+ * replay is depending on beyond what the file says. `missing` is not simply the reverse. It is every
+ * declaration for which `reconcile`/`reconcileOverrides` found no *readable* live entry at its
+ * canonical identity, and that happens two different ways: the target truly does not hold it, or the
+ * target holds something at that identity but in terms this version could not read at all — a
+ * non-default `apiScope`, `density`, `unique`, `multikey`, or `shardCount` (see `readLive` in
+ * `reconcile.ts`) — which refuses the entry *before* it is ever given an identity to be matched
+ * against. The two cannot be told apart per declaration: an unreadable live entry carries no identity
+ * to correlate it to one, so the mere presence of one unreadable entry in a half means every
+ * declaration this half reports as `missing` might be the second case rather than the first. Saying
+ * "not found" for all of them would assert something this run does not actually know for some.
+ *
+ * `reportMissing` is the guard against that: it checks once, per half, whether that half carries any
+ * unreadable entry at all, and if so drops the "not found" framing for every entry the half reports,
+ * in favour of one that claims only what was actually established — that this pass could not compare
+ * it, not that it is absent. Either wording still avoids "unused" or a candidate for removal: SPEC §2
+ * and §8 forbid reading either as an authorisation to delete anything, and this function does not
+ * compute the one fact that would make it even a candidate for that reading — whether some *other*
+ * pass depends on it, which is exactly the question `--target-set live` was reached for instead of
+ * the strict reconcile that would have settled it.
+ *
+ * `incomparable` entries are silently absent from this report rather than reported as a third bucket
+ * — this branch never declines on them (`incomparableReason` is a §5-key concern, and live mode's
+ * vouching basis is the coarser name-and-state one `stillHeld` uses), so there is no reason to single
+ * them out. The report is therefore informational and not a promise that every live entry was
+ * accounted for; it says what the strict half of `reconcile` could match, and no more.
+ */
+function reportDependencies(both: Both, indexesPath: string, say: (text: string) => void): void {
+  const { indexes, overrides } = both;
+  reportMissing(indexes.missing, indexes.unreadable.length > 0, indexesPath, say);
+  for (const index of indexes.extra) {
+    say(`this coverage depends on, beyond ${render(indexesPath)}: ${render(index.key)}`);
+  }
+  reportMissing(overrides.missing, overrides.unreadable.length > 0, indexesPath, say);
+  for (const override of overrides.extra) {
+    say(`this coverage depends on, beyond ${render(indexesPath)}: ${render(override.key)}`);
+  }
+}
+
+/** One half's `missing` list, worded as `reportDependencies`'s own doc explains. */
+function reportMissing(
+  missing: readonly { readonly key: string }[],
+  someUnreadable: boolean,
+  indexesPath: string,
+  say: (text: string) => void,
+): void {
+  for (const entry of missing) {
+    say(
+      someUnreadable
+        ? `declared at ${render(indexesPath)}, but could not be compared against the target in ` +
+            `these terms, so this pass cannot say whether the target holds it: ${render(entry.key)}`
+        : `declared at ${render(indexesPath)}, not on the target, so no query this pass answered went through it: ${render(entry.key)}`,
+    );
+  }
+}
+
+/** One half's `extra` list, split by whether `--allow-extra` names it. */
+function partitionAllowed<E extends { readonly key: string }>(
+  extra: readonly E[],
+  allowed: ReadonlyMap<string, string> | undefined,
+): { readonly blocking: readonly E[]; readonly excused: readonly { entry: E; reason: string }[] } {
+  if (allowed === undefined) return { blocking: extra, excused: [] };
+  const blocking: E[] = [];
+  const excused: { entry: E; reason: string }[] = [];
+  for (const entry of extra) {
+    const reason = allowed.get(entry.key);
+    if (reason === undefined) blocking.push(entry);
+    else excused.push({ entry, reason });
+  }
+  return { blocking, excused };
+}
+
+/** Whichever verdict a half reaches once its `extra` is replaced, by `reconcile`'s own rule. */
+function recomputeVerdict(half: {
+  readonly missing: readonly unknown[];
+  readonly unreadable: readonly unknown[];
+  readonly incomparable: readonly unknown[];
+}, extra: readonly unknown[]): ReconciliationVerdict {
+  if (half.unreadable.length > 0 || half.incomparable.length > 0) return 'indeterminate';
+  return half.missing.length === 0 && extra.length === 0 ? 'identical' : 'diverged';
+}
+
+/**
+ * Excuse the extras `--allow-extra` names, and only those, from a reconciliation (issue #92).
+ *
+ * `missing` is untouched on both halves — an `--allow-extra` entry excuses presence beyond the file,
+ * never absence from the target, which is why it is consumed by this function alone and never reaches
+ * the code path `reconcileBoth`'s caller uses for `missing`. `unreadable` and `incomparable` are
+ * untouched too: an entry this version cannot read is not one `--allow-extra` was asked about, and
+ * excusing it would be a guess about what it is.
+ *
+ * `allowed` being `undefined` (no `--allow-extra` was named) makes this the identity function on
+ * `both`, deliberately: every caller can run it unconditionally rather than branching on whether the
+ * flag was given, and the default strict reconcile is untouched by a function that was never handed
+ * anything to excuse.
+ *
+ * `report` controls only whether the "allowed by" lines are printed — never the netting itself. It is
+ * `false` on the post-replay call so that an extra `--allow-extra` excused before the replay is not
+ * announced a second time for the same run; the verdict is still recomputed there, so an entry that
+ * stopped being excusable (its extra vanished and something unlisted took its place) still blocks.
+ *
+ * `consumed` accumulates every key this call excused, across whichever halves and calls share it, so
+ * the caller can report a stale `--allow-extra` entry — one that names a key the target never carried
+ * as an extra — exactly once, against everything a full run could have matched it to.
+ */
+function excuseExtras(
+  both: Both,
+  allowed: ReadonlyMap<string, string> | undefined,
+  consumed: Set<string>,
+  say: (text: string) => void,
+  report: boolean,
+): Both {
+  if (allowed === undefined) return both;
+
+  const indexSplit = partitionAllowed(both.indexes.extra, allowed);
+  const overrideSplit = partitionAllowed(both.overrides.extra, allowed);
+
+  if (report) {
+    for (const { entry, reason } of indexSplit.excused) {
+      say(`on the target but not declared, allowed by ${ALLOW_EXTRA_OPTION}: ${render(entry.key)} (${render(reason)})`);
+    }
+    for (const { entry, reason } of overrideSplit.excused) {
+      say(
+        `field override on the target but not declared, allowed by ${ALLOW_EXTRA_OPTION}: ` +
+          `${render(entry.key)} (${render(reason)})`,
+      );
+    }
+  }
+  for (const { entry } of [...indexSplit.excused, ...overrideSplit.excused]) consumed.add(entry.key);
+
+  return {
+    indexes: {
+      ...both.indexes,
+      extra: indexSplit.blocking,
+      verdict: recomputeVerdict(both.indexes, indexSplit.blocking),
+    },
+    overrides: {
+      ...both.overrides,
+      extra: overrideSplit.blocking,
+      verdict: recomputeVerdict(both.overrides, overrideSplit.blocking),
+    },
+  };
+}
+
+/**
+ * Say why an `--allow-extra` entry named a key that did not excuse anything, without asserting more
+ * than this run actually established (issue #92, review of #96).
+ *
+ * "Not on the target" was the original wording, and it overclaimed: a key stops appearing in either
+ * half's `extra` for reasons besides having left the target. It is checked here against `both`, which
+ * `excuseExtras` returns with `matched` and `unreadable` carried over unchanged from the reconciliation
+ * it was handed — so this sees the same two buckets the pre-replay reconcile produced.
+ *
+ * Two cases are told apart because they are cheap to tell apart, from information already in hand:
+ *
+ * - The key now names something *declared*. `--allow-extra` excuses a divergence; a key that turns up
+ *   in `matched` is not one any more — the candidate file caught up with it — and saying "not on the
+ *   target" about an index the target plainly holds, matched at that, would be the exact false claim
+ *   this rewrite exists to stop making.
+ * - Some entry in this reconciliation could not be read at all (`unreadable`, non-empty on either
+ *   half). An unreadable live entry carries no identity, so a key that used to name an extra and does
+ *   not any more cannot be told from a key whose live counterpart just became unreadable — the same
+ *   ambiguity `reportMissing` guards against, reached from the other direction. Asserting "no longer
+ *   on the target" over that ambiguity would be the same overclaim in miniature.
+ *
+ * Failing both checks, the honest claim is the narrow one the README documents: the key no longer
+ * matches an extra on the target. Not "gone" — an index or override with that identity might still be
+ * there, sorted into `matched` or `missing` by a change to the file, or the ambiguity above might not
+ * apply to this particular key at all. What is actually known is only that this run's `extra` does not
+ * contain it, which is the one fact `excusedKeys` and `both` together can attest to.
+ */
+function reportStaleAllowExtra(
+  allowed: ReadonlyMap<string, string>,
+  excused: ReadonlySet<string>,
+  both: Both,
+  say: (text: string) => void,
+): void {
+  const matched = new Set([
+    ...both.indexes.matched.map((entry) => entry.key),
+    ...both.overrides.matched.map((entry) => entry.key),
+  ]);
+  const someUnreadable = both.indexes.unreadable.length > 0 || both.overrides.unreadable.length > 0;
+
+  for (const [key, reason] of allowed) {
+    if (excused.has(key)) continue;
+    if (matched.has(key)) {
+      say(
+        `in the ${ALLOW_EXTRA_OPTION} file, but now declared and matched on the target rather than ` +
+          `extra: ${render(key)} (${render(reason)})`,
+      );
+      continue;
+    }
+    say(
+      (someUnreadable
+        ? `in the ${ALLOW_EXTRA_OPTION} file, but no longer matches an extra on the target — or its ` +
+          `live counterpart could not be compared, since some entries could not be read this run`
+        : `in the ${ALLOW_EXTRA_OPTION} file, but no longer matches an extra on the target`) +
+        `: ${render(key)} (${render(reason)})`,
+    );
+  }
 }
 
 /** A verdict the gate reached that waiting cannot change, carried out of the poll as a message. */
@@ -803,6 +1132,7 @@ function reportReplay(
   invalid: readonly string[],
   unreplayable: readonly string[],
   halted: string | undefined,
+  setLabel: string,
   say: (text: string) => void,
 ): number {
   let baselined = 0;
@@ -830,7 +1160,7 @@ function reportReplay(
   const findings = uncovered.length - baselined;
   say(
     `${count(attempted, 'query', 'queries')} replayed, ` +
-      `${uncovered.length} not served by the candidate set` +
+      `${uncovered.length} not served by the ${setLabel}` +
       (accepted === undefined ? '' : `, ${baselined} of them in the baseline`),
   );
   if (halted !== undefined || invalid.length > 0 || unreplayable.length > 0) {
