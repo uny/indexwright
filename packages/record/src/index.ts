@@ -14,10 +14,11 @@ export {
   listLiveIndexes,
   type IndexLister,
 } from './admin.js';
-// The type of `check`'s first parameter. `args.ts` is otherwise the CLI's own business — nothing
-// else from it is published — but a caller that can reach `check` and not name what to pass it has
-// to write `Parameters<typeof check>[0]`.
-export type { CheckCommand } from './args.js';
+// The type of `check`'s first parameter, and `Oracle`, which is one of its members. `args.ts` is
+// otherwise the CLI's own business — nothing else from it is published — but a caller that can
+// reach `check` and not name what to pass it has to write `Parameters<typeof check>[0]`, and
+// `CheckCommand.oracle` is not writable at all without a name for its type.
+export type { CheckCommand, Oracle } from './args.js';
 export {
   BASELINE_VERSION,
   BaselineError,
@@ -109,12 +110,14 @@ export {
 } from './reconcile.js';
 export { Recorder } from './recorder.js';
 export {
+  askOracle,
   buildReplayQuery,
   classifyRejection,
   replayClient,
   replayFieldPath,
   REPLAY_SENTINEL,
   TargetError,
+  type Askable,
   type Replayer,
   type ReplayStatus,
 } from './replay.js';

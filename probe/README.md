@@ -169,6 +169,7 @@ What the run did settle is the price. The readiness gate restarts on every invoc
 | `suite.mjs` | The driver `record` captures from. `PROBE_SHAPES=S1,S2` issues a subset |
 | `differential.mjs` | The §7 instrument: issues the shapes, writes a JSON report to stdout |
 | `limit.mjs` | The #43 instrument: issues each shape bare and with `limit(1)`, and reports what each read |
+| `oracle.mjs` | The #91 instrument: issues each shape's `limit(1)` query through `read` and through `explain`, and compares the verdicts. Step 5e; not yet run — see that step |
 | `expectations.mjs` | Their command line — argv in, the expectation map out. Pure, so what an operator types is testable |
 | `summarise.mjs` | Their stop rule — rows in, findings and an exit code out, for the verdicts and for the read counts alike. Pure, so it can be tested without a database |
 | `expectations.test.mjs`, `summarise.test.mjs` | Tests for the two halves of the stop rule. Run in `npm test` alongside the packages' suites |
@@ -526,6 +527,45 @@ node probe/limit.mjs indexwright-probe '(default)' \
 
 The stop rule, the exit codes and the reading of a disagreement are 5c's, and so is what it leaves
 alone: the corpus is not re-captured, and steps 3 and 5 run S13–S20 unconstrained.
+
+### 5e. The explain-oracle probe, against the same deployed set (issue #91)
+
+**Not yet run.** This step is the runbook for the measurement issue #91 itself asks a prospective
+adopter for, and nothing below the heading is a reading — it is the procedure, written down so the
+run can be reproduced and checked against the claim rather than taken on the adopter's word. Until
+it is run, `--oracle explain` ships on the strength of Query Explain's documented default behaviour
+and the identical-query argument in `buildReplayQuery`'s docblock (SPEC §3), not on a measurement
+this repository has taken.
+
+`check --oracle explain` asks the identical `limit(1)` query `--oracle read` does, through
+`Query.explain({ analyze: false })` in place of `Query.get()`. The claim it rests on, stated
+exactly: for every shape, `read` and `explain` agree on served versus `FAILED_PRECONDITION`. One
+disagreement on either side is enough to falsify it, for the same reason one is enough in step 5b —
+a `limit(1)` argument, or an oracle argument, that fails for even one shape is not available as a
+fix at any price.
+
+This step needs no new index build; it runs against whichever set step 4's or step 5c's watcher
+already settled. What it does **not** reach is the other half of issue #91's claim: that `explain`
+answers `FAILED_PRECONDITION` with `read`'s semantics *during* the settling window, while an index is
+still `CREATING`. Catching that window needs a fresh build timed against `watch-readiness.mjs`, the
+way step 4 itself was timed, and is a separate run from this one — this step's result, once taken,
+says only whether the two oracles agree on a set already `READY`.
+
+```bash
+node probe/oracle.mjs indexwright-probe '(default)' \
+  --expect-served S1,S2,S3,S4,S5,S7,S9,S11,S13,S15,S17,S19 \
+  --expect-uncovered S6,S10,S12,S14,S16,S18,S20 \
+  > probe/oracle-after.json
+```
+
+The expectations are step 5d's, unchanged — this step asks a different question of the same set, not
+a different set. The stop rule, the exit codes, and the reading of a disagreement are `limit.mjs`'s
+(step 5b), with one difference: there is no read-count half to this step, and none is reported.
+`explain({ analyze: false })` returns no document either way, so there is nothing for a limit to
+bound and nothing for this script to read back — `oracle.mjs`'s own header says why it must not read
+`ExplainMetrics` even to double-check that.
+
+**Results: not yet run.**
 
 ### 6. Capture the corpus of shapes the target actually covers
 

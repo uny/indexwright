@@ -57,8 +57,8 @@ Options:
 ## `check`
 
 `check` replays a corpus against a database that already has the candidate index set applied, and
-reports the queries it cannot serve. It applies nothing and reads only — one document per entry,
-because the answer it is after is the query's status and not its rows.
+reports the queries it cannot serve. It applies nothing, and by default reads only — one document
+per entry, because the answer it is after is the query's status and not its rows.
 
 ```text
 indexwright-record check --project <id> --database <name> [options]
@@ -70,7 +70,24 @@ Options:
   --indexes <file>        the candidate index declarations (default: firestore.indexes.json)
   --baseline <file>       gaps already accepted by this project (no default)
   --require-identity      refuse a corpus that names no producer (off by default)
+  --oracle <read|explain> how each entry is asked (default: read)
 ```
+
+**`--oracle`** chooses how each entry is put to the target (issue #91), and changes only that —
+never the verdict semantics, readiness, the settling period, or the exit codes. `read`, the default,
+is `Query.get()`: the query runs and the one document `limit(1)` admits is read. `explain` asks the
+*identical* query — `limit(1)` included — through `Query.explain({ analyze: false })` instead, which
+Firestore's own documentation describes as performing no index or read operation while still
+charging the one read a served query would have. It is for a runner credentialed with no data-plane
+read access at all: readiness already needs `datastore.schemas.list`, and `explain` needs nothing
+more than that. `analyze: true` is never sent, by either oracle — it executes the query and is
+billed as one, undoing exactly the cost and access `explain` exists to avoid — and the metrics
+`explain` returns (`ExplainMetrics`, `planSummary.indexesUsed`) are never read to reach a verdict;
+the SDK documents that format as human-readable and not meant to be programmed against, and `check`'s
+verdict is the thrown status alone, the same signal `read` classifies. Every run says which oracle
+answered, on stderr, before anything else happens — see [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md)
+§3 for the fuller design note, including which half of the case for `explain` is this package's own
+measurement and which half is an adopter's, not yet reproduced here (`probe/README.md` step 5e).
 
 | Exit | Meaning |
 |-----:|:--------|

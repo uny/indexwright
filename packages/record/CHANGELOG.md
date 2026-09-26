@@ -5,6 +5,23 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## [Unreleased]
+
+### Added
+
+- **`check --oracle explain`, for a runner credentialed with no data-plane read access** (issue
+  #91). Each corpus entry can now be put to the target through `Query.explain({ analyze: false })`
+  instead of `Query.get()` — the identical `limit(1)` query either way, so a disagreement between the
+  two is about the oracle asked and never about a different query being sent. The verdict is still
+  the thrown status alone; `ExplainMetrics` and `planSummary.indexesUsed` are never read, and
+  `analyze: true` is never sent, by either oracle. Readiness, the settling period, reconciliation,
+  and the exit codes are unchanged, and the default stays `read` — every version before this one.
+  Every run says on stderr which oracle answered. The claim that makes `explain` sound — that it
+  answers `FAILED_PRECONDITION` with `read`'s semantics, including while an index is still
+  `CREATING` — is a prospective adopter's own measurement, not yet reproduced against a throwaway
+  target from this repository; `probe/README.md` step 5e is the runbook for doing so, and its
+  results section is marked not yet run pending that. See SPEC.md §3 for the full design note.
+
 ## [0.10.1] — 2026-09-23
 
 A patch for a path the JS API left unbounded. A corpus built by hand is now held to the filter depth

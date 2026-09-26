@@ -170,6 +170,52 @@ Firestore connection.
   missed the second variable entirely, and the reason it missed it is that it reasoned about a client
   it was not using.
 
+  **`check` can put a replayed query to Firestore through either of two oracles (v0.3.x — issue
+  #91), named by what leaves the database rather than by the SDK method that asks.** `--oracle
+  read`, the default, is `Query.get()` on the `limit(1)` query above — the oracle every version
+  before #91 used, and still what an upgraded pipeline measures unless it opts in. `--oracle explain`
+  puts the *identical* query, `limit(1)` included, to `Query.explain({ analyze: false })` instead —
+  Query Explain's own default, which the Firestore documentation describes as performing no index or
+  read operation while charging the one read a served query would have charged. It exists for a
+  credential that a project's standing rule forbids from holding data-plane read access at all: the
+  same `datastore.schemas.list` grant readiness already relies on is what `explain` needs too, and
+  the scope `check` already asks for — `datastore.user` — carries it.
+
+  Sending the identical query is not an incidental convenience; it is what makes the two oracles
+  *comparable*. Because `buildReplayQuery` does not know a second oracle exists, a disagreement
+  between what `read` reports for an entry and what `explain` reports for the same entry is
+  attributable to the oracle asked and to nothing else — never to the two having been asked a
+  different question. The `limit(1)` reasoning §7 measures for `read` (below) therefore carries over
+  to `explain` in its *conclusion* — the same query is sent — while going moot in its *reason*:
+  `explain({ analyze: false })` returns no document under either limit, so there is nothing left for
+  a limit to bound.
+
+  The two oracles answer the same *verdict*, and that is the whole of what changes and what does
+  not. `served`, `FAILED_PRECONDITION`, `INVALID_ARGUMENT`, and any other thrown status classify
+  through the one rule both oracles share; readiness, the settling period, reconciliation, and the
+  second look after the last query is answered are questions about the index set and do not know
+  which oracle asked it either. `analyze: true` must never be sent, in any branch: it executes the
+  query and is billed as one, which reintroduces exactly the data-plane cost and access `explain`
+  exists to avoid, and the developer-facing "create this index" link `analyze: true` can produce is
+  out of scope for a verb whose entire output is a coverage report. `ExplainMetrics` —
+  `planSummary.indexesUsed` above all — is never read to inform a verdict, on two grounds that hold
+  independently: `check`'s verdict is defined as the thrown status, so a query that does not throw
+  is `served` however it was asked; and the SDK's own documentation calls `indexesUsed` "intended to
+  be human-readable... advised to not program against this object" (`@google-cloud/firestore`'s
+  `PlanSummary`) — an undocumented, changeable format of exactly the kind this section already
+  declines to reimplement for index *matching*, arriving here as index *reporting* instead.
+
+  **What makes `explain` sound is a claim this repository has not measured.** A prospective adopter
+  reports, from Firestore's own documentation and its own reading against a dev database, that
+  `explain({ analyze: false })` answers `FAILED_PRECONDITION` with the same read semantics `get()`
+  does — including through the settling-period window while a composite index is still `CREATING`,
+  which is the one case a false `served` would be the false-clean verdict §2 forbids. That reading is
+  the adopter's own, not this package's: `probe/README.md` step 5e is the runbook for reproducing it
+  against a throwaway target, and until it is run the result there is marked not yet measured.
+  `--oracle explain` ships on the strength of the documented default behaviour and the identical-query
+  argument above; the default oracle stays `read` regardless, and does not change on the strength of
+  an unmeasured claim.
+
 The v0.2/v0.3 split is deliberate: capture is cheap and offline, while the coverage decision is
 delegated to the platform. Reimplementing index matching would risk emitting false
 `FAILED_PRECONDITION` verdicts and blocking development on a rule that is not published.
