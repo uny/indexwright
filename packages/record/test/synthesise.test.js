@@ -7,14 +7,28 @@ import {
   isReplayComposite,
   operandFor,
   parseCorpus,
+  planAggregationReplay,
   planReplay,
+  ReplayError,
   serialiseCorpus,
+  toAggregationShape,
   toQueryShape,
 } from '../dist/index.js';
 
 /** A corpus entry, built the way a corpus builds one, so the tests read normalised trees. */
 function shape({ collectionGroup = 'orders', queryScope = 'COLLECTION', where = null, orderBy = [] }) {
   return toQueryShape({ collectionGroup, queryScope, where, orderBy });
+}
+
+/** An aggregation entry, built the way `toAggregationShape` builds one. */
+function aggregationShape({
+  collectionGroup = 'orders',
+  queryScope = 'COLLECTION',
+  where = null,
+  orderBy = [],
+  aggregations = [{ op: 'COUNT', field: null }],
+}) {
+  return toAggregationShape({ query: { collectionGroup, queryScope, where, orderBy }, aggregations });
 }
 
 test('a unary filter carries no operand', () => {
@@ -238,4 +252,43 @@ test('a field path holding key delimiters survives planning verbatim', () => {
   // The key escapes these; the plan must not, because the path is sent to Firestore as written.
   const plan = planReplay(shape({ where: { fieldPath: 'a:b|c', op: 'EQUAL' } }));
   assert.equal(plan.where.filters[0].fieldPath, 'a:b|c');
+});
+
+test('planAggregationReplay plans the inner query exactly as planReplay does, plus the aggregations', () => {
+  const where = { fieldPath: 'status', op: 'EQUAL' };
+  const orderBy = [{ fieldPath: 'createdAt', direction: 'DESCENDING' }];
+  const plain = planReplay(shape({ where, orderBy, queryScope: 'COLLECTION_GROUP' }));
+  const aggregations = [
+    { op: 'COUNT', field: null },
+    { op: 'SUM', field: 'amount' },
+  ];
+  const plan = planAggregationReplay(aggregationShape({ where, orderBy, queryScope: 'COLLECTION_GROUP', aggregations }));
+  assert.equal(plan.collectionGroup, plain.collectionGroup);
+  assert.equal(plan.queryScope, plain.queryScope);
+  assert.deepEqual(plan.where, plain.where);
+  assert.deepEqual(plan.orderBy, plain.orderBy);
+  assert.deepEqual(plan.aggregations, aggregations);
+});
+
+test('planAggregationReplay carries no limit; AggregationReplayPlan has no such member', () => {
+  const plan = planAggregationReplay(aggregationShape({}));
+  assert.ok(!('limit' in plan));
+});
+
+test('a SUM/AVG field path this version cannot replay refuses the whole entry, as an ordinary filter path does', () => {
+  const quoted = [{ op: 'SUM', field: 'a`b' }];
+  assert.throws(() => planAggregationReplay(aggregationShape({ aggregations: quoted })), ReplayError);
+  const empty = [{ op: 'SUM', field: 'a..b' }];
+  assert.throws(() => planAggregationReplay(aggregationShape({ aggregations: empty })), ReplayError);
+});
+
+test('a COUNT aggregation names no field, so it has nothing for the path check to refuse', () => {
+  const plan = planAggregationReplay(aggregationShape({ aggregations: [{ op: 'COUNT', field: null }] }));
+  assert.deepEqual(plan.aggregations, [{ op: 'COUNT', field: null }]);
+});
+
+test('an unreplayable inner query refuses the aggregation entry too', () => {
+  // The same childless-root-OR refusal `planRoot` gives a plain query (see above), reached through
+  // the aggregation's inner query instead of restated for it.
+  assert.throws(() => planAggregationReplay(aggregationShape({ where: { op: 'OR', filters: [] } })), ReplayError);
 });

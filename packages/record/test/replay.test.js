@@ -3,8 +3,10 @@ import { test } from 'node:test';
 import firestore from '@google-cloud/firestore';
 import {
   askOracle,
+  buildReplayAggregateQuery,
   buildReplayQuery,
   classifyRejection,
+  planAggregationReplay,
   planReplay,
   replayClient,
   replayFieldPath,
@@ -13,7 +15,7 @@ import {
   TargetError,
 } from '../dist/index.js';
 
-const { FieldPath, Filter, Firestore } = firestore;
+const { AggregateField, FieldPath, Filter, Firestore } = firestore;
 
 /**
  * A client, constructed rather than faked.
@@ -28,6 +30,17 @@ const db = new Firestore({ projectId: 'indexwright-probe', databaseId: '(default
 
 function planOf(shape) {
   return planReplay({ key: 'k', queryScope: 'COLLECTION', orderBy: [], where: { op: 'AND', filters: [] }, ...shape });
+}
+
+function aggregationPlanOf(shape) {
+  return planAggregationReplay({
+    key: 'k',
+    queryScope: 'COLLECTION',
+    orderBy: [],
+    where: { op: 'AND', filters: [] },
+    aggregations: [{ op: 'COUNT', field: null }],
+    ...shape,
+  });
 }
 
 test('a filtered query materialises as the query the SDK would have been asked for', () => {
@@ -207,6 +220,99 @@ test('a field path this version cannot convert is refused rather than replayed a
   assert.throws(() => replayFieldPath(firestore, '`a.b`.c'), ReplayError);
   assert.throws(() => replayFieldPath(firestore, 'a..b'), ReplayError);
   assert.throws(() => replayFieldPath(firestore, '.a'), ReplayError);
+});
+
+/**
+ * `buildReplayAggregateQuery` tests (issue #93), the aggregation counterpart to the `buildReplayQuery`
+ * block above: offline materialisation, pinned against the SDK's own `count()`/`aggregate()` and
+ * compared with `isEqual`.
+ */
+
+test('a single COUNT aggregation materialises as .count(), not .aggregate({ ... : count() })', () => {
+  const plan = aggregationPlanOf({ collectionGroup: 'orders', aggregations: [{ op: 'COUNT', field: null }] });
+  const expected = db.collection('orders').count();
+  assert.ok(buildReplayAggregateQuery(firestore, db, plan).isEqual(expected));
+});
+
+test('a filtered COUNT still materialises as .count() over the filtered query', () => {
+  const plan = aggregationPlanOf({
+    collectionGroup: 'orders',
+    where: { op: 'AND', filters: [{ fieldPath: 'status', op: 'EQUAL' }] },
+    aggregations: [{ op: 'COUNT', field: null }],
+  });
+  const expected = db.collection('orders').where(Filter.where(new FieldPath('status'), '==', REPLAY_SENTINEL)).count();
+  assert.ok(buildReplayAggregateQuery(firestore, db, plan).isEqual(expected));
+});
+
+test('SUM and AVERAGE materialise through .aggregate(), with invented alias keys', () => {
+  const plan = aggregationPlanOf({
+    collectionGroup: 'orders',
+    aggregations: [
+      { op: 'SUM', field: 'amount' },
+      { op: 'AVG', field: 'amount' },
+    ],
+  });
+  // `AggregateField.sum`/`.average` accept a `string | FieldPath`, and `AggregateQuery.isEqual`
+  // compares the two representations structurally rather than by what they resolve to — so the
+  // expected side is built with a `FieldPath` too, matching `buildReplayAggregateQuery`'s own choice
+  // of that form over the wire's dotted string (see its docblock for why: a raw string re-splits on
+  // `.` and does not accept the backtick-quoted form replayFieldPath handles).
+  const expected = db.collection('orders').aggregate({
+    a0: AggregateField.sum(new FieldPath('amount')),
+    a1: AggregateField.average(new FieldPath('amount')),
+  });
+  assert.ok(buildReplayAggregateQuery(firestore, db, plan).isEqual(expected));
+});
+
+test('a COUNT alongside a SUM/AVERAGE goes through .aggregate() too, since .count() covers only the bare case', () => {
+  const plan = aggregationPlanOf({
+    collectionGroup: 'orders',
+    aggregations: [
+      { op: 'COUNT', field: null },
+      { op: 'SUM', field: 'amount' },
+    ],
+  });
+  const expected = db.collection('orders').aggregate({
+    a0: AggregateField.count(),
+    a1: AggregateField.sum(new FieldPath('amount')),
+  });
+  assert.ok(buildReplayAggregateQuery(firestore, db, plan).isEqual(expected));
+});
+
+test('an aggregate query carries no limit', () => {
+  const plan = aggregationPlanOf({
+    collectionGroup: 'orders',
+    where: { op: 'AND', filters: [{ fieldPath: 'status', op: 'NOT_EQUAL' }] },
+  });
+  const built = buildReplayAggregateQuery(firestore, db, plan);
+  // `AggregateQuery` has no `.limit`; the underlying `.query` is what the limit would have been on,
+  // and it must not carry one either — unlike `buildReplayQuery`'s plain path, which always does.
+  assert.equal(built.query._queryOptions.limit, undefined);
+});
+
+test('the scope and orderBy are carried to the aggregate query exactly as the plain path carries them', () => {
+  const plan = aggregationPlanOf({
+    collectionGroup: 'items',
+    queryScope: 'COLLECTION_GROUP',
+    orderBy: [{ fieldPath: 'qty', direction: 'DESCENDING' }],
+    aggregations: [{ op: 'COUNT', field: null }],
+  });
+  const expected = db.collectionGroup('items').orderBy(new FieldPath('qty'), 'desc').count();
+  assert.ok(buildReplayAggregateQuery(firestore, db, plan).isEqual(expected));
+});
+
+test('a SUM field path this version cannot convert is refused, the same way a filter path is', () => {
+  // Caught already at planning (see synthesise.test.js), but re-checked here too — the same
+  // defence-in-depth `buildReplayQuery` gives `replayCollectionId`, for a `ReplayPlan` that reaches
+  // this function without having gone through `planAggregationReplay` at all.
+  const plan = {
+    collectionGroup: 'orders',
+    queryScope: 'COLLECTION',
+    where: null,
+    orderBy: [],
+    aggregations: [{ op: 'SUM', field: '`a.b`.c' }],
+  };
+  assert.throws(() => buildReplayAggregateQuery(firestore, db, plan), ReplayError);
 });
 
 /** A rejection shaped the way gax hands one back: an `Error` carrying the numeric status. */
