@@ -421,6 +421,13 @@ and the corpus records what was sent, so one application query has two legitimat
 depending on which SDK issued it. A corpus is comparable across runs of one project, not across
 SDKs.
 
+An aggregation reaches the emulator differently from a plain query, on **both** Web SDK builds:
+`count()`, `sum()`, and `average()` have no streaming form, so `getCountFromServer`/
+`getAggregateFromServer` (the full SDK) post to REST `documents:runAggregationQuery` exactly as
+`getCount`/`getAggregate` (`firestore/lite`) do — neither goes out over the WebChannel forward
+channel a `Listen` target does. `record` reads this endpoint the same way it reads
+`documents:runQuery`.
+
 ## What it does not capture
 
 Counted in `skipped` and reported on stderr, never dropped silently — a query that was issued and

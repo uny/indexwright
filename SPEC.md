@@ -1037,9 +1037,15 @@ and the corpus does not say which transport carried an entry any more than it sa
 The REST spelling of `RunAggregationQuery`, `documents:runAggregationQuery`, is read under the same
 rules as its gRPC form — see *Aggregation queries*, below — and the REST spellings of the calls
 declined below are declined under the same reasons; a custom method the vocabulary has never heard
-of is `unsupported-rpc` whether it arrives as a gRPC `:path` or a REST suffix. The Web SDK does
-normalise a query before sending it, and *Implicit fields are not materialised* above says what that
-means for the file.
+of is `unsupported-rpc` whether it arrives as a gRPC `:path` or a REST suffix. **This is the one call
+both Web SDK builds reach the same way.** `RunAggregationQuery` has no streaming form, so
+`count()`/`sum()`/`average()` post to `documents:runAggregationQuery` from the full SDK's browser
+build — `getCountFromServer`, `getAggregateFromServer` — exactly as they do from
+`firestore/lite`'s `getCount`/`getAggregate`; neither goes out on the WebChannel forward channel a
+plain query does. The two builds' bodies were captured independently and are byte-identical, which
+is a fact about this one release of the shared internals rather than a guarantee — see
+`packages/record/scripts/capture-web-fixtures.mjs`. The Web SDK does normalise a query before
+sending it, and *Implicit fields are not materialised* above says what that means for the file.
 
 Everything else the proxy sees, it counts under one of the reasons below and records nothing:
 
