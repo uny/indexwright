@@ -177,9 +177,12 @@ Firestore connection.
   puts the *identical* query, `limit(1)` included, to `Query.explain({ analyze: false })` instead —
   Query Explain's own default, which the Firestore documentation describes as performing no index or
   read operation while charging the one read a served query would have charged. It exists for a
-  credential that a project's standing rule forbids from holding data-plane read access at all: the
-  same `datastore.schemas.list` grant readiness already relies on is what `explain` needs too, and
-  the scope `check` already asks for — `datastore.user` — carries it.
+  gate whose standing rule is that no document may leave the database into the process that runs
+  it: `read` returns one, `explain` returns none. It does **not** narrow the grant. The same
+  documentation states that Query Explain needs the permissions a regular query needs, so a
+  principal that may not query the target cannot use either oracle, and `roles/datastore.user` —
+  which reads and writes documents, as above — remains the ordinary grant for both. What the choice
+  changes is what reaches the runner, not what the runner is allowed to do.
 
   Sending the identical query is not an incidental convenience; it is what makes the two oracles
   *comparable*. Because `buildReplayQuery` does not know a second oracle exists, a disagreement
@@ -195,7 +198,7 @@ Firestore connection.
   through the one rule both oracles share; readiness, the settling period, reconciliation, and the
   second look after the last query is answered are questions about the index set and do not know
   which oracle asked it either. `analyze: true` must never be sent, in any branch: it executes the
-  query and is billed as one, which reintroduces exactly the data-plane cost and access `explain`
+  query and is billed as one, which reintroduces exactly the scan, the cost and the returned rows `explain`
   exists to avoid, and the developer-facing "create this index" link `analyze: true` can produce is
   out of scope for a verb whose entire output is a coverage report. `ExplainMetrics` —
   `planSummary.indexesUsed` above all — is never read to inform a verdict, on two grounds that hold

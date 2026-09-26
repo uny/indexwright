@@ -9,7 +9,7 @@ again, by its own `corpusVersion`.
 
 ### Added
 
-- **`check --oracle explain`, for a runner credentialed with no data-plane read access** (issue
+- **`check --oracle explain`, for a gate that must not take a document off the database** (issue
   #91). Each corpus entry can now be put to the target through `Query.explain({ analyze: false })`
   instead of `Query.get()` — the identical `limit(1)` query either way, so a disagreement between the
   two is about the oracle asked and never about a different query being sent. The verdict is still

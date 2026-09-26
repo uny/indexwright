@@ -310,8 +310,9 @@ export interface Askable {
  *
  * `explain` is `Query.explain({ analyze: false })` — Query Explain's own default, which the
  * Firestore documentation describes as performing no index or read operation while still charging
- * the one read a served query would have. It exists for a principal that `check` may run under with
- * a standing rule against data-plane reads: the verdict comes from the same `FAILED_PRECONDITION` /
+ * the one read a served query would have. It exists for a gate whose standing rule is that no
+ * document may reach the process running it — not for a narrower grant: Query Explain needs the
+ * permissions a regular query does (SPEC §3). The verdict comes from the same `FAILED_PRECONDITION` /
  * `INVALID_ARGUMENT` / other split `classifyRejection` already makes, and returns no document to the
  * process either way.
  *

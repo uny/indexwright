@@ -78,9 +78,10 @@ never the verdict semantics, readiness, the settling period, or the exit codes. 
 is `Query.get()`: the query runs and the one document `limit(1)` admits is read. `explain` asks the
 *identical* query — `limit(1)` included — through `Query.explain({ analyze: false })` instead, which
 Firestore's own documentation describes as performing no index or read operation while still
-charging the one read a served query would have. It is for a runner credentialed with no data-plane
-read access at all: readiness already needs `datastore.schemas.list`, and `explain` needs nothing
-more than that. `analyze: true` is never sent, by either oracle — it executes the query and is
+charging the one read a served query would have. It is for a gate that must not take a document
+off the database: `read` returns one, `explain` returns none. It does not narrow the grant — Query
+Explain needs the same permissions a regular query does, so the runner still needs a role that may
+query the target (`roles/datastore.user` is the ordinary one). `analyze: true` is never sent, by either oracle — it executes the query and is
 billed as one, undoing exactly the cost and access `explain` exists to avoid — and the metrics
 `explain` returns (`ExplainMetrics`, `planSummary.indexesUsed`) are never read to reach a verdict;
 the SDK documents that format as human-readable and not meant to be programmed against, and `check`'s
