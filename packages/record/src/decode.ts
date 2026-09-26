@@ -293,7 +293,16 @@ function readStructuredAggregationQuery(bytes: Uint8Array): RawAggregationQuery 
   return { query: readStructuredQuery(structuredQuery), aggregations };
 }
 
-/** One `Aggregation`. `count`/`sum`/`avg` is a `oneof`; the last one present on the wire wins. */
+/**
+ * One `Aggregation`. `count`/`sum`/`avg` is a `oneof`, and the last one present on the wire wins —
+ * that is protobuf's own semantics for a repeated field number within one message, the same rule
+ * every other oneof in this file follows (`where`, `CompositeFilter.op`, `Order.direction`). This is
+ * deliberately *not* mirrored in `decode-json.ts`'s `readAggregation`: the binary wire can legally
+ * carry more than one occurrence of a oneof member and defines which one counts, but the proto3 JSON
+ * mapping has no such occurrence to order — a JSON object naming two of these keys is not a message
+ * a conforming writer produces, and is declined there rather than resolved by a rule the format
+ * does not state.
+ */
 function readAggregation(bytes: Uint8Array): AggregationSpec {
   let op: AggregationOp | null = null;
   let field_: string | null = null;

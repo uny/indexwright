@@ -244,14 +244,27 @@ function readStructuredAggregationQuery(value: unknown): RawAggregationQuery {
   return { query: readStructuredQuery(inner), aggregations: items.map(readAggregation) };
 }
 
-/** One `aggregations[]` entry. `count`/`sum`/`avg` is a `oneof`; the first present, in that order, is read. */
+/**
+ * One `aggregations[]` entry. `count`/`sum`/`avg` is a `oneof`, and unlike `decode.ts`'s protobuf
+ * reader — which keeps whichever member the wire physically sets last, because that is what a
+ * `oneof` *means* in the binary encoding — the proto3 JSON mapping has no "last one wins" to fall
+ * back on: a JSON object naming two of these keys at once is not a message a conforming writer
+ * produces at all, the same way `field()` above refuses a member spelled under both names rather
+ * than picking one. So this is declined as `undecodable-message` instead of choosing between them,
+ * which matters because choosing would otherwise let the identical malformed *meaning* — "which of
+ * these three did the sender intend" — decode to a different corpus key depending on which
+ * transport carried it: the binary reader keeps the later field number, the JSON reader here would
+ * have kept whichever key this loop checked first, and neither answer is the sender's.
+ */
 function readAggregation(value: unknown): AggregationSpec {
   const agg = object(value, 'aggregations[]');
   const count = field(agg, 'count');
-  if (count !== undefined) return { op: 'COUNT' as AggregationOp, field: null };
   const sum = field(agg, 'sum');
-  if (sum !== undefined) return { op: 'SUM' as AggregationOp, field: readAggregateFunctionField(sum, 'sum') };
   const avg = field(agg, 'avg');
+  const set = [count, sum, avg].filter((member) => member !== undefined).length;
+  if (set > 1) throw new WireError('aggregation names more than one of count, sum and avg');
+  if (count !== undefined) return { op: 'COUNT' as AggregationOp, field: null };
+  if (sum !== undefined) return { op: 'SUM' as AggregationOp, field: readAggregateFunctionField(sum, 'sum') };
   if (avg !== undefined) return { op: 'AVG' as AggregationOp, field: readAggregateFunctionField(avg, 'avg') };
   throw new UnsupportedShape('aggregation holds no recognised operator');
 }

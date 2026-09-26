@@ -26,10 +26,12 @@ again, by its own `corpusVersion`.
   `documents:runAggregationQuery` form — decode into a new `aggregations` corpus member holding the
   inner query plus a sorted, de-duplicated aggregation list; values, aliases, and `Count.up_to` are
   not recorded, on the same grounds `limit`/`select` are not. The REST form is read from real bodies
-  captured off **both** Web SDK builds, not only `firestore/lite`: `count()`/`sum()`/`average()`
-  have no streaming form, so the full SDK's `getCountFromServer`/`getAggregateFromServer` post to
-  this endpoint exactly as `firestore/lite`'s `getCount`/`getAggregate` do, rather than travelling
-  over the WebChannel forward channel a plain query does — the two builds' bodies were captured
+  captured off **both** Web SDK builds, not only `firestore/lite`: `RunAggregationQuery` is
+  server-streaming on the wire, the same as `RunQuery`, but both SDK builds invoke it through
+  `RestConnection`'s unary REST path rather than the WebChannel streaming path they reserve for
+  `Listen`/`Write` — that path collects the streamed responses into one REST POST/response itself,
+  so the full SDK's `getCountFromServer`/`getAggregateFromServer` post to this endpoint exactly as
+  `firestore/lite`'s `getCount`/`getAggregate` do — the two builds' bodies were captured
   independently and found byte-identical. The entry is keyed
   `aggregate(<inner key>)::<aggregations>`, which is provably unable to collide with a plain
   `QueryShape` key over the same inner query — see SPEC.md §7, *Aggregation queries*. `corpusVersion`
