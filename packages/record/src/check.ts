@@ -418,11 +418,7 @@ export async function check(
     const indexesPath = command.indexes as string;
     const reconciliation = excuseExtras(reconcileBoth(candidate, overrides, live), allowedExtra, excusedKeys, say, true);
     if (allowedExtra !== undefined) {
-      for (const [key, reason] of allowedExtra) {
-        if (!excusedKeys.has(key)) {
-          say(`in the ${ALLOW_EXTRA_OPTION} file, but not on the target: ${render(key)} (${render(reason)})`);
-        }
-      }
+      reportStaleAllowExtra(allowedExtra, excusedKeys, reconciliation, say);
     }
     if (!isVouchedBoth(reconciliation)) {
       reportDivergence(reconciliation, indexesPath, say);
@@ -692,34 +688,58 @@ function isVouchedBoth(both: Both): boolean {
  * What `--target-set live` reports instead of a verdict, when `--indexes` named a file (issue #92).
  *
  * `reconcile`'s `extra` — every live entry the file does not declare — is the coverage this run's
- * replay is depending on beyond what the file says, and `missing` — every declaration the target does
- * not hold — is the reverse: a declaration this pass did not need anything from. Both are said flatly,
- * never as "unused" or a candidate for removal: SPEC §2 and §8 forbid reading either line as an
- * authorisation to delete anything, and this branch does not compute the one fact that would make
- * `missing` even a candidate for that reading — whether some *other* pass depends on it, which is
- * exactly the question `--target-set live` was reached for instead of the strict reconcile that would
- * have settled it.
+ * replay is depending on beyond what the file says. `missing` is not simply the reverse. It is every
+ * declaration for which `reconcile`/`reconcileOverrides` found no *readable* live entry at its
+ * canonical identity, and that happens two different ways: the target truly does not hold it, or the
+ * target holds something at that identity but in terms this version could not read at all — a
+ * non-default `apiScope`, `density`, `unique`, `multikey`, or `shardCount` (see `readLive` in
+ * `reconcile.ts`) — which refuses the entry *before* it is ever given an identity to be matched
+ * against. The two cannot be told apart per declaration: an unreadable live entry carries no identity
+ * to correlate it to one, so the mere presence of one unreadable entry in a half means every
+ * declaration this half reports as `missing` might be the second case rather than the first. Saying
+ * "not found" for all of them would assert something this run does not actually know for some.
  *
- * `unreadable` and `incomparable` entries are silently absent from this report rather than reported as
- * a third bucket — this branch never declines on them (`readLive`/`incomparableReason` are §5-key
- * concerns, and live mode's vouching basis is the coarser name-and-state one `stillHeld` uses), so
- * there is no reason to single them out. The report is therefore informational and not a promise that
- * every live entry was accounted for; it says what the strict half of `reconcile` could match, and no
- * more.
+ * `reportMissing` is the guard against that: it checks once, per half, whether that half carries any
+ * unreadable entry at all, and if so drops the "not found" framing for every entry the half reports,
+ * in favour of one that claims only what was actually established — that this pass could not compare
+ * it, not that it is absent. Either wording still avoids "unused" or a candidate for removal: SPEC §2
+ * and §8 forbid reading either as an authorisation to delete anything, and this function does not
+ * compute the one fact that would make it even a candidate for that reading — whether some *other*
+ * pass depends on it, which is exactly the question `--target-set live` was reached for instead of
+ * the strict reconcile that would have settled it.
+ *
+ * `incomparable` entries are silently absent from this report rather than reported as a third bucket
+ * — this branch never declines on them (`incomparableReason` is a §5-key concern, and live mode's
+ * vouching basis is the coarser name-and-state one `stillHeld` uses), so there is no reason to single
+ * them out. The report is therefore informational and not a promise that every live entry was
+ * accounted for; it says what the strict half of `reconcile` could match, and no more.
  */
 function reportDependencies(both: Both, indexesPath: string, say: (text: string) => void): void {
   const { indexes, overrides } = both;
-  for (const index of indexes.missing) {
-    say(`declared at ${render(indexesPath)}, not found on the target: ${render(index.key)}`);
-  }
+  reportMissing(indexes.missing, indexes.unreadable.length > 0, indexesPath, say);
   for (const index of indexes.extra) {
     say(`this coverage depends on, beyond ${render(indexesPath)}: ${render(index.key)}`);
   }
-  for (const override of overrides.missing) {
-    say(`declared at ${render(indexesPath)}, not found on the target: ${render(override.key)}`);
-  }
+  reportMissing(overrides.missing, overrides.unreadable.length > 0, indexesPath, say);
   for (const override of overrides.extra) {
     say(`this coverage depends on, beyond ${render(indexesPath)}: ${render(override.key)}`);
+  }
+}
+
+/** One half's `missing` list, worded as `reportDependencies`'s own doc explains. */
+function reportMissing(
+  missing: readonly { readonly key: string }[],
+  someUnreadable: boolean,
+  indexesPath: string,
+  say: (text: string) => void,
+): void {
+  for (const entry of missing) {
+    say(
+      someUnreadable
+        ? `declared at ${render(indexesPath)}, but could not be compared against the target in ` +
+            `these terms, so this pass cannot say whether it is depended on: ${render(entry.key)}`
+        : `declared at ${render(indexesPath)}, and this pass does not depend on it: ${render(entry.key)}`,
+    );
   }
 }
 
@@ -809,6 +829,64 @@ function excuseExtras(
       verdict: recomputeVerdict(both.overrides, overrideSplit.blocking),
     },
   };
+}
+
+/**
+ * Say why an `--allow-extra` entry named a key that did not excuse anything, without asserting more
+ * than this run actually established (issue #92, review of #96).
+ *
+ * "Not on the target" was the original wording, and it overclaimed: a key stops appearing in either
+ * half's `extra` for reasons besides having left the target. It is checked here against `both`, which
+ * `excuseExtras` returns with `matched` and `unreadable` carried over unchanged from the reconciliation
+ * it was handed — so this sees the same two buckets the pre-replay reconcile produced.
+ *
+ * Two cases are told apart because they are cheap to tell apart, from information already in hand:
+ *
+ * - The key now names something *declared*. `--allow-extra` excuses a divergence; a key that turns up
+ *   in `matched` is not one any more — the candidate file caught up with it — and saying "not on the
+ *   target" about an index the target plainly holds, matched at that, would be the exact false claim
+ *   this rewrite exists to stop making.
+ * - Some entry in this reconciliation could not be read at all (`unreadable`, non-empty on either
+ *   half). An unreadable live entry carries no identity, so a key that used to name an extra and does
+ *   not any more cannot be told from a key whose live counterpart just became unreadable — the same
+ *   ambiguity `reportMissing` guards against, reached from the other direction. Asserting "no longer
+ *   on the target" over that ambiguity would be the same overclaim in miniature.
+ *
+ * Failing both checks, the honest claim is the narrow one the README documents: the key no longer
+ * matches an extra on the target. Not "gone" — an index or override with that identity might still be
+ * there, sorted into `matched` or `missing` by a change to the file, or the ambiguity above might not
+ * apply to this particular key at all. What is actually known is only that this run's `extra` does not
+ * contain it, which is the one fact `excusedKeys` and `both` together can attest to.
+ */
+function reportStaleAllowExtra(
+  allowed: ReadonlyMap<string, string>,
+  excused: ReadonlySet<string>,
+  both: Both,
+  say: (text: string) => void,
+): void {
+  const matched = new Set([
+    ...both.indexes.matched.map((entry) => entry.key),
+    ...both.overrides.matched.map((entry) => entry.key),
+  ]);
+  const someUnreadable = both.indexes.unreadable.length > 0 || both.overrides.unreadable.length > 0;
+
+  for (const [key, reason] of allowed) {
+    if (excused.has(key)) continue;
+    if (matched.has(key)) {
+      say(
+        `in the ${ALLOW_EXTRA_OPTION} file, but now declared and matched on the target rather than ` +
+          `extra: ${render(key)} (${render(reason)})`,
+      );
+      continue;
+    }
+    say(
+      (someUnreadable
+        ? `in the ${ALLOW_EXTRA_OPTION} file, but no longer matches an extra on the target — or its ` +
+          `live counterpart could not be compared, since some entries could not be read this run`
+        : `in the ${ALLOW_EXTRA_OPTION} file, but no longer matches an extra on the target`) +
+        `: ${render(key)} (${render(reason)})`,
+    );
+  }
 }
 
 /** A verdict the gate reached that waiting cannot change, carried out of the poll as a message. */
