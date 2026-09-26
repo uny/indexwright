@@ -263,9 +263,9 @@ export function planReplay(shape: QueryShape): ReplayPlan {
  * counts rows, not documents fetched — a limit on the *count* would change the answer, not just the
  * cost) or would have to attach somewhere the SDK gives it no hook to attach to. Both readings argue
  * against reusing the plain path's limit here rather than for it, so this plan carries none, and
- * `docs/README.md`'s guidance to prefer `--oracle explain` for an aggregation follows from the
- * inference and is stated for an operator rather than a developer; `probe/README.md` step 5f is the
- * runbook for measuring it and is marked not yet run.
+ * the package README's guidance to prefer `--oracle explain` for an aggregation follows from the
+ * inference and is stated for an operator rather than a developer. `probe/README.md` step 5f measured
+ * selection and oracle agreement for an aggregation, but not its read cost, which stays inferred.
  */
 export interface AggregationReplayPlan {
   readonly collectionGroup: string;
