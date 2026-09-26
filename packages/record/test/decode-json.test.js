@@ -27,6 +27,17 @@ const { cases } = JSON.parse(
   readFileSync(fileURLToPath(new URL('fixtures/web-sdk.json', import.meta.url)), 'utf8'),
 );
 
+/**
+ * Real `documents:runAggregationQuery` bodies (issue #93), from both the full SDK's
+ * `getCountFromServer`/`getAggregateFromServer` and `firebase/firestore/lite`'s
+ * `getCount`/`getAggregate` — both reach the emulator this same REST way, never over a WebChannel
+ * forward channel; see `scripts/capture-web-fixtures.mjs`'s docblock for why, and
+ * `proxy.test.js` for the end-to-end capture of one. Regenerate with that script.
+ */
+const { cases: webAggregationCases } = JSON.parse(
+  readFileSync(fileURLToPath(new URL('fixtures/web-sdk-aggregation.json', import.meta.url)), 'utf8'),
+);
+
 const EXPECTED_KEYS = new Map([
   [
     'equality and inequality with two sorts',
@@ -301,14 +312,58 @@ test('keys this reader does not expect are ignored, as protobuf ignores an unkno
 });
 
 /**
- * Hand-built REST `documents:runAggregationQuery` bodies (issue #93).
- *
- * No Firebase SDK sends this endpoint over HTTP/1.1 today — `firebase/firestore/lite` sends
- * `RunQuery` this way, and aggregation queries from the Web SDK travel the WebChannel gRPC-Web path
- * instead — so unlike `decodeJsonRunQuery`'s fixtures above, there is no real client body to capture
- * for this decoder yet. The proto3 JSON mapping is nonetheless fully documented, and the proxy reads
- * whatever conforms to it, so these are built by hand against that mapping rather than against a
- * fixture nothing currently produces.
+ * Real REST `documents:runAggregationQuery` bodies decode to the shape they were captured as
+ * (issue #93) — from both the full SDK and `firebase/firestore/lite`, which are captured
+ * separately and turn out to be byte-identical (see `web-sdk-aggregation.json`'s `note` and
+ * `scripts/capture-web-fixtures.mjs`'s docblock for why: both reach `RestConnection`'s one
+ * non-streaming invoke path). A corrected assumption is worth stating plainly: an earlier version of
+ * this test file asserted that no Firebase SDK reaches this endpoint over HTTP/1.1 at all — reasoning
+ * from `getDocs`'s WebChannel path without checking `count()`/`sum()`/`average()` against the SDK
+ * source, which do reach it, over REST, from *both* builds. They were wrong, and this fixture is the
+ * correction: real bytes, not an assumption.
+ */
+const WEB_AGGREGATION_EXPECTED_KEYS = new Map([
+  ['a bare count', 'aggregate(orders::COLLECTION::AND()::)::COUNT'],
+  ['sum and average together', 'aggregate(orders::COLLECTION::AND()::)::AVG:amount|SUM:amount'],
+  [
+    'a count over a filtered collection-group query',
+    'aggregate(items::COLLECTION_GROUP::AND(sku:EQUAL)::)::COUNT',
+  ],
+]);
+
+function decodeWebAggregationFixture(name, build) {
+  const found = webAggregationCases.find((entry) => entry.name === name);
+  assert.ok(found, `web aggregation fixture "${name}" is missing; regenerate scripts/capture-web-fixtures.mjs`);
+  const body = found[build];
+  const result = decodeJsonRunAggregationQuery(Buffer.from(body.body, 'utf8'));
+  assert.ok(result.ok, `expected "${name}" (${build}) to decode, got ${result.ok ? '' : result.reason}`);
+  return toAggregationShape(result.query);
+}
+
+test('every captured aggregation request — full SDK and lite alike — decodes to the shape it was written as', () => {
+  assert.equal(webAggregationCases.length, WEB_AGGREGATION_EXPECTED_KEYS.size, 'the fixture and the expectations disagree in size');
+  for (const [name, expected] of WEB_AGGREGATION_EXPECTED_KEYS) {
+    assert.equal(decodeWebAggregationFixture(name, 'full').key, expected, `${name} (full)`);
+    assert.equal(decodeWebAggregationFixture(name, 'lite').key, expected, `${name} (lite)`);
+  }
+});
+
+test('the real bodies carry an alias per aggregation, which this reader ignores like any unknown key', () => {
+  const found = webAggregationCases.find((entry) => entry.name === 'sum and average together');
+  const parsed = JSON.parse(found.full.body);
+  for (const aggregation of parsed.structuredAggregationQuery.aggregations) {
+    assert.equal(typeof aggregation.alias, 'string');
+  }
+  // Already decoded above without incident; this asserts the premise that the captured body really
+  // does exercise the alias-tolerance path, rather than happening to omit the field.
+});
+
+/**
+ * Hand-built REST `documents:runAggregationQuery` bodies (issue #93), for spellings and shapes the
+ * real fixtures above do not reach: the original (snake_case) proto field names, which no Firebase
+ * SDK writes but a conforming writer may, and the malformed/edge-case bodies below. The proto3 JSON
+ * mapping is fully documented, and the proxy reads whatever conforms to it — these are checked
+ * against that mapping directly rather than against a client that would never produce them.
  */
 function decodeAggregation(body) {
   return decodeJsonRunAggregationQuery(Buffer.from(JSON.stringify(body), 'utf8'));

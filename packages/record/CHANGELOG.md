@@ -25,7 +25,12 @@ again, by its own `corpusVersion`.
   (issue #93). `count()`, `sum(field)`, and `average(field)` — both gRPC and the REST
   `documents:runAggregationQuery` form — decode into a new `aggregations` corpus member holding the
   inner query plus a sorted, de-duplicated aggregation list; values, aliases, and `Count.up_to` are
-  not recorded, on the same grounds `limit`/`select` are not. The entry is keyed
+  not recorded, on the same grounds `limit`/`select` are not. The REST form is read from real bodies
+  captured off **both** Web SDK builds, not only `firestore/lite`: `count()`/`sum()`/`average()`
+  have no streaming form, so the full SDK's `getCountFromServer`/`getAggregateFromServer` post to
+  this endpoint exactly as `firestore/lite`'s `getCount`/`getAggregate` do, rather than travelling
+  over the WebChannel forward channel a plain query does — the two builds' bodies were captured
+  independently and found byte-identical. The entry is keyed
   `aggregate(<inner key>)::<aggregations>`, which is provably unable to collide with a plain
   `QueryShape` key over the same inner query — see SPEC.md §7, *Aggregation queries*. `corpusVersion`
   is bumped to 3; a v3 reader still reads v1 and v2 corpora in full, and `aggregation-query` joins

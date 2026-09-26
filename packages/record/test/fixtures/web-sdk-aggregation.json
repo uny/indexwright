@@ -1,0 +1,44 @@
+{
+  "note": "REST documents:runAggregationQuery bodies as the Firebase Web SDK sends them (issue #93) — from both the full SDK (getCountFromServer/getAggregateFromServer) and firebase/firestore/lite (getCount/getAggregate), which this capture confirms send the same call rather than merely being assumed to. There is no forward-channel form: RestConnection routes RunAggregationQuery over plain HTTP/1.1 for both SDKs, never over WebChannel. Regenerate with packages/record/scripts/capture-web-fixtures.mjs. The shape each one is expected to decode to is written by hand in test/decode-json.test.js.",
+  "cases": [
+    {
+      "name": "a bare count",
+      "full": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runAggregationQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredAggregationQuery\":{\"aggregations\":[{\"alias\":\"aggregate_0\",\"count\":{}}],\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}]}}}"
+      },
+      "lite": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runAggregationQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredAggregationQuery\":{\"aggregations\":[{\"alias\":\"aggregate_0\",\"count\":{}}],\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}]}}}"
+      }
+    },
+    {
+      "name": "sum and average together",
+      "full": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runAggregationQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredAggregationQuery\":{\"aggregations\":[{\"alias\":\"aggregate_0\",\"sum\":{\"field\":{\"fieldPath\":\"amount\"}}},{\"alias\":\"aggregate_1\",\"avg\":{\"field\":{\"fieldPath\":\"amount\"}}}],\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}]}}}"
+      },
+      "lite": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runAggregationQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredAggregationQuery\":{\"aggregations\":[{\"alias\":\"aggregate_0\",\"sum\":{\"field\":{\"fieldPath\":\"amount\"}}},{\"alias\":\"aggregate_1\",\"avg\":{\"field\":{\"fieldPath\":\"amount\"}}}],\"structuredQuery\":{\"from\":[{\"collectionId\":\"orders\"}]}}}"
+      }
+    },
+    {
+      "name": "a count over a filtered collection-group query",
+      "full": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runAggregationQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredAggregationQuery\":{\"aggregations\":[{\"alias\":\"aggregate_0\",\"count\":{}}],\"structuredQuery\":{\"from\":[{\"collectionId\":\"items\",\"allDescendants\":true}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"sku\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"x\"}}}}}}"
+      },
+      "lite": {
+        "path": "/v1/projects/demo-fixtures/databases/(default)/documents:runAggregationQuery",
+        "contentType": "text/plain",
+        "body": "{\"structuredAggregationQuery\":{\"aggregations\":[{\"alias\":\"aggregate_0\",\"count\":{}}],\"structuredQuery\":{\"from\":[{\"collectionId\":\"items\",\"allDescendants\":true}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"sku\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"x\"}}}}}}"
+      }
+    }
+  ]
+}
