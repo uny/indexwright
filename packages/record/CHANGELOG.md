@@ -5,6 +5,37 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
+## [Unreleased]
+
+### Added
+
+- **`check --target-set live` vouches for whatever index set the target holds**, rather than
+  requiring it to match `--indexes` exactly (issue #92). Written for a shared, live database a
+  second tool also writes to between drift runs — a dev database that deliberately keeps `HEAD ∪
+  indexes from unmerged branches` alive, or a prod database whose declaration and reality agree only
+  between drift jobs — where the strict reconcile declines by construction on the extras, for
+  reasons that have nothing to do with whether the corpus is covered. `--indexes` becomes optional
+  under it; when given, every live index or override the file does not declare is reported as part
+  of what this pass's coverage *depends on* — never as unneeded or removable — and every declaration
+  the target does not hold is reported as not depended on by this pass, a fact about the run and not
+  a verdict about the declaration. Readiness and the post-replay second look (#50) still run against
+  the live listing exactly as they do by default: `establishReadiness` has always gated on the whole
+  live listing rather than on the candidate declarations, so a stranger's index still building on a
+  shared target blocks this mode's run until the deadline too, the same as it always blocked the
+  default mode's. A pass under `--target-set live` says nothing about whether the candidate file's
+  declarations are needed elsewhere (SPEC §2, §8).
+
+- **`--allow-extra <file>` excuses named extras from the strict reconcile**, mirroring `--baseline`'s
+  shape and rules: every entry names a canonical index or override key (SPEC §5) and a non-empty
+  `reason`, printed on every run that relies on it, with a stale entry — one that no longer matches
+  an extra on the target — reported so the file can shrink. It excuses only the `extra` half of the
+  reconcile, on both the pre-replay gate and the post-replay confirmation: a declaration the target
+  does not hold still declines the run regardless of what the file names. Refused together with
+  `--target-set live`, which runs no strict reconcile for it to carve an exception out of.
+
+- **The target line names the mode**, in every run including the default strict one, so a report
+  from either flag above cannot be misread as the plain strict pass this verb defaults to.
+
 ## [0.10.1] — 2026-09-23
 
 A patch for a path the JS API left unbounded. A corpus built by hand is now held to the filter depth
