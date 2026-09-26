@@ -181,8 +181,8 @@ Firestore connection.
   actually poses: not "does this file match what is live," but "does what is live right now cover the
   corpus." It gives up the file-matching question entirely — `--indexes` becomes optional, and when it
   is given, every live index or override the file does not declare is reported as part of what this
-  pass's coverage *depends on*, and every declaration the target does not hold is reported as *not*
-  depended on by this pass. Neither line is a divergence, and neither may be read as one: a pass under
+  pass's coverage *depends on*, and every declaration the target does not hold is reported as absent
+  from the target, so that no query the pass answered went through it. Neither line is a divergence, and neither may be read as one: a pass under
   this mode says nothing about whether the file's declarations are needed elsewhere, and nothing here
   authorises removing anything (§2, §8). `--allow-extra <file>` keeps the strict reconcile instead,
   with a named exception: a file of accepted extras, each entry carrying a `reason` exactly as

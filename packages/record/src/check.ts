@@ -737,8 +737,8 @@ function reportMissing(
     say(
       someUnreadable
         ? `declared at ${render(indexesPath)}, but could not be compared against the target in ` +
-            `these terms, so this pass cannot say whether it is depended on: ${render(entry.key)}`
-        : `declared at ${render(indexesPath)}, and this pass does not depend on it: ${render(entry.key)}`,
+            `these terms, so this pass cannot say whether the target holds it: ${render(entry.key)}`
+        : `declared at ${render(indexesPath)}, not on the target, so no query this pass answered went through it: ${render(entry.key)}`,
     );
   }
 }

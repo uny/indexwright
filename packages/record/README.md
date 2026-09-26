@@ -249,8 +249,8 @@ live` asks the question such a target actually poses: not "does the file match w
 "does what's live right now cover the corpus." `--indexes` becomes optional under it; when given,
 every live index or override the file does not declare is reported as part of what this pass's
 coverage *depends on* — never as unneeded or removable — and every declaration the target does not
-hold is reported as not depended on by this pass, a fact about this run and not a verdict about the
-declaration. Readiness and the post-replay second look still run against the live listing exactly as
+hold is reported as not on the target, so no query this pass answered went through it — a fact
+about the target and this run, never a verdict that the declaration is unneeded. Readiness and the post-replay second look still run against the live listing exactly as
 they do by default — including the cost that follows: `check` gates readiness on the *whole* live
 listing, not on the candidate declarations, so a stranger's index still building on a shared dev
 database blocks a `--target-set live` run until the deadline too. **A pass under `--target-set live`

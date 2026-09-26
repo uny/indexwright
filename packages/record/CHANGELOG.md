@@ -17,8 +17,8 @@ again, by its own `corpusVersion`.
   reasons that have nothing to do with whether the corpus is covered. `--indexes` becomes optional
   under it; when given, every live index or override the file does not declare is reported as part
   of what this pass's coverage *depends on* — never as unneeded or removable — and every declaration
-  the target does not hold is reported as not depended on by this pass, a fact about the run and not
-  a verdict about the declaration. Readiness and the post-replay second look (#50) still run against
+  the target does not hold is reported as not on the target, so no query the pass answered went
+  through it — a fact about the target and the run, never a verdict that the declaration is unneeded. Readiness and the post-replay second look (#50) still run against
   the live listing exactly as they do by default: `establishReadiness` has always gated on the whole
   live listing rather than on the candidate declarations, so a stranger's index still building on a
   shared target blocks this mode's run until the deadline too, the same as it always blocked the

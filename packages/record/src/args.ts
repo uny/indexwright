@@ -779,7 +779,7 @@ export function usage(): string {
     '                          A pass under it says nothing about whether --indexes, when given, is',
     '                          needed; with it, every live index or override not in the file is',
     '                          reported as depended on, and every declaration not on the target is',
-    '                          reported as not depended on by this pass',
+    '                          reported as absent from it (a fact about the target, not the file)',
     `  ${ALLOW_EXTRA_OPTION} <file>    extras already accepted by this project (no default; refused together`,
     `                          with ${TARGET_SET_OPTION}=${TARGET_SET_LIVE}, which excuses every extra already). The`,
     '                          candidate set otherwise still has to match the target exactly; an',

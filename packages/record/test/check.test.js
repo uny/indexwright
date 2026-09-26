@@ -822,7 +822,7 @@ test('--target-set live never declines over the file diverging, missing --indexe
   assert.equal(await noFile.run(), 0);
   assert.doesNotMatch(noFile.said(), /could not read the candidate indexes/);
   assert.doesNotMatch(noFile.said(), /this coverage depends on/);
-  assert.doesNotMatch(noFile.said(), /does not depend on it/);
+  assert.doesNotMatch(noFile.said(), /no query this pass answered went through it/);
 
   // The candidate file is still read when given, but only to describe what the coverage depends on
   // — never as a gate. A file naming a *different* index from what is live still passes.
@@ -867,8 +867,8 @@ test('with --indexes, --target-set live reports what the pass depends on, never 
   assert.equal(await h.run(), 0);
   // The live extra is named as a dependency, not as surplus.
   assert.match(h.said(), /this coverage depends on, beyond .*firestore\.indexes\.json.*: "carts::COLLECTION/);
-  // The declaration the target does not hold is named as not depended on, not as wrong.
-  assert.match(h.said(), /declared at .*firestore\.indexes\.json.*, and this pass does not depend on it: "orders::COLLECTION::placed:ASCENDING"/);
+  // The declaration the target does not hold is named as absent from the target, not as wrong or unneeded.
+  assert.match(h.said(), /declared at .*firestore\.indexes\.json.*, not on the target, so no query this pass answered went through it: "orders::COLLECTION::placed:ASCENDING"/);
   // SPEC §2/§8: never phrased as removable.
   for (const word of ['unused', 'remove', 'delete', 'unnecessary', 'unneeded']) {
     assert.doesNotMatch(h.said(), new RegExp(word, 'i'));
