@@ -207,15 +207,20 @@ test('query-bearing RPCs that are not RunQuery are counted, and writes are not',
   const capture = await startCapture({ upstream: upstreamAddress });
   try {
     const body = frame(fixtureMessage('no filters and no sort'));
-    for (const method of ['PartitionQuery', 'RunAggregationQuery', 'ExecutePipeline', 'Commit']) {
+    for (const method of ['PartitionQuery', 'ExecutePipeline', 'Commit']) {
       await call(capture.address, `/google.firestore.v1.Firestore/${method}`, body);
     }
+    // `RunAggregationQuery` is captured as of issue #93 rather than declined, so it moved to the
+    // dedicated aggregation-decoding test below (`recordRunAggregationQuery` and its fixtures); a
+    // `RunQueryRequest` body sent to it is not a `RunAggregationQueryRequest`, and decodes as
+    // `unsupported-shape` once the two are read against the right message shape.
+    await call(capture.address, '/google.firestore.v1.Firestore/RunAggregationQuery', body);
     assert.deepEqual(
       [...capture.recorder.skips.entries()].sort(),
       [
-        ['aggregation-query', 1],
         ['partition-query', 1],
         ['unsupported-rpc', 1],
+        ['unsupported-shape', 1],
       ],
     );
     assert.equal(capture.recorder.shapes.length, 0);
@@ -523,6 +528,10 @@ test('REST calls the corpus cannot model are counted under the reasons gRPC call
   try {
     const documents = '/v1/projects/p/databases/(default)/documents';
     const text = { 'content-type': 'text/plain' };
+    // `runAggregationQuery` is captured as of issue #93; an empty `structuredAggregationQuery` is
+    // not a message a conforming client sends (it carries no inner query), so it counts as
+    // `unsupported-shape` here rather than joining the skip reasons below — see
+    // `decode-json.test.js` for the shapes this endpoint does capture.
     await post(capture.address, `${documents}:runAggregationQuery`, '{"structuredAggregationQuery":{}}', text);
     await post(capture.address, `${documents}:partitionQuery`, '{"structuredQuery":{}}', text);
     await post(capture.address, `${documents}:executePipeline`, '{}', text);
@@ -540,11 +549,11 @@ test('REST calls the corpus cannot model are counted under the reasons gRPC call
     assert.deepEqual(
       [...capture.recorder.skips.entries()].sort(),
       [
-        ['aggregation-query', 1],
         ['partition-query', 1],
         ['undecodable-message', 1],
         ['unsupported-encoding', 1],
         ['unsupported-rpc', 1],
+        ['unsupported-shape', 1],
       ],
     );
   } finally {
@@ -560,7 +569,10 @@ test('classifyHttp1 reads the REST custom method and the WebChannel path, and le
   assert.deepEqual(classifyHttp1('POST', `${documents}/orders/o1:runQuery`), { kind: 'record', method: 'RestRunQuery' });
   assert.deepEqual(classifyHttp1('POST', `${documents}:runQuery?alt=json`), { kind: 'record', method: 'RestRunQuery' });
   assert.deepEqual(classifyHttp1('POST', `${documents}/orders/a:b:runQuery`), { kind: 'record', method: 'RestRunQuery' });
-  assert.deepEqual(classifyHttp1('POST', `${documents}:runAggregationQuery`), { kind: 'skip', reason: 'aggregation-query' });
+  assert.deepEqual(classifyHttp1('POST', `${documents}:runAggregationQuery`), {
+    kind: 'record',
+    method: 'RestRunAggregationQuery',
+  });
   assert.deepEqual(classifyHttp1('POST', `${documents}:partitionQuery`), { kind: 'skip', reason: 'partition-query' });
   assert.deepEqual(classifyHttp1('POST', `${documents}:somethingNew`), { kind: 'skip', reason: 'unsupported-rpc' });
   // REST spells it, the Web SDK never sends it, and it is a query-bearing call this package does not read.

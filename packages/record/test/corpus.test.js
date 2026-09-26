@@ -35,7 +35,13 @@ test('skip reasons are a sorted set', () => {
 
 test('every member is present even when there is nothing to say', () => {
   const document = JSON.parse(serialiseCorpus(buildCorpus([], [])));
-  assert.deepEqual(document, { corpusVersion: CORPUS_VERSION, producers: [], queries: [], skipped: [] });
+  assert.deepEqual(document, {
+    corpusVersion: CORPUS_VERSION,
+    producers: [],
+    queries: [],
+    aggregations: [],
+    skipped: [],
+  });
 });
 
 test('the serialised members are in the documented order', () => {
@@ -83,7 +89,7 @@ test('a corpus round-trips', () => {
 });
 
 test('an unknown corpusVersion is refused rather than read as far as it goes', () => {
-  const text = serialiseCorpus(buildCorpus([], [])).replace('"corpusVersion": 2', '"corpusVersion": 3');
+  const text = serialiseCorpus(buildCorpus([], [])).replace('"corpusVersion": 3', '"corpusVersion": 4');
   assert.throws(() => parseCorpus(text), (error) => error instanceof CorpusError && /corpusVersion/.test(error.message));
 });
 
@@ -216,6 +222,7 @@ const handBuilt = (where) => ({
   corpusVersion: CORPUS_VERSION,
   producers: [],
   queries: [{ key: 'x', collectionGroup: 'c', queryScope: 'COLLECTION', where, orderBy: [] }],
+  aggregations: [],
   skipped: [],
 });
 
@@ -259,23 +266,31 @@ test('a corpus from a later format is refused by version, not by its members', (
   // Adding a top-level member is the normal reason to bump the version, so a reader that checked
   // the member set first would blame a stray field instead of naming the version it cannot read.
   assert.throws(
-    () => parseCorpus('{"corpusVersion":3,"producers":[],"queries":[],"skipped":[],"capturedAt":"2026-08-11"}'),
-    (error) => error instanceof CorpusError && /corpusVersion 3 is not readable/.test(error.message),
+    () => parseCorpus('{"corpusVersion":4,"producers":[],"queries":[],"aggregations":[],"skipped":[],"capturedAt":"2026-08-11"}'),
+    (error) => error instanceof CorpusError && /corpusVersion 4 is not readable/.test(error.message),
   );
 });
 
-test('listen-query is read as a legacy reason and never written by capture', () => {
+test('listen-query and aggregation-query are read as legacy reasons and never written by capture', () => {
   // record ≤ 0.7.0 counted a snapshot listener under `listen-query`; 0.8.0 records it (issue #6).
-  // A corpus those releases committed still names the reason, and refusing it would refuse the
-  // file. The recorder's own vocabulary no longer has it, so a new corpus cannot acquire it.
+  // record ≤ 0.10.1 declined a `RunAggregationQuery` under `aggregation-query`; this release
+  // records it (issue #93). A corpus those releases committed still names one of the two reasons,
+  // and refusing it would refuse the file. The recorder's own vocabulary no longer has either, so a
+  // new corpus cannot acquire them.
   assert.ok(!SKIP_REASONS.includes('listen-query'));
-  assert.deepEqual(LEGACY_SKIP_REASONS, ['listen-query']);
+  assert.ok(!SKIP_REASONS.includes('aggregation-query'));
+  assert.deepEqual(LEGACY_SKIP_REASONS, ['aggregation-query', 'listen-query']);
   const legacy = parseCorpus('{"corpusVersion":1,"queries":[],"skipped":["listen-query"]}');
   assert.deepEqual(legacy.skipped, ['listen-query']);
   // 0.7.0 wrote version 2, so that is the file this actually protects.
   const current = parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"skipped":["listen-query"]}');
   assert.deepEqual(current.skipped, ['listen-query']);
-  assert.deepEqual(mergeCorpora([current, buildCorpus([], ['vector-query'])]).skipped, ['listen-query', 'vector-query']);
+  // 0.10.1 wrote version 2 too, still declining `RunAggregationQuery` — the corpus this issue's own
+  // motivating example is one of.
+  const declinedAggregations = parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"skipped":["aggregation-query"]}');
+  assert.deepEqual(declinedAggregations.skipped, ['aggregation-query']);
+  const currentWithVector = parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"skipped":["vector-query"]}');
+  assert.deepEqual(mergeCorpora([current, currentWithVector]).skipped, ['listen-query', 'vector-query']);
   assert.throws(
     () => parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"skipped":["listen-queries"]}'),
     /skipped\[0\] is not a reason this format defines/,
@@ -327,7 +342,7 @@ test('a producer named by the caller is written into the file, in the documented
   const document = JSON.parse(
     serialiseCorpus(buildCorpus([], [], [{ name: 'orders-service', revision: '9c1f2ab' }])),
   );
-  assert.deepEqual(Object.keys(document), ['corpusVersion', 'producers', 'queries', 'skipped']);
+  assert.deepEqual(Object.keys(document), ['corpusVersion', 'producers', 'queries', 'aggregations', 'skipped']);
   assert.deepEqual(document.producers, [{ name: 'orders-service', revision: '9c1f2ab' }]);
   assert.deepEqual(Object.keys(document.producers[0]), ['name', 'revision']);
 });
@@ -504,8 +519,8 @@ test('a producers list out of order on the revision is refused, and the refusal 
 test('the readable versions are frozen, so a caller cannot widen what this package accepts', () => {
   // `readonly` is erased at runtime and `parseCorpus` reads this array to decide what it will
   // accept: an appended version is one the reader has no members written down for.
-  assert.throws(() => READABLE_CORPUS_VERSIONS.push(3), TypeError);
-  assert.deepEqual([...READABLE_CORPUS_VERSIONS], [1, 2]);
+  assert.throws(() => READABLE_CORPUS_VERSIONS.push(4), TypeError);
+  assert.deepEqual([...READABLE_CORPUS_VERSIONS], [1, 2, 3]);
 });
 
 test('a merge is the union of the queries, de-duplicated by key and sorted by it', () => {

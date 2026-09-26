@@ -5,11 +5,16 @@
  * be indexed, so it goes to stderr where it helps triage, and the file stays diff-stable (SPEC §7).
  */
 import { gunzipSync, inflateSync } from 'node:zlib';
-import { decodeJsonListen, decodeJsonRunQuery, forwardChannelMessages } from './decode-json.js';
-import { decodeListen, decodeRunQuery } from './decode.js';
-import type { DecodeResult } from './decode.js';
-import { toQueryShape } from './shape.js';
-import type { QueryShape, SkipReason } from './types.js';
+import {
+  decodeJsonListen,
+  decodeJsonRunAggregationQuery,
+  decodeJsonRunQuery,
+  forwardChannelMessages,
+} from './decode-json.js';
+import { decodeListen, decodeRunAggregationQuery, decodeRunQuery } from './decode.js';
+import type { AggregationDecodeResult, DecodeResult } from './decode.js';
+import { toAggregationShape, toQueryShape } from './shape.js';
+import type { AggregationShape, QueryShape, SkipReason } from './types.js';
 import { FrameSplitter, grpcMessages, WireError } from './wire.js';
 
 /**
@@ -27,12 +32,18 @@ const DECOMPRESSORS = new Map<string, (input: Uint8Array) => Uint8Array>([
 
 export class Recorder {
   readonly #shapes = new Map<string, QueryShape>();
+  readonly #aggregations = new Map<string, AggregationShape>();
   readonly #skips = new Map<SkipReason, number>();
   #observed = 0;
 
   /** Distinct query shapes, in insertion order; `buildCorpus` is what sorts them. */
   get shapes(): QueryShape[] {
     return [...this.#shapes.values()];
+  }
+
+  /** Distinct aggregation shapes (issue #93), in insertion order; `buildCorpus` is what sorts them. */
+  get aggregations(): AggregationShape[] {
+    return [...this.#aggregations.values()];
   }
 
   get skips(): ReadonlyMap<SkipReason, number> {
@@ -78,6 +89,29 @@ export class Recorder {
     }
 
     for (const message of messages) this.#record(message, encoding, decodeRunQuery);
+  }
+
+  /**
+   * Record the `RunAggregationQueryRequest` in `body` (issue #93).
+   *
+   * Same framing as `recordRunQuery`, over `RunAggregationQuery`'s own unary request: the RPC is
+   * server-streaming on the response side only, so the request body is one gRPC-framed message the
+   * same way a `RunQuery` request is.
+   */
+  recordRunAggregationQuery(body: Uint8Array, encoding: string): void {
+    let messages;
+    try {
+      messages = [...grpcMessages(body)];
+    } catch (error) {
+      if (!(error instanceof WireError)) throw error;
+      this.skip('undecodable-message');
+      return;
+    }
+    if (messages.length === 0) {
+      this.skip('undecodable-message');
+      return;
+    }
+    for (const message of messages) this.#recordAggregation(message, encoding, decodeRunAggregationQuery);
   }
 
   /**
@@ -132,6 +166,14 @@ export class Recorder {
   }
 
   /**
+   * Record the `StructuredAggregationQuery` a REST `documents:runAggregationQuery` request carries
+   * as JSON (issue #93). One request is one message, as `recordRestRunQuery` is.
+   */
+  recordRestRunAggregationQuery(body: Uint8Array): void {
+    this.#countAggregation(decodeJsonRunAggregationQuery(body));
+  }
+
+  /**
    * Record the targets one WebChannel forward-channel POST carries (issue #58).
    *
    * A POST holds zero or more `ListenRequest`s, each read as `recordListen` reads a frame: a target
@@ -151,28 +193,47 @@ export class Recorder {
     for (const message of messages) this.#count(decodeJsonListen(message));
   }
 
+  /**
+   * Undo one framed message's compression, or skip and return `null`.
+   *
+   * Split out of `#record` so that `#recordAggregation` shares it rather than repeating the
+   * decompress-or-skip decision the two RPCs make identically.
+   */
+  #decompress(message: { readonly compressed: boolean; readonly payload: Uint8Array }, encoding: string): Uint8Array | null {
+    if (!message.compressed) return message.payload;
+    const decompress = DECOMPRESSORS.get(encoding);
+    if (decompress === undefined) {
+      this.skip('unsupported-encoding');
+      return null;
+    }
+    try {
+      return decompress(message.payload);
+    } catch {
+      this.skip('undecodable-message');
+      return null;
+    }
+  }
+
   /** One framed message: undo its compression, decode it, and count what came of that. */
   #record(
     message: { readonly compressed: boolean; readonly payload: Uint8Array },
     encoding: string,
     decode: (payload: Uint8Array) => DecodeResult | null,
   ): void {
-    let payload = message.payload;
-    if (message.compressed) {
-      const decompress = DECOMPRESSORS.get(encoding);
-      if (decompress === undefined) {
-        this.skip('unsupported-encoding');
-        return;
-      }
-      try {
-        payload = decompress(payload);
-      } catch {
-        this.skip('undecodable-message');
-        return;
-      }
-    }
-
+    const payload = this.#decompress(message, encoding);
+    if (payload === null) return;
     this.#count(decode(payload));
+  }
+
+  /** As `#record`, for the aggregation decoders. */
+  #recordAggregation(
+    message: { readonly compressed: boolean; readonly payload: Uint8Array },
+    encoding: string,
+    decode: (payload: Uint8Array) => AggregationDecodeResult,
+  ): void {
+    const payload = this.#decompress(message, encoding);
+    if (payload === null) return;
+    this.#countAggregation(decode(payload));
   }
 
   /** What one decoded message comes to: a shape, a skip, or — for control traffic — nothing. */
@@ -185,5 +246,16 @@ export class Recorder {
     this.#observed += 1;
     const shape = toQueryShape(result.query);
     this.#shapes.set(shape.key, shape);
+  }
+
+  /** As `#count`, for an aggregation decode result. There is no control-traffic case to admit `null`. */
+  #countAggregation(result: AggregationDecodeResult): void {
+    if (!result.ok) {
+      this.skip(result.reason);
+      return;
+    }
+    this.#observed += 1;
+    const shape = toAggregationShape(result.query);
+    this.#aggregations.set(shape.key, shape);
   }
 }

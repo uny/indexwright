@@ -267,6 +267,14 @@ function proxyStream(
       (body) => recorder.recordRunQuery(body, encoding),
       () => recorder.skip('undecodable-message'),
     );
+  } else if (intent.kind === 'record' && intent.method === 'RunAggregationQuery') {
+    // `RunAggregationQuery` is server-streaming like `RunQuery`, but the request side is unary, so
+    // it is read the same way: the whole body is collected and handed to the framing-aware decoder.
+    collect(
+      stream,
+      (body) => recorder.recordRunAggregationQuery(body, encoding),
+      () => recorder.skip('undecodable-message'),
+    );
   } else if (intent.kind === 'record') {
     // Teed frame by frame rather than collected: a Listen stream stays open for as long as the
     // listener does, and a target it carries is a query whether or not the stream ever ends.
@@ -321,10 +329,13 @@ function proxyStream(
 }
 
 export type Intent =
-  | { readonly kind: 'record'; readonly method: 'RunQuery' | 'Listen' | 'RestRunQuery' | 'ForwardChannel' }
+  | {
+      readonly kind: 'record';
+      readonly method: 'RunQuery' | 'Listen' | 'RestRunQuery' | 'ForwardChannel' | 'RunAggregationQuery' | 'RestRunAggregationQuery';
+    }
   | {
       readonly kind: 'skip';
-      readonly reason: 'partition-query' | 'aggregation-query' | 'unsupported-rpc';
+      readonly reason: 'partition-query' | 'unsupported-rpc';
     }
   | { readonly kind: 'ignore' };
 
@@ -371,7 +382,9 @@ export function classifyHttp1(method: string | undefined, url: string | undefine
   if (intent.kind !== 'record') return intent;
   // REST does spell a `documents:listen`, but the Web SDK does not send one — its listeners travel
   // by WebChannel — and a stream of JSON requests on one POST is not a body this package reads.
-  return intent.method === 'RunQuery' ? { kind: 'record', method: 'RestRunQuery' } : { kind: 'skip', reason: 'unsupported-rpc' };
+  if (intent.method === 'RunQuery') return { kind: 'record', method: 'RestRunQuery' };
+  if (intent.method === 'RunAggregationQuery') return { kind: 'record', method: 'RestRunAggregationQuery' };
+  return { kind: 'skip', reason: 'unsupported-rpc' };
 }
 
 /** What one method on the Firestore service means to the recorder, however it was carried. */
@@ -384,7 +397,9 @@ function classifyMethod(method: string): Intent {
     case 'PartitionQuery':
       return { kind: 'skip', reason: 'partition-query' };
     case 'RunAggregationQuery':
-      return { kind: 'skip', reason: 'aggregation-query' };
+      // Captured rather than declined as of issue #93; see `recorder.ts`'s `recordRunAggregationQuery`
+      // and `RestRunAggregationQuery` below for the two transports this reaches.
+      return { kind: 'record', method: 'RunAggregationQuery' };
     default:
       if (NON_QUERY_METHODS.has(method)) return { kind: 'ignore' };
       return { kind: 'skip', reason: 'unsupported-rpc' };
@@ -472,6 +487,12 @@ function proxyHttp1(
       collect(
         request,
         (body) => recorder.recordRestRunQuery(body),
+        () => recorder.skip('undecodable-message'),
+      );
+    } else if (intent.method === 'RestRunAggregationQuery') {
+      collect(
+        request,
+        (body) => recorder.recordRestRunAggregationQuery(body),
         () => recorder.skip('undecodable-message'),
       );
     } else if (intent.method === 'ForwardChannel') {
