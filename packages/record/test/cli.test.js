@@ -952,6 +952,11 @@ test('--oracle needs a value, and does not absorb the next option written in its
     () => parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle']),
     (error) => error instanceof UsageError && /--oracle needs a value/.test(error.message),
   );
+  // An empty inline value is the same missing value, not an unknown oracle named "".
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle=']),
+    (error) => error instanceof UsageError && /--oracle needs a value$/.test(error.message),
+  );
   assert.throws(
     () => parseArgs(['check', '--project', 'p', '--database', 'd', '--oracle', '--indexes']),
     (error) => error instanceof UsageError && /--oracle needs a value, got the option "--indexes"/.test(error.message),
