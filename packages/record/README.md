@@ -79,10 +79,10 @@ is `Query.get()`: the query runs and the one document `limit(1)` admits is read.
 *identical* query — `limit(1)` included — through `Query.explain({ analyze: false })` instead, which
 Firestore's own documentation describes as performing no index or read operation while still
 charging the one read a served query would have. It is for a gate that must not take a document
-off the database: `read` returns one, `explain` returns none. It does not narrow the grant — Query
+off the database: `read` returns at most one, `explain` returns none. It does not narrow the grant — Query
 Explain needs the same permissions a regular query does, so the runner still needs a role that may
 query the target (`roles/datastore.user` is the ordinary one). `analyze: true` is never sent, by either oracle — it executes the query and is
-billed as one, undoing exactly the cost and access `explain` exists to avoid — and the metrics
+billed as a query, undoing exactly the cost and access `explain` exists to avoid — and the metrics
 `explain` returns (`ExplainMetrics`, `planSummary.indexesUsed`) are never read to reach a verdict;
 the SDK documents that format as human-readable and not meant to be programmed against, and `check`'s
 verdict is the thrown status alone, the same signal `read` classifies. Every run says which oracle

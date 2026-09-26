@@ -178,7 +178,7 @@ Firestore connection.
   Query Explain's own default, which the Firestore documentation describes as performing no index or
   read operation while charging the one read a served query would have charged. It exists for a
   gate whose standing rule is that no document may leave the database into the process that runs
-  it: `read` returns one, `explain` returns none. It does **not** narrow the grant. The same
+  it: `read` returns at most one, `explain` returns none. It does **not** narrow the grant. The same
   documentation states that Query Explain needs the permissions a regular query needs, so a
   principal that may not query the target cannot use either oracle, and `roles/datastore.user` —
   which reads and writes documents, as above — remains the ordinary grant for both. What the choice
@@ -198,7 +198,7 @@ Firestore connection.
   through the one rule both oracles share; readiness, the settling period, reconciliation, and the
   second look after the last query is answered are questions about the index set and do not know
   which oracle asked it either. `analyze: true` must never be sent, in any branch: it executes the
-  query and is billed as one, which reintroduces exactly the scan, the cost and the returned rows `explain`
+  query and is billed as a query, which reintroduces exactly the scan, the cost and the returned rows `explain`
   exists to avoid, and the developer-facing "create this index" link `analyze: true` can produce is
   out of scope for a verb whose entire output is a coverage report. `ExplainMetrics` —
   `planSummary.indexesUsed` above all — is never read to inform a verdict, on two grounds that hold
@@ -215,7 +215,7 @@ Firestore connection.
   still `CREATING`. The `CREATING` window is the one case where a false `served` would be the
   false-clean verdict §2 forbids. The first half is measured here: `probe/README.md` step 5e put all
   twenty probe shapes through both oracles against a set already `READY` (2026-09-26), and every
-  shape answered the same both ways, seven `FAILED_PRECONDITION` among them. The second half, the
+  shape answered the same both ways, eight `FAILED_PRECONDITION` among them. The second half, the
   `CREATING` window, is still the adopter's reading and not this package's; catching it needs a fresh
   build timed against the watcher, which step 5e does not do. So `--oracle explain` ships on a
   measured agreement over a settled set, plus the documented default behaviour and the
