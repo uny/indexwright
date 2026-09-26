@@ -953,8 +953,23 @@ inner query's four fields — `collectionGroup`, `queryScope`, `where`, `orderBy
 field path for `SUM`/`AVG` and `null` for `COUNT`, which aggregates the matched document rather than
 one field. The set is sorted and de-duplicated — same-op, same-field aggregations run twice describe
 one query, and index selection does not depend on how many times a suite asked for the same
-aggregate or on the order the aggregations were listed, the same argument *Canonical query key*
-makes for `AND`/`OR` children.
+aggregate, the same argument *Canonical query key* makes for `AND`/`OR` children.
+
+**The field of a `SUM` or `AVG` is part of the index requirement, and this is measured.** Probe step
+5f (2026-09-26) put `count()`, `sum(amount)` and `average(amount)` over `a == · , b > ·` to a target
+holding the composite `(a, b)`, which serves that query as a plain read. `count()` was served. `sum`
+and `average` answered `FAILED_PRECONDITION`, and the index the error asked for was
+`(a, b, amount, __name__)`. So a `COUNT` needs what its inner query needs, but a `SUM`/`AVG` needs its
+field in the index as well. That is why the entry records the aggregation list together with the
+inner query. An entry recorded as its inner query alone would have reported that shape covered when
+it is not, which is the false clean §2 ranks worst. The corpus keeps each `SUM`/`AVG` field in the
+key for that reason.
+
+What step 5f did not reach is an aggregation over **two or more** fields. Sorting the set assumes
+that the order the aggregations were listed in does not change which index is required. If two
+aggregated fields must appear in the index in the order the client listed them, the sort would
+replay a different query from the one recorded. That is unmeasured. It is the next thing to probe
+before a corpus with multi-field aggregations is reported on with confidence.
 
 **Values, aliases, and `Count.up_to` are not recorded**, on the same grounds *What a shape is*
 gives for recording no `limit`/`offset`/`select`: none of the three changes which index serves the
@@ -1003,16 +1018,16 @@ over a shape like `!=` is *inferred* to scan the matching index range to produce
 a `count()`/`sum()`/`average()` must do to answer correctly — a plain query's `limit(1)` stops at the
 first document, and nothing analogous bounds an aggregate's own scan. That inference is not a
 measurement: no read-cost signal comparable to `limit.mjs`'s document counts has been taken for an
-aggregation (`AggregateQuerySnapshot` gives no count to read one off), and probe step 5f — not yet
-run — says so rather than treating the inference as settled. `docs/README.md`'s guidance to prefer
+aggregation (`AggregateQuerySnapshot` gives no count to read one off), and probe step 5f, which
+measured selection and oracle agreement, says it did not measure cost. The package README's guidance to prefer
 `--oracle explain` for a corpus carrying aggregation entries follows from the inference and applies
 with particular force to it regardless, on the same conservative footing every other unmeasured
 assumption in this section is held to.
 
-**A probe step is written but not yet run.** `probe/README.md` step 5f exercises `count`/`sum`/`avg`
-over a served and an uncovered shape, under both oracles, to check whether an aggregation's read cost
-or index selection differs from a plain query's the way this section assumes. It is marked **not yet
-run**, and no reading is claimed until it has been.
+**What probe step 5f measured (2026-09-26).** `count`/`sum`/`avg` over a covered and an uncovered
+field pair, under both oracles. `read` and `explain` agreed on every one of the six shapes. Selection
+is as stated above: `COUNT` follows the inner query, and `SUM`/`AVG` also need the aggregated field.
+Read cost was not measured.
 
 Vector search (`find_nearest`) is unaffected and stays declined — see *What is not captured*, below.
 

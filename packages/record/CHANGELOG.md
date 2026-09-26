@@ -41,9 +41,12 @@ again, by its own `corpusVersion`.
   `Query.count()`/`Query.aggregate({...})`, asked via the same `--oracle read|explain` choice a plain
   entry is, with **no `limit`**: the measurement behind the plain path's `limit(1)` was never taken
   for an aggregation, and there is nowhere on `.count()`/`.aggregate()` to attach one regardless.
-  `probe/README.md` step 5f exercises `count`/`sum`/`avg` under both oracles and is marked not yet
-  run, the same way step 5e was left for `--oracle explain`. Vector search (`find_nearest`) is
-  unaffected and stays declined.
+  `probe/README.md` step 5f ran on 2026-09-26. `read` and `explain` agreed on all six aggregation
+  shapes. `count()` needed only what its inner query needs, while `sum(amount)` and
+  `average(amount)` over the same filter were refused under an `(a, b)` index that serves the plain
+  read, and the error asked for `(a, b, amount, __name__)`. So recording the aggregation with its
+  inner query, rather than the inner query alone, is what keeps such a gap from reporting as covered.
+  Vector search (`find_nearest`) is unaffected and stays declined.
 
 ### Changed
 

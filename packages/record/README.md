@@ -410,6 +410,12 @@ wide shape (a `!=`, say) is inferred — not measured — to scan the matching r
 number, rather than stopping at one document the way a plain query's `limit(1)` does; prefer
 `--oracle explain` for a corpus carrying aggregation entries on that inference.
 
+Replaying the aggregation itself, rather than its inner query, is not a formality. Measured against
+a real database (`probe/README.md` step 5f), `count()` needs what its inner query needs, but `sum()`
+and `average()` also need the aggregated field in the index. A `sum(amount)` over a filter that an
+`(a, b)` composite serves was refused until `(a, b, amount)` existed. The emulator enforces none of
+this, so it is the kind of gap that first shows up in production.
+
 [spec-aggregation]: https://github.com/uny/indexwright/blob/main/SPEC.md#aggregation-queries-v04-corpusversion-3
 
 The Firebase **Web SDK** is captured as well, on the transports it really uses. The full SDK in a

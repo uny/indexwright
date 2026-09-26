@@ -16,9 +16,12 @@
  *
  * **The falsification conditions, stated exactly, and separately:**
  *   1. *Selection.* An aggregation over the covered pair is `served` and over the uncovered pair is
- *      `uncovered` — the same as the plain shape's own verdict. A mismatch would mean an
- *      aggregation's index requirement is not simply the inner query's, which SPEC §7's *Aggregation
- *      queries* section takes as read from Firestore's own documentation rather than as measured.
+ *      `uncovered` — the same as the plain shape's own verdict. A mismatch means an aggregation's
+ *      index requirement is not simply the inner query's. SPEC §7 had said that it need not be,
+ *      without having measured it. Step 5f (2026-09-26) found exactly that for `SUM` and `AVG`: the
+ *      aggregated field joins the index, so A3 and A5 are uncovered under `(a, b)`. `covered` below
+ *      records that reading. The first run predicted them served and stopped on it, which is the
+ *      stop rule doing its job.
  *   2. *Oracle agreement.* `read` and `explain` agree on served versus `FAILED_PRECONDITION` for
  *      every shape here, the same claim `oracle.mjs` falsifies for plain queries. `askOracle` does
  *      not know it is asking an `AggregateQuery` rather than a `Query` — `Askable` is structural —
@@ -56,11 +59,11 @@ const SHAPES = [
     build: (c) => c.where('a', '==', 'x').where('b', '>', 0).count() },
   { id: 'A2', describe: 'COUNT over the undeclared pair (S6\'s fields)', covered: false,
     build: (c) => c.where('a', '==', 'x').where('n', '>', 0).count() },
-  { id: 'A3', describe: 'SUM(amount) over the declared pair', covered: true,
+  { id: 'A3', describe: 'SUM(amount) over the declared pair; needs (a, b, amount)', covered: false,
     build: (c) => c.where('a', '==', 'x').where('b', '>', 0).aggregate({ s: AggregateField.sum('amount') }) },
   { id: 'A4', describe: 'SUM(amount) over the undeclared pair', covered: false,
     build: (c) => c.where('a', '==', 'x').where('n', '>', 0).aggregate({ s: AggregateField.sum('amount') }) },
-  { id: 'A5', describe: 'AVG(amount) over the declared pair', covered: true,
+  { id: 'A5', describe: 'AVG(amount) over the declared pair; needs (a, b, amount)', covered: false,
     build: (c) => c.where('a', '==', 'x').where('b', '>', 0).aggregate({ m: AggregateField.average('amount') }) },
   { id: 'A6', describe: 'AVG(amount) over the undeclared pair', covered: false,
     build: (c) => c.where('a', '==', 'x').where('n', '>', 0).aggregate({ m: AggregateField.average('amount') }) },
@@ -143,7 +146,7 @@ for (const line of summaryLines({
   findings,
   unreliable,
   unexpected,
-  claim: 'the aggregation-replay claims (issue #93): selection matches the inner query, and the two oracles agree',
+  claim: 'the aggregation-replay claims (issue #93): COUNT selects as its inner query does, SUM/AVG also need their field, and the two oracles agree',
   unit: 'oracles',
 })) {
   process.stderr.write(`probe-aggregation: ${line}\n`);
