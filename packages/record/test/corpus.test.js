@@ -13,12 +13,16 @@ import {
   READABLE_CORPUS_VERSIONS,
   serialiseCorpus,
   SKIP_REASONS,
+  toAggregationShape,
   toQueryShape,
   writeCorpus,
 } from '../dist/index.js';
 
 const shape = (collectionGroup, where = null, orderBy = []) =>
   toQueryShape({ collectionGroup, queryScope: 'COLLECTION', where, orderBy });
+
+const aggregation = (collectionGroup, aggregations = [{ op: 'COUNT', field: null }], where = null) =>
+  toAggregationShape({ query: { collectionGroup, queryScope: 'COLLECTION', where, orderBy: [] }, aggregations });
 
 test('entries are de-duplicated by key and sorted by it', () => {
   const corpus = buildCorpus([shape('z'), shape('a'), shape('z')], []);
@@ -86,6 +90,195 @@ test('a corpus round-trips', () => {
     ['listen-query'],
   );
   assert.deepEqual(parseCorpus(serialiseCorpus(corpus)), corpus);
+});
+
+/**
+ * `aggregations` round-trips through `buildCorpus`/`serialiseCorpus`/`parseCorpus` (issue #93), the
+ * same discipline the plain-query round-trip above holds `queries` to.
+ */
+test('a corpus carrying aggregations round-trips, at corpusVersion 3', () => {
+  const corpus = buildCorpus(
+    [shape('orders')],
+    [],
+    [],
+    [
+      aggregation('orders', [
+        { op: 'SUM', field: 'amount' },
+        { op: 'COUNT', field: null },
+      ]),
+      aggregation('items', [{ op: 'AVG', field: 'qty' }], { fieldPath: 'sku', op: 'EQUAL' }),
+    ],
+  );
+  assert.equal(corpus.corpusVersion, 3);
+  const round = parseCorpus(serialiseCorpus(corpus));
+  assert.deepEqual(round, corpus);
+  assert.equal(round.aggregations.length, 2);
+  // Sorted by key, the same discipline `queries` is held to.
+  assert.deepEqual(
+    round.aggregations.map((a) => a.key),
+    [...round.aggregations.map((a) => a.key)].sort(),
+  );
+});
+
+test('an aggregation entry can never collide with a plain query entry over the same inner query', () => {
+  const corpus = buildCorpus([shape('orders')], [], [], [aggregation('orders')]);
+  assert.equal(corpus.queries.length, 1);
+  assert.equal(corpus.aggregations.length, 1);
+  assert.notEqual(corpus.queries[0].key, corpus.aggregations[0].key);
+  // Both keyed under the corpus's own de-duplication; neither array's presence starves the other.
+  const parsed = parseCorpus(serialiseCorpus(corpus));
+  assert.equal(parsed.queries.length, 1);
+  assert.equal(parsed.aggregations.length, 1);
+});
+
+test('a version-1 or version-2 corpus names no aggregation; the member is read as an empty list', () => {
+  const v1 = parseCorpus('{"corpusVersion":1,"queries":[],"skipped":[]}');
+  assert.deepEqual(v1.aggregations, []);
+  const v2 = parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"skipped":[]}');
+  assert.deepEqual(v2.aggregations, []);
+  // Round-tripping either keeps its own version and writes no `aggregations` member at all — the
+  // same rule `producers` is held to at version 1.
+  assert.ok(!('aggregations' in JSON.parse(serialiseCorpus(v1))));
+  assert.ok(!('aggregations' in JSON.parse(serialiseCorpus(v2))));
+});
+
+test('a corpus at a version with no aggregations member is refused rather than written without them', () => {
+  const withAggregations = { ...parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"skipped":[]}'), aggregations: [aggregation('orders')] };
+  assert.throws(
+    () => serialiseCorpus({ ...withAggregations, corpusVersion: 2 }),
+    (error) => error instanceof CorpusError && /has no aggregations member, but this one names 1/.test(error.message),
+  );
+});
+
+test('a corpus object with no aggregations member at all is refused by name, not by TypeError', () => {
+  const { aggregations, ...withoutMember } = buildCorpus([shape('orders')], []);
+  assert.throws(
+    () => serialiseCorpus(withoutMember),
+    (error) => error instanceof CorpusError && /has no aggregations member/.test(error.message),
+  );
+});
+
+test('a v3 document naming a member the format does not define is refused, not silently widened', () => {
+  assert.throws(
+    () =>
+      parseCorpus(
+        '{"corpusVersion":3,"producers":[],"queries":[],"aggregations":[],"skipped":[],"capturedAt":"2026-08-11"}',
+      ),
+    (error) => error instanceof CorpusError && /carries "capturedAt"/.test(error.message),
+  );
+});
+
+test('a v2 document carrying an aggregations member is refused, the same way a v1 one carrying producers is', () => {
+  assert.throws(
+    () => parseCorpus('{"corpusVersion":2,"producers":[],"queries":[],"aggregations":[],"skipped":[]}'),
+    (error) => error instanceof CorpusError && /carries "aggregations"/.test(error.message),
+  );
+});
+
+test('an aggregation whose key does not describe its own shape is refused', () => {
+  const document = JSON.parse(serialiseCorpus(buildCorpus([], [], [], [aggregation('orders')])));
+  document.aggregations[0].key = 'aggregate(orders::COLLECTION::AND()::)::SUM:x';
+  assert.throws(() => parseCorpus(JSON.stringify(document)), CorpusError);
+});
+
+test("an aggregation's where that is not in normalised form is refused", () => {
+  const document = JSON.parse(
+    serialiseCorpus(buildCorpus([], [], [], [aggregation('orders', undefined, { fieldPath: 'a', op: 'EQUAL' })])),
+  );
+  // Two AND children out of the sorted order `normaliseFilter` would have written them in.
+  document.aggregations[0].where = {
+    op: 'AND',
+    filters: [
+      { fieldPath: 'b', op: 'EQUAL' },
+      { fieldPath: 'a', op: 'EQUAL' },
+    ],
+  };
+  assert.throws(() => parseCorpus(JSON.stringify(document)), CorpusError);
+});
+
+test('an aggregations list stored out of its canonical sorted, de-duplicated order is refused', () => {
+  const document = JSON.parse(
+    serialiseCorpus(buildCorpus([], [], [], [aggregation('orders', [{ op: 'SUM', field: 'a' }, { op: 'COUNT', field: null }])])),
+  );
+  // Canonical order is COUNT before SUM:a; stored the other way round.
+  document.aggregations[0].aggregations = [
+    { op: 'SUM', field: 'a' },
+    { op: 'COUNT', field: null },
+  ];
+  assert.throws(
+    () => parseCorpus(JSON.stringify(document)),
+    (error) => error instanceof CorpusError && /is not sorted and de-duplicated/.test(error.message),
+  );
+});
+
+test('an aggregation naming an operator the format does not define is refused', () => {
+  const document = JSON.parse(serialiseCorpus(buildCorpus([], [], [], [aggregation('orders')])));
+  document.aggregations[0].aggregations = [{ op: 'MEDIAN', field: null }];
+  assert.throws(
+    () => parseCorpus(JSON.stringify(document)),
+    (error) => error instanceof CorpusError && /is not an aggregation operator this format defines/.test(error.message),
+  );
+});
+
+test('COUNT naming a field, or SUM/AVG naming none, is refused', () => {
+  const document = JSON.parse(serialiseCorpus(buildCorpus([], [], [], [aggregation('orders')])));
+  document.aggregations[0].aggregations = [{ op: 'COUNT', field: 'x' }];
+  assert.throws(
+    () => parseCorpus(JSON.stringify(document)),
+    (error) => error instanceof CorpusError && /COUNT aggregates no field/.test(error.message),
+  );
+  document.aggregations[0].aggregations = [{ op: 'SUM', field: null }];
+  assert.throws(
+    () => parseCorpus(JSON.stringify(document)),
+    (error) => error instanceof CorpusError && /SUM must name a field/.test(error.message),
+  );
+});
+
+test('an empty aggregations list on one entry is refused', () => {
+  const document = JSON.parse(serialiseCorpus(buildCorpus([], [], [], [aggregation('orders')])));
+  document.aggregations[0].aggregations = [];
+  assert.throws(
+    () => parseCorpus(JSON.stringify(document)),
+    (error) => error instanceof CorpusError && /aggregations is empty/.test(error.message),
+  );
+});
+
+test('two aggregation entries sharing a key are refused', () => {
+  const one = JSON.parse(serialiseCorpus(buildCorpus([], [], [], [aggregation('orders')]))).aggregations[0];
+  const document = { ...JSON.parse(serialiseCorpus(buildCorpus([], []))), aggregations: [one, one] };
+  assert.throws(
+    () => parseCorpus(JSON.stringify(document)),
+    (error) => error instanceof CorpusError && /two entries share the key/.test(error.message),
+  );
+});
+
+test('a merge is the union of the aggregations too, de-duplicated by key and sorted by it', () => {
+  const merged = mergeCorpora([
+    buildCorpus([], [], [], [aggregation('z'), aggregation('m')]),
+    buildCorpus([], [], [], [aggregation('a'), aggregation('m')]),
+  ]);
+  assert.deepEqual(
+    merged.aggregations.map((a) => a.collectionGroup),
+    ['a', 'm', 'z'],
+  );
+});
+
+test('two parts holding the same aggregation with the same body merge to one entry', () => {
+  const merged = mergeCorpora([
+    buildCorpus([], [], [], [aggregation('orders')]),
+    buildCorpus([], [], [], [aggregation('orders')]),
+  ]);
+  assert.equal(merged.aggregations.length, 1);
+});
+
+test('two parts sharing an aggregation key but not a body are refused, naming the key', () => {
+  const a = buildCorpus([], [], [], [aggregation('orders', [{ op: 'SUM', field: 'x' }])]);
+  const b = JSON.parse(JSON.stringify(a));
+  b.aggregations[0].orderBy = [{ fieldPath: 'x', direction: 'ASCENDING' }];
+  assert.throws(
+    () => mergeCorpora([a, b]),
+    (error) => error instanceof CorpusError && new RegExp(a.aggregations[0].key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(error.message),
+  );
 });
 
 test('an unknown corpusVersion is refused rather than read as far as it goes', () => {

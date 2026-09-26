@@ -360,7 +360,7 @@ refused. A suite that passes against the emulator passes against the proxy.
 
 ```jsonc
 {
-  "corpusVersion": 2,
+  "corpusVersion": 3,
   "producers": [{ "name": "orders-service", "revision": "9c1f2ab" }],
   "queries": [
     {
@@ -369,6 +369,16 @@ refused. A suite that passes against the emulator passes against the proxy.
       "queryScope": "COLLECTION",
       "where": { "op": "AND", "filters": [{ "fieldPath": "status", "op": "EQUAL" }] },
       "orderBy": [{ "fieldPath": "createdAt", "direction": "DESCENDING" }]
+    }
+  ],
+  "aggregations": [
+    {
+      "key": "aggregate(orders::COLLECTION::AND()::)::COUNT",
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "where": { "op": "AND", "filters": [] },
+      "orderBy": [],
+      "aggregations": [{ "op": "COUNT", "field": null }]
     }
   ],
   "skipped": []
@@ -388,6 +398,19 @@ A snapshot listener is captured too: its query travels over `Listen` rather than
 recorded under the same rules the moment its target is added, whether or not the listener is ever
 detached. `onSnapshot` and `get()` on the same query are one entry.
 
+`count()`, `sum(field)`, and `average(field)` are captured too, as their own kind of entry
+(`aggregations`, alongside `queries`): the inner query plus a sorted, de-duplicated set of
+aggregations. Values, aliases, and `count()`'s optional cap are not recorded, for the same reason
+`limit`/`select` are not. An aggregation entry's key can never collide with a plain query's key over
+the same inner query — see [SPEC.md §7, *Aggregation queries*][spec-aggregation] for the proof —
+so a corpus can hold both without either shadowing the other. `check` replays an aggregation entry
+by asking Firestore the identical `count()`/`aggregate()`, with **no `limit`**: unlike a plain query,
+there is nowhere on an aggregate query to attach one, and under `--oracle read` an aggregation over a
+wide shape (a `!=`, say) genuinely scans the matching range to produce its number rather than reading
+one document — prefer `--oracle explain` for a corpus carrying aggregation entries.
+
+[spec-aggregation]: https://github.com/uny/indexwright/blob/main/SPEC.md#aggregation-queries-v04-corpusversion-3
+
 The Firebase **Web SDK** is captured as well, on the transports it really uses. The full SDK in a
 browser sends every query — `getDocs` as much as `onSnapshot` — as a `Listen` target over
 WebChannel, and `firebase/firestore/lite` posts it to the REST `documents:runQuery` endpoint, in
@@ -405,7 +428,6 @@ then discarded without trace would look like coverage:
 
 | Reason | What it was |
 |:--|:--|
-| `aggregation-query` | `count()`, `sum()`, `average()` — their index requirements are not the inner query's |
 | `partition-query` | `PartitionQuery`, a bulk-read entry point rather than an application query |
 | `vector-query` | `find_nearest`; served by a `vectorConfig` index this version does not model |
 | `unsupported-shape` | an enum value or a `from` clause the corpus vocabulary cannot name |
@@ -413,8 +435,9 @@ then discarded without trace would look like coverage:
 | `unsupported-encoding` | a message compressed with something other than gzip or deflate |
 | `undecodable-message` | bytes that did not parse — a defect rather than a boundary |
 
-A corpus written by an earlier release may also name `listen-query`, which is how those releases
-counted a snapshot listener. It still reads; nothing writes it now.
+A corpus written by an earlier release may also name `listen-query` (how record ≤ 0.7.0 counted a
+snapshot listener) or `aggregation-query` (how record ≤ 0.10.1 counted every `RunAggregationQuery`,
+before this release captured it). Both still read; nothing writes either now.
 
 ## Stability
 

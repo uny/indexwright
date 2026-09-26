@@ -21,6 +21,22 @@ again, by its own `corpusVersion`.
   `CREATING` — is measured here for a settled set and not for the window. `probe/README.md` step 5e
   put all twenty probe shapes through both oracles on 2026-09-26 and every one answered the same.
   The `CREATING` half is still the adopter's own reading. See SPEC.md §3 for the full design note.
+- **`RunAggregationQuery` is captured and replayed, instead of declined as `aggregation-query`**
+  (issue #93). `count()`, `sum(field)`, and `average(field)` — both gRPC and the REST
+  `documents:runAggregationQuery` form — decode into a new `aggregations` corpus member holding the
+  inner query plus a sorted, de-duplicated aggregation list; values, aliases, and `Count.up_to` are
+  not recorded, on the same grounds `limit`/`select` are not. The entry is keyed
+  `aggregate(<inner key>)::<aggregations>`, which is provably unable to collide with a plain
+  `QueryShape` key over the same inner query — see SPEC.md §7, *Aggregation queries*. `corpusVersion`
+  is bumped to 3; a v3 reader still reads v1 and v2 corpora in full, and `aggregation-query` joins
+  `listen-query` in the legacy skip vocabulary, so a corpus any earlier release wrote — including one
+  that declined this very RPC — still reads whole. `check` replays an aggregation entry through
+  `Query.count()`/`Query.aggregate({...})`, asked via the same `--oracle read|explain` choice a plain
+  entry is, with **no `limit`**: the measurement behind the plain path's `limit(1)` was never taken
+  for an aggregation, and there is nowhere on `.count()`/`.aggregate()` to attach one regardless.
+  `probe/README.md` step 5f exercises `count`/`sum`/`avg` under both oracles and is marked not yet
+  run, the same way step 5e was left for `--oracle explain`. Vector search (`find_nearest`) is
+  unaffected and stays declined.
 
 ### Changed
 

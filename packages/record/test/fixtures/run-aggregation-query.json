@@ -1,0 +1,33 @@
+{
+  "note": "RunAggregationQueryRequest messages as @google-cloud/firestore serialises them, base64. Regenerate with packages/record/scripts/capture-aggregation-fixtures.mjs. The shape each one is expected to decode to is written by hand in test/decode.test.js.",
+  "cases": [
+    {
+      "name": "a bare count",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEh0KChIIEgZvcmRlcnMaDwoAOgthZ2dyZWdhdGVfMA=="
+    },
+    {
+      "name": "count with a filter",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEjYKIxIIEgZvcmRlcnMaFxIVCggSBnN0YXR1cxAFGgeKAQRvcGVuGg8KADoLYWdncmVnYXRlXzA="
+    },
+    {
+      "name": "a single sum",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEicKChIIEgZvcmRlcnMaGRIKCggSBmFtb3VudDoLYWdncmVnYXRlXzA="
+    },
+    {
+      "name": "a single average",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEicKChIIEgZvcmRlcnMaGRoKCggSBmFtb3VudDoLYWdncmVnYXRlXzA="
+    },
+    {
+      "name": "count, sum and average together",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzElMKChIIEgZvcmRlcnMaDwoAOgthZ2dyZWdhdGVfMBoZEgoKCBIGYW1vdW50OgthZ2dyZWdhdGVfMRoZGgoKCBIGYW1vdW50OgthZ2dyZWdhdGVfMg=="
+    },
+    {
+      "name": "a collection group aggregation",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEjEKHhIJEgVpdGVtcxgBGhESDwoFEgNza3UQBRoEigEBeBoPCgA6C2FnZ3JlZ2F0ZV8w"
+    },
+    {
+      "name": "a sum on a nested field path",
+      "message": "CjRwcm9qZWN0cy9kZW1vLWZpeHR1cmVzL2RhdGFiYXNlcy8oZGVmYXVsdCkvZG9jdW1lbnRzEisKChIIEgZvcmRlcnMaHRIOCgwSCmNhcnQudG90YWw6C2FnZ3JlZ2F0ZV8w"
+    }
+  ]
+}

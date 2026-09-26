@@ -171,6 +171,7 @@ What the run did settle is the price. The readiness gate restarts on every invoc
 | `differential.mjs` | The §7 instrument: issues the shapes, writes a JSON report to stdout |
 | `limit.mjs` | The #43 instrument: issues each shape bare and with `limit(1)`, and reports what each read |
 | `oracle.mjs` | The #91 instrument: issues each shape's `limit(1)` query through `read` and through `explain`, and compares the verdicts. Step 5e |
+| `aggregation.mjs` | The #93 instrument: issues `count()`/`sum()`/`average()` over S1's and S6's field pairs, through `read` and through `explain`, with no `limit` on either. Step 5f; not yet run — see that step |
 | `expectations.mjs` | Their command line — argv in, the expectation map out. Pure, so what an operator types is testable |
 | `summarise.mjs` | Their stop rule — rows in, findings and an exit code out, for the verdicts and for the read counts alike. Pure, so it can be tested without a database |
 | `expectations.test.mjs`, `summarise.test.mjs` | Tests for the two halves of the stop rule. Run in `npm test` alongside the packages' suites |
@@ -575,6 +576,44 @@ the verdict is read from the status code and never from the message.
 What this does not reach is stated above and bears repeating. The set was settled, so nothing here
 says how `explain` answers while an index is `CREATING`, and that half of issue #91's claim is still
 the adopter's. It is also one collection and one operand, the same limits step 5b states.
+
+### 5f. The aggregation probe, against the same deployed set (issue #93)
+
+**Not yet run.** This step is the runbook for the two measurements SPEC §7's *Aggregation queries*
+section takes as read from Firestore's own documentation rather than as measured against a real
+database: that an aggregation's index requirement matches the inner query's, and that `read` and
+`explain` agree about an aggregation the way step 5e measures they agree about a plain query. Until
+it is run, `check`'s aggregation replay — and the guidance to prefer `--oracle explain` for a corpus
+carrying aggregation entries — ships on the documented behaviour of `count()`/`sum()`/`average()` and
+of Query Explain, not on a reading this repository has taken.
+
+`probe/aggregation.mjs` issues `count()`, `sum(field)`, and `average(field)` over exactly the field
+pairs `S1` (declared, covered) and `S6` (undeclared, uncovered) already establish — the same
+question step 5 answered for a plain read, asked here of an aggregate instead — through both
+oracles, with no `limit` on either: `buildReplayAggregateQuery` sends none (see
+`synthesise.ts`'s `AggregationReplayPlan` docblock), so a probe that added one would be measuring a
+question the shipped code never asks. This step needs no new index build; it runs against whichever
+set step 4's or step 5c's watcher already settled.
+
+```bash
+node probe/aggregation.mjs indexwright-probe '(default)' \
+  --expect-served A1,A3,A5 \
+  --expect-uncovered A2,A4,A6
+```
+
+The stop rule, the exit codes, and the report shape are `oracle.mjs`'s (step 5e): a disagreement
+between `read` and `explain` on any one shape is a falsification of the oracle-agreement claim, and
+a `served`/`uncovered` verdict that does not match the field pair's own plain-query answer (S1 and S6
+in step 5) is a falsification of the selection claim — both are read off `summarise.mjs`'s ordinary
+"not constant" and "against expectation" findings, so no new stop rule is written for this step.
+
+What this step does **not** measure: `--oracle read`'s *cost* for a wide aggregation shape (a
+`count()` over a `!=`-style filter, say) — `AggregateQuerySnapshot` gives no document-count signal
+the way `QuerySnapshot.size` gives `limit.mjs` one, so the read-cost argument in SPEC §7 and in this
+package's README stays a documented inference from how `count()` must work rather than a
+measurement, whatever this step finds.
+
+**Results: not yet run.**
 
 ### 6. Capture the corpus of shapes the target actually covers
 

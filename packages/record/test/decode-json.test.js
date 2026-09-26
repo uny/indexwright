@@ -4,8 +4,10 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   decodeJsonListen,
+  decodeJsonRunAggregationQuery,
   decodeJsonRunQuery,
   forwardChannelMessages,
+  toAggregationShape,
   toQueryShape,
   WireError,
 } from '../dist/index.js';
@@ -296,4 +298,141 @@ test('keys this reader does not expect are ignored, as protobuf ignores an unkno
   const result = decodeJsonRunQuery(Buffer.from(JSON.stringify({ structuredQuery, parent: 'p', newTransaction: {} }), 'utf8'));
   assert.ok(result.ok);
   assert.equal(toQueryShape(result.query).key, 'o::COLLECTION::AND()::');
+});
+
+/**
+ * Hand-built REST `documents:runAggregationQuery` bodies (issue #93).
+ *
+ * No Firebase SDK sends this endpoint over HTTP/1.1 today — `firebase/firestore/lite` sends
+ * `RunQuery` this way, and aggregation queries from the Web SDK travel the WebChannel gRPC-Web path
+ * instead — so unlike `decodeJsonRunQuery`'s fixtures above, there is no real client body to capture
+ * for this decoder yet. The proto3 JSON mapping is nonetheless fully documented, and the proxy reads
+ * whatever conforms to it, so these are built by hand against that mapping rather than against a
+ * fixture nothing currently produces.
+ */
+function decodeAggregation(body) {
+  return decodeJsonRunAggregationQuery(Buffer.from(JSON.stringify(body), 'utf8'));
+}
+
+test('a REST aggregation body decodes to the shape it names', () => {
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'orders' }], where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL' } } },
+      aggregations: [{ count: {} }, { sum: { field: { fieldPath: 'amount' } } }, { avg: { field: { fieldPath: 'amount' } } }],
+    },
+  };
+  const result = decodeAggregation(body);
+  assert.ok(result.ok);
+  const shape = toAggregationShape(result.query);
+  assert.equal(shape.key, 'aggregate(orders::COLLECTION::AND(status:EQUAL)::)::AVG:amount|COUNT|SUM:amount');
+});
+
+test('the original proto field names read as the same aggregation the lowerCamelCase ones do', () => {
+  const camel = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'items', allDescendants: true }] },
+      aggregations: [{ sum: { field: { fieldPath: 'qty' } } }],
+    },
+  };
+  const snake = {
+    structured_aggregation_query: {
+      structured_query: { from: [{ collection_id: 'items', all_descendants: true }] },
+      aggregations: [{ sum: { field: { field_path: 'qty' } } }],
+    },
+  };
+  const expected = 'aggregate(items::COLLECTION_GROUP::AND()::)::SUM:qty';
+  assert.equal(toAggregationShape(decodeAggregation(camel).query).key, expected);
+  assert.equal(toAggregationShape(decodeAggregation(snake).query).key, expected);
+});
+
+test('a request naming no structuredAggregationQuery at all is an unsupported shape', () => {
+  assert.deepEqual(decodeAggregation({ parent: 'p' }), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('an aggregation query naming no structuredQuery is an unsupported shape', () => {
+  const body = { structuredAggregationQuery: { aggregations: [{ count: {} }] } };
+  assert.deepEqual(decodeAggregation(body), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('an aggregation query naming no aggregations, or an empty list, is an unsupported shape', () => {
+  const noMember = { structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'o' }] } } };
+  const empty = { structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'o' }] }, aggregations: [] } };
+  assert.deepEqual(decodeAggregation(noMember), { ok: false, reason: 'unsupported-shape' });
+  assert.deepEqual(decodeAggregation(empty), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('an aggregation naming none of count/sum/avg is an unsupported shape', () => {
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'o' }] },
+      aggregations: [{ alias: 'x' }],
+    },
+  };
+  assert.deepEqual(decodeAggregation(body), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('a sum or average naming no field is an unsupported shape', () => {
+  const query = (aggregation) =>
+    decodeAggregation({
+      structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'o' }] }, aggregations: [aggregation] },
+    });
+  assert.deepEqual(query({ sum: {} }), { ok: false, reason: 'unsupported-shape' });
+  assert.deepEqual(query({ avg: {} }), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('a findNearest clause in the inner query of an aggregation is a vector query', () => {
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'o' }], findNearest: {} },
+      aggregations: [{ count: {} }],
+    },
+  };
+  assert.deepEqual(decodeAggregation(body), { ok: false, reason: 'vector-query' });
+});
+
+test('a filter tree in the inner query deeper than the reader descends is declined, not a crash', () => {
+  let where = { fieldFilter: { field: { fieldPath: 'a' }, op: 'EQUAL' } };
+  for (let depth = 0; depth < 200; depth += 1) where = { compositeFilter: { op: 'AND', filters: [where] } };
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'o' }], where },
+      aggregations: [{ count: {} }],
+    },
+  };
+  assert.deepEqual(decodeAggregation(body), { ok: false, reason: 'unsupported-shape' });
+});
+
+test('an aggregation key can never collide with a plain query key over the same inner query', () => {
+  const plain = decodeJsonRunQuery(Buffer.from(JSON.stringify({ structuredQuery: { from: [{ collectionId: 'orders' }] } }), 'utf8'));
+  const plainKey = toQueryShape(plain.query).key;
+  const aggregated = decodeAggregation({
+    structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'orders' }] }, aggregations: [{ count: {} }] },
+  });
+  const aggregatedKey = toAggregationShape(aggregated.query).key;
+  assert.notEqual(aggregatedKey, plainKey);
+  assert.ok(aggregatedKey.startsWith('aggregate('));
+  assert.ok(!plainKey.split('::', 1)[0].includes('('));
+});
+
+test('two aggregations naming the same op and field collapse to one entry, sorted, de-duplicated', () => {
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: { from: [{ collectionId: 'o' }] },
+      aggregations: [
+        { sum: { field: { fieldPath: 'b' } } },
+        { count: {} },
+        { sum: { field: { fieldPath: 'b' } } },
+        { sum: { field: { fieldPath: 'a' } } },
+      ],
+    },
+  };
+  const result = decodeAggregation(body);
+  assert.ok(result.ok);
+  const shape = toAggregationShape(result.query);
+  assert.deepEqual(shape.aggregations, [
+    { op: 'COUNT', field: null },
+    { op: 'SUM', field: 'a' },
+    { op: 'SUM', field: 'b' },
+  ]);
+  assert.equal(shape.key, 'aggregate(o::COLLECTION::AND()::)::COUNT|SUM:a|SUM:b');
 });
