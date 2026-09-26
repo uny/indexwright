@@ -7,8 +7,11 @@
 import { randomBytes } from 'node:crypto';
 import { renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { normaliseRoot, queryKey, serialiseFilter, compareByCodePoint } from './shape.js';
+import { aggregationKey, normaliseAggregations, normaliseRoot, queryKey, serialiseAggregation, serialiseFilter, compareByCodePoint } from './shape.js';
 import type {
+  AggregationOp,
+  AggregationShape,
+  AggregationSpec,
   Corpus,
   Direction,
   FilterComposite,
@@ -30,6 +33,8 @@ import {
   SKIP_REASONS,
   UNARY_OPERATORS,
 } from './types.js';
+
+const AGGREGATION_OPS = new Set<string>(['COUNT', 'SUM', 'AVG']);
 
 /** A corpus that cannot be read as one. Never a repair, always a refusal. */
 export class CorpusError extends Error {
@@ -57,17 +62,32 @@ const MAX_FILTER_DEPTH = 100;
 /**
  * Collect observed shapes into a corpus: de-duplicated by key, sorted by key, with the skip
  * reasons as a sorted set. Occurrence counts do not survive this — they go to stderr (SPEC §7).
+ *
+ * `aggregations` is a fourth, trailing optional parameter rather than inserted beside `shapes` —
+ * the same place `producers` was added when it joined this signature at `corpusVersion` 2. Every
+ * caller written before issue #93 keeps compiling and keeps writing a corpus with no aggregation
+ * entries, which is the only correct reading of a call site that does not know aggregations exist.
  */
 export function buildCorpus(
   shapes: Iterable<QueryShape>,
   skipped: Iterable<SkipReason | LegacySkipReason>,
   producers: Iterable<Producer> = [],
+  aggregations: Iterable<AggregationShape> = [],
 ): Corpus {
   const byKey = new Map<string, QueryShape>();
   for (const shape of shapes) byKey.set(shape.key, shape);
   const queries = [...byKey.values()].sort((a, b) => compareByCodePoint(a.key, b.key));
+  const byAggKey = new Map<string, AggregationShape>();
+  for (const shape of aggregations) byAggKey.set(shape.key, shape);
+  const aggregationEntries = [...byAggKey.values()].sort((a, b) => compareByCodePoint(a.key, b.key));
   const reasons = [...new Set(skipped)].sort((a, b) => compareByCodePoint(a, b));
-  return { corpusVersion: CORPUS_VERSION, producers: sortProducers(producers), queries, skipped: reasons };
+  return {
+    corpusVersion: CORPUS_VERSION,
+    producers: sortProducers(producers),
+    queries,
+    aggregations: aggregationEntries,
+    skipped: reasons,
+  };
 }
 
 /**
@@ -163,10 +183,32 @@ export function mergeCorpora(parts: readonly Corpus[]): Corpus {
     }
   }
 
+  // `aggregations` merges by the same rule, over its own key space — one that `aggregationKey`
+  // guarantees never intersects `queries`' (see `shape.ts`), so a single combined map is not needed
+  // to keep the two apart; a part attaching `aggregations` below its own `corpusVersion` 3 is not
+  // reachable, because `parseCorpus` refuses a v1/v2 document naming a member it does not define.
+  const byAggKey = new Map<string, { shape: AggregationShape; body: string }>();
+  for (const part of parts) {
+    for (const shape of part.aggregations) {
+      const body = JSON.stringify(aggregationToJson(shape));
+      const existing = byAggKey.get(shape.key);
+      if (existing !== undefined) {
+        if (existing.body !== body) {
+          throw new CorpusError(
+            `two corpora hold the key ${JSON.stringify(shape.key)} with bodies that differ; one of them is not the shape its key names`,
+          );
+        }
+        continue;
+      }
+      byAggKey.set(shape.key, { shape, body });
+    }
+  }
+
   return {
     corpusVersion: version,
     producers: sortProducers(parts.flatMap((part) => [...part.producers])),
     queries: [...byKey.values()].map(({ query }) => query).sort((a, b) => compareByCodePoint(a.key, b.key)),
+    aggregations: [...byAggKey.values()].map(({ shape }) => shape).sort((a, b) => compareByCodePoint(a.key, b.key)),
     skipped: [...new Set(parts.flatMap((part) => [...part.skipped]))].sort(compareByCodePoint),
   };
 }
@@ -193,6 +235,18 @@ export function serialiseCorpus(corpus: Corpus): string {
       `a corpus at version ${corpus.corpusVersion} has no producers member, but this one names ${corpus.producers.length}`,
     );
   }
+  // The same refusal, one version later, for `aggregations` (issue #93): a v1/v2 corpus has no
+  // member to hold it, so a caller handing this function an object built by hand — rather than one
+  // `parseCorpus` or `buildCorpus` produced, either of which already ties the two together — would
+  // otherwise have its aggregation entries silently dropped on the way to disk.
+  if (!Array.isArray(corpus.aggregations)) {
+    throw new CorpusError('the corpus has no aggregations member; a corpus naming no aggregation has an empty one');
+  }
+  if (corpus.corpusVersion < 3 && corpus.aggregations.length > 0) {
+    throw new CorpusError(
+      `a corpus at version ${corpus.corpusVersion} has no aggregations member, but this one names ${corpus.aggregations.length}`,
+    );
+  }
 
   const value = {
     corpusVersion: corpus.corpusVersion,
@@ -202,6 +256,10 @@ export function serialiseCorpus(corpus: Corpus): string {
     // says it is theirs.
     ...(corpus.corpusVersion >= 2 ? { producers: corpus.producers.map(producerToJson) } : {}),
     queries: corpus.queries.map(queryToJson),
+    // Omitted below version 3 for the reason `producers` is omitted below version 2, and placed
+    // after `queries` rather than beside `producers`: it is a second array of entries, and reads
+    // as one alongside the first, where `producers` reads as identity rather than as coverage.
+    ...(corpus.corpusVersion >= 3 ? { aggregations: corpus.aggregations.map(aggregationToJson) } : {}),
     skipped: [...corpus.skipped],
   };
   return `${JSON.stringify(value, null, 2)}\n`;
@@ -226,6 +284,25 @@ function queryToJson(query: QueryShape): unknown {
 
 function producerToJson(producer: Producer): unknown {
   return { name: producer.name, revision: producer.revision };
+}
+
+/**
+ * One `aggregations[]` entry, in the same spirit `queryToJson` writes one `queries[]` entry: every
+ * member the file carries, so that `mergeCorpora`'s per-key body comparison is over the whole entry.
+ */
+function aggregationToJson(shape: AggregationShape): unknown {
+  return {
+    key: shape.key,
+    collectionGroup: shape.collectionGroup,
+    queryScope: shape.queryScope,
+    where: filterToJson(shape.where, `the aggregation ${JSON.stringify(shape.key)}`, 1),
+    orderBy: shape.orderBy.map((order) => ({ fieldPath: order.fieldPath, direction: order.direction })),
+    aggregations: shape.aggregations.map(aggregationSpecToJson),
+  };
+}
+
+function aggregationSpecToJson(spec: AggregationSpec): unknown {
+  return { op: spec.op, field: spec.field };
 }
 
 /** Depth counted as `parseFilter` counts it, from 1 at the root, so the two refuse the same trees. */
@@ -288,11 +365,10 @@ export function parseCorpus(source: string): Corpus {
   // Version-dependent, and checked after the version for the reason above: the member set *is* what
   // the version names, so one list for both would refuse a corpus of the other version by
   // complaining about the member that distinguishes them.
-  expectExactMembers(
-    root,
-    version >= 2 ? ['corpusVersion', 'producers', 'queries', 'skipped'] : ['corpusVersion', 'queries', 'skipped'],
-    'the corpus',
-  );
+  const members = ['corpusVersion', 'queries', 'skipped'];
+  if (version >= 2) members.push('producers');
+  if (version >= 3) members.push('aggregations');
+  expectExactMembers(root, members, 'the corpus');
 
   // A version-1 corpus names no producer. Read as `[]` rather than refused: that is what the member
   // being optional means, and it is the reading `check --require-identity` then acts on.
@@ -316,6 +392,10 @@ export function parseCorpus(source: string): Corpus {
     previous = query.key;
   }
 
+  // A version-1 or -2 corpus names no aggregation, for the same reason it names no producer below
+  // version 2 — the member did not exist yet, and `[]` is the reading that fact means.
+  const aggregations = version >= 3 ? parseAggregations(root['aggregations']) : [];
+
   const skipped = expectArray(root['skipped'], 'skipped').map((reason, index) => {
     if (typeof reason !== 'string' || !SKIP_REASON_SET.has(reason)) {
       throw new CorpusError(`skipped[${index}] is not a reason this format defines`);
@@ -329,7 +409,94 @@ export function parseCorpus(source: string): Corpus {
     }
   }
 
-  return { corpusVersion: version, producers, queries, skipped };
+  return { corpusVersion: version, producers, queries, aggregations, skipped };
+}
+
+/**
+ * The `aggregations` array, sorted and unique on its own key the way `queries` is on its.
+ *
+ * Not checked against `queries`' key set: `aggregationKey` is constructed so the two can never
+ * collide (see `shape.ts`), so a document naming the same string in both arrays is not an ambiguity
+ * this reader has to resolve — it is impossible for a document `serialiseCorpus` wrote to contain,
+ * and a hand-edited one that manages it anyway keys distinct entries into distinct arrays.
+ */
+function parseAggregations(value: unknown): AggregationShape[] {
+  const aggregations = expectArray(value, 'aggregations').map((entry, index) =>
+    parseAggregation(entry, `aggregations[${index}]`),
+  );
+
+  const seen = new Set<string>();
+  let previous: string | null = null;
+  for (const shape of aggregations) {
+    if (seen.has(shape.key)) throw new CorpusError(`two entries share the key ${JSON.stringify(shape.key)}`);
+    if (previous !== null && compareByCodePoint(previous, shape.key) > 0) {
+      throw new CorpusError(`aggregations are not sorted by key: ${JSON.stringify(shape.key)} follows ${JSON.stringify(previous)}`);
+    }
+    seen.add(shape.key);
+    previous = shape.key;
+  }
+  return aggregations;
+}
+
+function parseAggregation(value: unknown, at: string): AggregationShape {
+  const entry = expectObject(value, at);
+  expectExactMembers(entry, ['key', 'collectionGroup', 'queryScope', 'where', 'orderBy', 'aggregations'], at);
+
+  const key = expectString(entry['key'], `${at}.key`);
+  const collectionGroup = expectString(entry['collectionGroup'], `${at}.collectionGroup`);
+  const queryScope = entry['queryScope'];
+  if (queryScope !== 'COLLECTION' && queryScope !== 'COLLECTION_GROUP') {
+    throw new CorpusError(`${at}.queryScope is not a scope this format defines`);
+  }
+
+  const where = parseFilter(entry['where'], `${at}.where`, 1);
+  if (!isComposite(where)) throw new CorpusError(`${at}.where is not a composite`);
+
+  const orderBy = expectArray(entry['orderBy'], `${at}.orderBy`).map((order, index) =>
+    parseOrder(order, `${at}.orderBy[${index}]`),
+  );
+
+  const aggregationList = expectArray(entry['aggregations'], `${at}.aggregations`).map((spec, index) =>
+    parseAggregationSpec(spec, `${at}.aggregations[${index}]`),
+  );
+  if (aggregationList.length === 0) throw new CorpusError(`${at}.aggregations is empty`);
+
+  const inner = { collectionGroup, queryScope: queryScope as QueryScope, where, orderBy };
+
+  // The stored trees are the normalised ones the key was computed from, held to the same standard
+  // `parseQuery` holds a plain entry's `where` to.
+  if (serialiseFilter(normaliseRoot(where)) !== serialiseFilter(where)) {
+    throw new CorpusError(`${at}.where is not in normalised form`);
+  }
+  const normalisedAggregations = normaliseAggregations(aggregationList);
+  if (normalisedAggregations.map(serialiseAggregation).join('|') !== aggregationList.map(serialiseAggregation).join('|')) {
+    throw new CorpusError(`${at}.aggregations is not sorted and de-duplicated as a conforming writer stores it`);
+  }
+  const derived = aggregationKey(inner, aggregationList);
+  if (derived !== key) {
+    throw new CorpusError(`${at}.key does not describe its own aggregation; expected ${JSON.stringify(derived)}`);
+  }
+
+  return { key, ...inner, aggregations: aggregationList };
+}
+
+function parseAggregationSpec(value: unknown, at: string): AggregationSpec {
+  const entry = expectObject(value, at);
+  expectExactMembers(entry, ['op', 'field'], at);
+  const op = entry['op'];
+  if (typeof op !== 'string' || !AGGREGATION_OPS.has(op)) {
+    throw new CorpusError(`${at}.op is not an aggregation operator this format defines`);
+  }
+  const field = entry['field'];
+  if (field !== null && typeof field !== 'string') {
+    throw new CorpusError(`${at}.field is not a string or null`);
+  }
+  // `COUNT` names no field; every other operator must. Read here rather than left to replay, on the
+  // same principle `parseQuery` re-derives the key: a corpus this reader accepts is one whose every
+  // member is already the shape a conforming writer would have produced.
+  if (op === 'COUNT' && field !== null) throw new CorpusError(`${at}.field is set, but COUNT aggregates no field`);
+  if (op !== 'COUNT' && field === null) throw new CorpusError(`${at}.field is null, but ${op} must name a field`);
+  return { op: op as AggregationOp, field };
 }
 
 /**

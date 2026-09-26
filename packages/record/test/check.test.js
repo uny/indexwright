@@ -1236,7 +1236,7 @@ test('--require-identity refuses a corpus that names no producer, and exits 2', 
 test('--require-identity refuses a version-1 corpus, which is the case it exists for', async () => {
   // The motivating file: one committed before the format carried an identity at all, reaching the
   // guard through the version-1 branch of the reader rather than through an empty `producers` list.
-  const { producers, ...rest } = JSON.parse(ONE_QUERY);
+  const { producers, aggregations, ...rest } = JSON.parse(ONE_QUERY);
   const version1 = JSON.stringify({ ...rest, corpusVersion: 1 });
   const h = harness({ requireIdentity: true, corpus: version1 });
   assert.equal(await h.run(), 2);
@@ -1412,7 +1412,7 @@ test('a part at a different corpusVersion is refused, and the refusal names both
     lister: async () => assert.fail('no client should be built on this path'),
   });
   assert.equal(await h.run(), 2);
-  assert.match(h.said(), /the corpus at "b\.queries\.json" is at corpusVersion 1 and the one at "a\.queries\.json" is at 2/);
+  assert.match(h.said(), /the corpus at "b\.queries\.json" is at corpusVersion 1 and the one at "a\.queries\.json" is at 3/);
 });
 
 test('a second corpus that cannot be read stops the run before the first one is announced', async () => {

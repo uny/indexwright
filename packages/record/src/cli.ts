@@ -106,7 +106,10 @@ export async function run(
         command.producer === undefined
           ? []
           : [{ name: command.producer, revision: command.revision ?? null }];
-      writeCorpus(out, buildCorpus(capture.recorder.shapes, capture.recorder.skips.keys(), producers));
+      writeCorpus(
+        out,
+        buildCorpus(capture.recorder.shapes, capture.recorder.skips.keys(), producers, capture.recorder.aggregations),
+      );
     } catch (error) {
       streams.err(`indexwright-record: could not write ${out}: ${(error as Error).message}\n`);
       return 2;
@@ -137,9 +140,15 @@ function report(
   }
 
   const distinct = recorder.shapes.length;
+  const distinctAggregations = recorder.aggregations.length;
   streams.err(
     `indexwright-record: ${recorder.observed} query request(s) observed, ` +
-      `${distinct} distinct shape(s) written to ${out}\n`,
+      `${distinct} distinct shape(s)` +
+      // Said only when there is one to say, on the same principle the merge line in `check.ts` is
+      // said only when there was something to merge: a suite that issues no aggregation is the
+      // overwhelmingly common case, and a zero here on every line would be noise for it.
+      (distinctAggregations > 0 ? `, ${distinctAggregations} distinct aggregation(s)` : '') +
+      ` written to ${out}\n`,
   );
 
   if (recorder.skips.size > 0) {

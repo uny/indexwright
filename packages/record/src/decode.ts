@@ -9,11 +9,14 @@
  * and the neighbouring field 3 means something different at each of the first two levels.
  */
 import type {
+  AggregationOp,
+  AggregationSpec,
   CompositeOperator,
   Direction,
   FieldOperator,
   FilterNode,
   Order,
+  RawAggregationQuery,
   RawQuery,
   SkipReason,
   UnaryOperator,
@@ -22,8 +25,27 @@ import { enumeration, fields, text, WireError } from './wire.js';
 
 export type DecodeResult = { readonly ok: true; readonly query: RawQuery } | { readonly ok: false; readonly reason: SkipReason };
 
+export type AggregationDecodeResult =
+  | { readonly ok: true; readonly query: RawAggregationQuery }
+  | { readonly ok: false; readonly reason: SkipReason };
+
 /** `RunQueryRequest.structured_query`. */
 const RUN_QUERY_STRUCTURED_QUERY = 2;
+
+/** `RunAggregationQueryRequest.structured_aggregation_query`. */
+const RUN_AGGREGATION_QUERY_STRUCTURED = 2;
+
+/** `StructuredAggregationQuery.structured_query` and `.aggregations`. */
+const AGGREGATION_QUERY_STRUCTURED_QUERY = 1;
+const AGGREGATION_QUERY_AGGREGATIONS = 3;
+
+/** `StructuredAggregationQuery.Aggregation`'s `operator` oneof: `count`, `sum`, `avg`. `alias` (7) is not read. */
+const AGGREGATION_COUNT = 1;
+const AGGREGATION_SUM = 2;
+const AGGREGATION_AVG = 3;
+
+/** `Sum.field` and `Avg.field`, both a `StructuredQuery.FieldReference` at field 1. `Count.up_to` is not read. */
+const AGGREGATE_FUNCTION_FIELD = 1;
 
 /** `ListenRequest.add_target` and `remove_target`, the members of its `target_change` oneof. */
 const LISTEN_ADD_TARGET = 2;
@@ -114,6 +136,21 @@ export const MAX_FILTER_DEPTH = 100;
 
 export function decodeRunQuery(message: Uint8Array): DecodeResult {
   return decode(() => readRunQueryRequest(message));
+}
+
+/**
+ * Decode a `RunAggregationQueryRequest` (issue #93).
+ *
+ * The `ok: false` branch is structurally identical to `DecodeResult`'s — both are `{ reason:
+ * SkipReason }` — so `declined` is reused rather than restated; only the `ok: true` branch's payload
+ * type differs; between the two decoders.
+ */
+export function decodeRunAggregationQuery(message: Uint8Array): AggregationDecodeResult {
+  try {
+    return { ok: true, query: readRunAggregationQueryRequest(message) };
+  } catch (error) {
+    return declined(error) as AggregationDecodeResult;
+  }
 }
 
 /**
@@ -222,6 +259,77 @@ function readStructuredQuery(bytes: Uint8Array): RawQuery {
     where,
     orderBy,
   };
+}
+
+function readRunAggregationQueryRequest(message: Uint8Array): RawAggregationQuery {
+  let query: Uint8Array | null = null;
+  for (const field of fields(message)) {
+    if (field.number === RUN_AGGREGATION_QUERY_STRUCTURED && field.kind === 'bytes') query = field.value;
+  }
+  if (query === null) throw new UnsupportedShape('request carries no structured aggregation query');
+  return readStructuredAggregationQuery(query);
+}
+
+/**
+ * The inner query is read by `readStructuredQuery`, the same function `RunQuery` uses — so the
+ * filter-depth ceiling (`MAX_FILTER_DEPTH`, issue #68) and the `find_nearest` refusal (`VectorQuery`)
+ * apply to an aggregation's inner query exactly as they apply to a plain one, without restating either
+ * rule here.
+ */
+function readStructuredAggregationQuery(bytes: Uint8Array): RawAggregationQuery {
+  let structuredQuery: Uint8Array | null = null;
+  const aggregations: AggregationSpec[] = [];
+  for (const field of fields(bytes)) {
+    if (field.number === AGGREGATION_QUERY_STRUCTURED_QUERY && field.kind === 'bytes') {
+      structuredQuery = field.value;
+    } else if (field.number === AGGREGATION_QUERY_AGGREGATIONS && field.kind === 'bytes') {
+      aggregations.push(readAggregation(field.value));
+    }
+  }
+  if (structuredQuery === null) throw new UnsupportedShape('aggregation query carries no structured query');
+  // The proto requires at least one; an empty list is a message no conforming client sends, and is
+  // treated as unnameable rather than replayed as a query with no aggregation at all.
+  if (aggregations.length === 0) throw new UnsupportedShape('aggregation query carries no aggregations');
+  return { query: readStructuredQuery(structuredQuery), aggregations };
+}
+
+/** One `Aggregation`. `count`/`sum`/`avg` is a `oneof`; the last one present on the wire wins. */
+function readAggregation(bytes: Uint8Array): AggregationSpec {
+  let op: AggregationOp | null = null;
+  let field_: string | null = null;
+  for (const field of fields(bytes)) {
+    if (field.kind !== 'bytes') continue;
+    switch (field.number) {
+      case AGGREGATION_COUNT:
+        op = 'COUNT';
+        field_ = null;
+        break;
+      case AGGREGATION_SUM:
+        op = 'SUM';
+        field_ = readAggregateFunctionField(field.value);
+        break;
+      case AGGREGATION_AVG:
+        op = 'AVG';
+        field_ = readAggregateFunctionField(field.value);
+        break;
+      default:
+        break;
+    }
+  }
+  // An `Aggregation` naming none of the three is not one this closed vocabulary (SPEC §7's own
+  // discipline, restated at `AggregationOp`) can name — skipped rather than guessed at.
+  if (op === null) throw new UnsupportedShape('aggregation holds no recognised operator');
+  return { op, field: field_ };
+}
+
+/** `Sum.field` or `Avg.field`: a single embedded `StructuredQuery.FieldReference`. */
+function readAggregateFunctionField(bytes: Uint8Array): string {
+  let path: string | null = null;
+  for (const field of fields(bytes)) {
+    if (field.number === AGGREGATE_FUNCTION_FIELD && field.kind === 'bytes') path = readFieldReference(field.value);
+  }
+  if (path === null) throw new UnsupportedShape('aggregation field is not nameable');
+  return path;
 }
 
 function readCollectionSelector(bytes: Uint8Array): { collectionId: string | null; allDescendants: boolean } {

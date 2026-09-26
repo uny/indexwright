@@ -20,6 +20,8 @@
  */
 import { render } from './args.js';
 import type {
+  AggregationShape,
+  AggregationSpec,
   CompositeOperator,
   FilterComposite,
   FilterNode,
@@ -245,5 +247,46 @@ export function planReplay(shape: QueryShape): ReplayPlan {
     queryScope: shape.queryScope,
     where: planRoot(shape.where),
     orderBy,
+  };
+}
+
+/**
+ * The replay plan for one `AggregationShape` (issue #93): the same inner-query plan `planReplay`
+ * produces, plus the aggregation list to apply over it.
+ *
+ * No `limit`. See `buildReplayQuery` in `replay.ts` for the argument on the plain path — measured
+ * against eight recorded shapes and never widened past what was measured. An aggregation was never
+ * part of that measurement, and the read oracle's cost story for one is not the plain query's: a
+ * `count()` still has to enumerate the index range the inner filter names to produce its number, so
+ * `limit(1)` would either do nothing (an aggregation counts rows, not documents fetched — a limit on
+ * the *count* would change the answer, not just the cost) or would have to attach somewhere the SDK
+ * gives it no hook to attach to. Both readings argue against reusing the plain path's limit here
+ * rather than for it, so this plan carries none, and `docs/README.md`'s guidance to prefer `--oracle
+ * explain` for an aggregation is this reasoning stated for an operator rather than a developer.
+ */
+export interface AggregationReplayPlan {
+  readonly collectionGroup: string;
+  readonly queryScope: QueryScope;
+  readonly where: ReplayComposite | null;
+  readonly orderBy: readonly Order[];
+  readonly aggregations: readonly AggregationSpec[];
+}
+
+export function planAggregationReplay(shape: AggregationShape): AggregationReplayPlan {
+  const orderBy = [...shape.orderBy];
+  for (const order of orderBy) if (order.fieldPath !== NAME_FIELD) replaySegments(order.fieldPath);
+  // `SUM`/`AVG` name a field the same way a filter or a sort order does, and are held to the same
+  // rule: a quoted or empty-segment path this version cannot convert is refused during planning
+  // rather than met halfway through materialisation. `COUNT` names no field (`field: null`) and has
+  // nothing here to check.
+  for (const agg of shape.aggregations) {
+    if (agg.field !== null && agg.field !== NAME_FIELD) replaySegments(agg.field);
+  }
+  return {
+    collectionGroup: replayCollectionId(shape.collectionGroup),
+    queryScope: shape.queryScope,
+    where: planRoot(shape.where),
+    orderBy,
+    aggregations: shape.aggregations,
   };
 }
