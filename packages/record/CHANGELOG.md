@@ -18,9 +18,9 @@ again, by its own `corpusVersion`.
   and the exit codes are unchanged, and the default stays `read` — every version before this one.
   Every run says on stderr which oracle answered. The claim that makes `explain` sound — that it
   answers `FAILED_PRECONDITION` with `read`'s semantics, including while an index is still
-  `CREATING` — is a prospective adopter's own measurement, not yet reproduced against a throwaway
-  target from this repository; `probe/README.md` step 5e is the runbook for doing so, and its
-  results section is marked not yet run pending that. See SPEC.md §3 for the full design note.
+  `CREATING` — is measured here for a settled set and not for the window. `probe/README.md` step 5e
+  put all twenty probe shapes through both oracles on 2026-09-26 and every one answered the same.
+  The `CREATING` half is still the adopter's own reading. See SPEC.md §3 for the full design note.
 
 ### Changed
 

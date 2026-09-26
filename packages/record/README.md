@@ -87,8 +87,9 @@ billed as one, undoing exactly the cost and access `explain` exists to avoid —
 the SDK documents that format as human-readable and not meant to be programmed against, and `check`'s
 verdict is the thrown status alone, the same signal `read` classifies. Every run says which oracle
 answered, on stderr, on the line after the target and before anything is read — see [SPEC.md](https://github.com/uny/indexwright/blob/main/SPEC.md)
-§3 for the fuller design note, including which half of the case for `explain` is this package's own
-measurement and which half is an adopter's, not yet reproduced here (`probe/README.md` step 5e).
+§3 for the fuller design note. It covers which half of the case for `explain` this package has
+measured, which is agreement with `read` on a settled set (`probe/README.md` step 5e). It also covers
+which half is still an adopter's reading: agreement while an index is `CREATING`.
 
 | Exit | Meaning |
 |-----:|:--------|

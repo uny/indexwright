@@ -208,16 +208,19 @@ Firestore connection.
   `PlanSummary`) — an undocumented, changeable format of exactly the kind this section already
   declines to reimplement for index *matching*, arriving here as index *reporting* instead.
 
-  **What makes `explain` sound is a claim this repository has not measured.** A prospective adopter
-  reports, from Firestore's own documentation and its own reading against a dev database, that
-  `explain({ analyze: false })` answers `FAILED_PRECONDITION` with the same read semantics `get()`
-  does — including through the settling-period window while a composite index is still `CREATING`,
-  which is the one case a false `served` would be the false-clean verdict §2 forbids. That reading is
-  the adopter's own, not this package's: `probe/README.md` step 5e is the runbook for reproducing it
-  against a throwaway target, and until it is run the result there is marked not yet measured.
-  `--oracle explain` ships on the strength of the documented default behaviour and the identical-query
-  argument above; the default oracle stays `read` regardless, and does not change on the strength of
-  an unmeasured claim.
+  **What makes `explain` sound is a claim in two halves, and this repository has measured one of
+  them.** A prospective adopter reports, from Firestore's own documentation and its own reading
+  against a dev database, that `explain({ analyze: false })` answers `FAILED_PRECONDITION` with the
+  same semantics `get()` does, including through the settling-period window while a composite index is
+  still `CREATING`. The `CREATING` window is the one case where a false `served` would be the
+  false-clean verdict §2 forbids. The first half is measured here: `probe/README.md` step 5e put all
+  twenty probe shapes through both oracles against a set already `READY` (2026-09-26), and every
+  shape answered the same both ways, seven `FAILED_PRECONDITION` among them. The second half, the
+  `CREATING` window, is still the adopter's reading and not this package's; catching it needs a fresh
+  build timed against the watcher, which step 5e does not do. So `--oracle explain` ships on a
+  measured agreement over a settled set, plus the documented default behaviour and the
+  identical-query argument above. The default oracle stays `read`, and a claim about the window that
+  has not been reproduced does not change that.
 
 The v0.2/v0.3 split is deliberate: capture is cheap and offline, while the coverage decision is
 delegated to the platform. Reimplementing index matching would risk emitting false
