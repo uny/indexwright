@@ -430,6 +430,23 @@ export async function check(
     // read only for the dependency report SPEC §3 and the issue ask for, and only when a file was
     // named at all. §2 and §8 stay governing: a report from this branch never says a declaration is
     // unneeded, only what the coverage that follows depends on.
+    // The one reconcile refusal this mode keeps. A field listed with no `indexConfig`, or with an
+    // `indexes` that is not a list, contributes nothing to `flatten` — so neither the readiness gate
+    // nor the second look ever saw it. The strict mode declines on it as `unreadable`; vouching for
+    // "the set as it stands" cannot include a part whose state was never observed.
+    const unobserved = live.fields.filter((field) => {
+      const config = field.indexConfig;
+      if (config === undefined || config === null) return true;
+      return config.reverting !== true && config.indexes !== undefined && config.indexes !== null && !Array.isArray(config.indexes);
+    });
+    if (unobserved.length > 0) {
+      say(
+        `cannot report: ${count(unobserved.length, 'field', 'fields')} listed on the target with no index ` +
+          `configuration this version can read, so its readiness was never observed: ` +
+          unobserved.map((field) => render(String(field.name))).join(', '),
+      );
+      return 2;
+    }
     if (command.indexes !== undefined) {
       reportDependencies(reconcileBoth(candidate, overrides, live), command.indexes, say);
     }
@@ -571,7 +588,13 @@ export async function check(
     return 2;
   }
 
-  const setLabel = targetSetIsLive ? 'live set' : 'candidate set';
+  // Under `--allow-extra` an excused extra is on the target and can serve a replayed query, so the
+  // set that answered is the candidate file's and those extras', not the file's alone.
+  const setLabel = targetSetIsLive
+    ? 'live set'
+    : allowedExtra === undefined
+      ? 'candidate set'
+      : `candidate set with the extras ${ALLOW_EXTRA_OPTION} allows`;
   return reportReplay(attempted, uncovered, accepted, served, invalid, cannotReplay, halted, setLabel, say);
 }
 
@@ -796,12 +819,13 @@ function reportMissing(
 function partitionAllowed<E extends { readonly key: string }>(
   extra: readonly E[],
   allowed: ReadonlyMap<string, string> | undefined,
+  ambiguous: ReadonlySet<string>,
 ): { readonly blocking: readonly E[]; readonly excused: readonly { entry: E; reason: string }[] } {
   if (allowed === undefined) return { blocking: extra, excused: [] };
   const blocking: E[] = [];
   const excused: { entry: E; reason: string }[] = [];
   for (const entry of extra) {
-    const reason = allowed.get(entry.key);
+    const reason = ambiguous.has(entry.key) ? undefined : allowed.get(entry.key);
     if (reason === undefined) blocking.push(entry);
     else excused.push({ entry, reason });
   }
@@ -850,10 +874,25 @@ function excuseExtras(
 ): Both {
   if (allowed === undefined) return both;
 
-  const indexSplit = partitionAllowed(both.indexes.extra, allowed);
-  const overrideSplit = partitionAllowed(both.overrides.extra, allowed);
+  // A §5 index key and a §5 override key share one shape (`group::scope-or-field::entries`), so a
+  // composite and an override can render the same key — a composite over fields named `COLLECTION`
+  // and `COLLECTION_GROUP`, and an override on a field named `COLLECTION`. An entry cannot say which
+  // of the two it meant, so a key that names an extra in both halves excuses neither: excusing both
+  // would let one resource inherit the other's reason.
+  const indexExtraKeys = new Set(both.indexes.extra.map((entry) => entry.key));
+  const ambiguous = new Set(
+    both.overrides.extra.map((entry) => entry.key).filter((key) => indexExtraKeys.has(key) && allowed.has(key)),
+  );
+  const indexSplit = partitionAllowed(both.indexes.extra, allowed, ambiguous);
+  const overrideSplit = partitionAllowed(both.overrides.extra, allowed, ambiguous);
 
   if (report) {
+    for (const key of ambiguous) {
+      say(
+        `in the ${ALLOW_EXTRA_OPTION} file, but names both an index and a field override on the target, ` +
+          `so it excuses neither: ${render(key)}`,
+      );
+    }
     for (const { entry, reason } of indexSplit.excused) {
       say(`on the target but not declared, allowed by ${ALLOW_EXTRA_OPTION}: ${render(entry.key)} (${render(reason)})`);
     }
@@ -865,6 +904,8 @@ function excuseExtras(
     }
   }
   for (const { entry } of [...indexSplit.excused, ...overrideSplit.excused]) consumed.add(entry.key);
+  // Matched, if not honoured: reported above rather than again as an entry that matched nothing.
+  for (const key of ambiguous) consumed.add(key);
 
   return {
     indexes: {

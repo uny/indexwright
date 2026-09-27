@@ -240,7 +240,10 @@ Firestore connection.
   with a named exception: a file of accepted extras, each entry carrying a `reason` exactly as
   `--baseline` requires one, mirrors `--baseline`'s shape and consumes only the `extra` half of the
   reconcile — a declaration the target does not hold still declines the run under this flag, on either
-  side of it, in both the pre-replay gate and the post-replay confirmation. The two are refused
+  side of it, in both the pre-replay gate and the post-replay confirmation. An entry whose key names
+  both an extra composite and an extra override (the two §5 key shapes can coincide) excuses neither,
+  and a pass under it credits the candidate set *with* the extras it allowed, since those can serve a
+  replayed query as well as any declaration. The two are refused
   together: `--allow-extra` names extras excused from a strict reconcile, and there is no strict
   reconcile under `--target-set live` for it to excuse anything from.
 
@@ -257,7 +260,9 @@ Firestore connection.
   after by resource name and state (added, removed, re-created, regressed from `READY`), which is a
   question about the target, not about a declaration — so `--target-set live`'s second look withdraws
   a verdict on exactly the same set of moves the default mode's does, without ever reconciling against
-  a file.
+  a file. The one listing refusal `--target-set live` keeps is a field listed with no index
+  configuration this version can read: it contributes nothing to the set readiness and the second look
+  observe, so its state was never seen, and the run declines rather than vouch for it.
 
   The target line `check` prints before anything is dialled (§4) names the mode beside the target,
   in every mode including the default, for the reason it names the target at all: a report from either

@@ -35,7 +35,8 @@ again, by its own `corpusVersion`.
   the live listing exactly as they do by default: `establishReadiness` has always gated on the whole
   live listing rather than on the candidate declarations, so a stranger's index still building on a
   shared target blocks this mode's run until the deadline too, the same as it always blocked the
-  default mode's. A pass under `--target-set live` says nothing about whether the candidate file's
+  default mode's; a field listed with no readable index configuration, whose state neither look can
+  observe, declines the run. A pass under `--target-set live` says nothing about whether the candidate file's
   declarations are needed elsewhere (SPEC §2, §8).
 
 - **`--allow-extra <file>` excuses named extras from the strict reconcile**, mirroring `--baseline`'s
@@ -43,7 +44,9 @@ again, by its own `corpusVersion`.
   `reason`, printed on every run that relies on it, with a stale entry — one that no longer matches
   an extra on the target — reported so the file can shrink. It excuses only the `extra` half of the
   reconcile, on both the pre-replay gate and the post-replay confirmation: a declaration the target
-  does not hold still declines the run regardless of what the file names. Refused together with
+  does not hold still declines the run regardless of what the file names. A key that names both an
+  extra composite and an extra override excuses neither, and the pass summary credits the candidate
+  set with the extras it allowed rather than the file alone. Refused together with
   `--target-set live`, which runs no strict reconcile for it to carve an exception out of.
 
 - **The target line names the mode**, in every run including the default strict one, so a report

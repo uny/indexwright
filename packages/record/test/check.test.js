@@ -921,6 +921,16 @@ test('--target-set live names a live entry it cannot read as a possible dependen
   assert.doesNotMatch(h.said(), /not on the target, so no query this pass answered went through it/);
 });
 
+test('--target-set live declines on a field whose readiness it never observed', async () => {
+  // A field with no `indexConfig` contributes nothing to the set the gate and the second look watch;
+  // the strict mode declines on it as unreadable, and live mode cannot vouch for it either.
+  const bare = { name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/fields/status' };
+  const h = harness({ targetSet: 'live', indexes: undefined, fieldListings: [[DEFAULT_FIELD, bare]] });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /cannot report: 1 field listed on the target with no index configuration this version can read, so its readiness was never observed: ".*\/fields\/status"/);
+  assert.equal(h.replayed.length, 0);
+});
+
 test('--target-set live still withdraws the verdict when the live set moves mid-run (#50, #92)', async () => {
   const uncovered = { kind: 'uncovered', message: '"needs an index"' };
 
@@ -1029,6 +1039,57 @@ test('--allow-extra accepts a listed extra and still declines an unlisted one', 
   assert.match(both.said(), /on the target but not declared, allowed by --allow-extra: "carts::COLLECTION::owner:ASCENDING"/);
   // The unlisted one still blocks, named the ordinary way.
   assert.match(both.said(), /on the target but not declared: "carts::COLLECTION::placed:ASCENDING"/);
+});
+
+test('an --allow-extra key naming both an index and an override excuses neither', async () => {
+  // §5 index and override keys share one shape, so a composite over fields named `COLLECTION` and
+  // `COLLECTION_GROUP` renders the same key as an override on a field named `COLLECTION`.
+  const composite = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/carts/indexes/odd',
+    fields: [
+      { fieldPath: 'COLLECTION', order: 'ASCENDING' },
+      { fieldPath: 'COLLECTION_GROUP', order: 'DESCENDING' },
+      { fieldPath: '__name__', order: 'DESCENDING' },
+    ],
+  };
+  const override = {
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/carts/fields/COLLECTION',
+    indexConfig: {
+      indexes: [
+        { queryScope: 'COLLECTION', fields: [{ fieldPath: 'COLLECTION', order: 'ASCENDING' }], state: 'READY' },
+        { queryScope: 'COLLECTION_GROUP', fields: [{ fieldPath: 'COLLECTION', order: 'DESCENDING' }], state: 'READY' },
+      ],
+      usesAncestorConfig: false,
+    },
+  };
+  const key = 'carts::COLLECTION::COLLECTION:ASCENDING|COLLECTION_GROUP:DESCENDING';
+  const h = harness({
+    allowExtra: allowExtraOf(key),
+    listings: [[...READY, composite], [...READY, composite], [...READY, composite]],
+    fieldListings: [[DEFAULT_FIELD, override]],
+  });
+  assert.equal(await h.run(), 2);
+  assert.match(h.said(), /names both an index and a field override on the target, so it excuses neither: "carts::COLLECTION::COLLECTION:ASCENDING\|COLLECTION_GROUP:DESCENDING"/);
+  assert.doesNotMatch(h.said(), /allowed by --allow-extra: /);
+  assert.doesNotMatch(h.said(), /no longer matches an extra/);
+});
+
+test('a pass under --allow-extra credits the allowed extras beside the candidate set', async () => {
+  const known = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/carts/indexes/known',
+    fields: [
+      { fieldPath: 'owner', order: 'ASCENDING' },
+      { fieldPath: '__name__', order: 'ASCENDING' },
+    ],
+  };
+  const h = harness({
+    allowExtra: allowExtraOf('carts::COLLECTION::owner:ASCENDING'),
+    listings: [[...READY, known], [...READY, known], [...READY, known]],
+  });
+  assert.equal(await h.run(), 0);
+  assert.match(h.said(), /not served by the candidate set with the extras --allow-extra allows/);
 });
 
 test('--allow-extra never excuses a missing declaration, on either side of the flag', async () => {
