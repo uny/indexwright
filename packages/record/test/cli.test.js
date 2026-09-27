@@ -48,11 +48,83 @@ test('check names its target in full, and defaults only the file paths', () => {
   assert.equal(command.project, 'p-1');
   assert.equal(command.database, '(default)');
   assert.deepEqual(command.corpus, ['firestore.queries.json']);
+  assert.equal(command.targetSet, 'candidate');
   assert.equal(command.indexes, 'firestore.indexes.json');
   assert.equal(canonicalTarget(command), 'projects/p-1/databases/(default)');
   // The one input with no default. A baseline decides which findings fail the run, so a default
   // path that happened to exist would change a verdict because of a file nobody pointed at.
   assert.equal('baseline' in command, false);
+  assert.equal('allowExtra' in command, false);
+});
+
+test('--target-set live drops the --indexes default, since that mode never needs a file to gate on', () => {
+  const command = parseArgs(['check', '--project', 'p', '--database', 'd', '--target-set', 'live']);
+  assert.equal(command.targetSet, 'live');
+  // Not defaulted to firestore.indexes.json: a default path that happened to exist would change what
+  // the dependency report says, the ambient-input failure #8 is about (issue #92).
+  assert.equal('indexes' in command, false);
+
+  // Naming --indexes explicitly under live mode is still honoured, for the dependency report.
+  const named = parseArgs(['check', '--project', 'p', '--database', 'd', '--target-set=live', '--indexes', 'x.json']);
+  assert.equal(named.indexes, 'x.json');
+
+  // The candidate mode keeps its default either way, named or not.
+  assert.equal(
+    parseArgs(['check', '--project', 'p', '--database', 'd', '--target-set', 'candidate']).indexes,
+    'firestore.indexes.json',
+  );
+});
+
+test('--target-set refuses a value that is neither candidate nor live', () => {
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--target-set', 'both']),
+    (error) => error instanceof UsageError && /--target-set must be "candidate" or "live"/.test(error.message),
+  );
+});
+
+test('--target-set with no value names the missing value, not the option it swallowed', () => {
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--target-set', '--indexes', 'x.json']),
+    (error) =>
+      error instanceof UsageError && /--target-set needs a value, got the option "--indexes"/.test(error.message),
+  );
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--target-set=']),
+    (error) => error instanceof UsageError && /--target-set needs a value$/.test(error.message),
+  );
+});
+
+test('--allow-extra is named like --baseline, with no default', () => {
+  const command = parseArgs(['check', '--project', 'p', '--database', 'd', '--allow-extra', 'extras.json']);
+  assert.equal(command.allowExtra, 'extras.json');
+  assert.equal(
+    parseArgs(['check', '--project', 'p', '--database', 'd', '--allow-extra=e.json']).allowExtra,
+    'e.json',
+  );
+  const bare = parseArgs(['check', '--project', 'p', '--database', 'd']);
+  assert.equal('allowExtra' in bare, false);
+});
+
+test('--target-set live and --allow-extra are refused together, legibly, at parse time', () => {
+  assert.throws(
+    () =>
+      parseArgs([
+        'check',
+        '--project',
+        'p',
+        '--database',
+        'd',
+        '--target-set',
+        'live',
+        '--allow-extra',
+        'extras.json',
+      ]),
+    (error) =>
+      error instanceof UsageError &&
+      /--allow-extra names extras excused from a strict reconcile.*--target-set=live runs no strict reconcile/.test(
+        error.message,
+      ),
+  );
 });
 
 test('check takes a baseline where it is named, and refuses one written without a value', () => {
@@ -339,6 +411,26 @@ test('check prints the target before it could reach a network, and exits non-zer
   assert.match(first, /target projects\/acme-prod\/databases\/\(default\)/);
   assert.match(second, /oracle: read/);
   assert.match(third, /could not read the candidate indexes/);
+});
+
+test('the target line names the mode, so a report cannot be read as stricter than it was (#92)', async () => {
+  // Named on every run, the default included — see `targetSetLabel`. A rule that is quiet on the
+  // common case and only speaks up on the departures teaches its own silence to be read as "nothing
+  // unusual", which is exactly the reading issue #8's own target line exists to take away.
+  const missing = join(mkdtempSync(join(tmpdir(), 'indexwright-')), 'absent.json');
+  const base = ['check', '--project', 'acme-prod', '--database', '(default)'];
+
+  const strict = collect();
+  await run([...base, '--indexes', missing], strict, {});
+  assert.match(strict.stderr(), /vouching for the candidate index set\n/);
+
+  const withExtra = collect();
+  await run([...base, '--indexes', missing, '--allow-extra', missing], withExtra, {});
+  assert.match(withExtra.stderr(), /vouching for the candidate index set \(--allow-extra in effect\)/);
+
+  const live = collect();
+  await run([...base, '--target-set', 'live'], live, {});
+  assert.match(live.stderr(), /vouching for the live index set \(--target-set=live\)/);
 });
 
 test('check\'s exit code is the one the CLI returns, for each of the three', async () => {
