@@ -262,7 +262,8 @@ Firestore connection.
   a verdict on exactly the same set of moves the default mode's does, without ever reconciling against
   a file. The one listing refusal `--target-set live` keeps is a field listed with no index
   configuration this version can read: it contributes nothing to the set readiness and the second look
-  observe, so its state was never seen, and the run declines rather than vouch for it.
+  observe, so its state was never seen, and the run declines rather than vouch for it — before
+  replay, or as a withdrawal when one first appears in the listing after it.
 
   The target line `check` prints before anything is dialled (§4) names the mode beside the target,
   in every mode including the default, for the reason it names the target at all: a report from either

@@ -927,8 +927,14 @@ test('--target-set live declines on a field whose readiness it never observed', 
   const bare = { name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/fields/status' };
   const h = harness({ targetSet: 'live', indexes: undefined, fieldListings: [[DEFAULT_FIELD, bare]] });
   assert.equal(await h.run(), 2);
-  assert.match(h.said(), /cannot report: 1 field listed on the target with no index configuration this version can read, so its readiness was never observed: ".*\/fields\/status"/);
+  assert.match(h.said(), /cannot report: 1 field listed on the target without an index configuration this version can read, so readiness was never observed for it: ".*\/fields\/status"/);
   assert.equal(h.replayed.length, 0);
+
+  // The same field arriving only in the second listing is invisible to `stillHeld`, and withdraws too.
+  const late = harness({ targetSet: 'live', indexes: undefined, fieldListings: [NO_OVERRIDES, NO_OVERRIDES, [DEFAULT_FIELD, bare]] });
+  assert.equal(await late.run(), 2);
+  assert.match(late.said(), /cannot report: the index set changed while the queries were being answered: 1 field listed on the target without an index configuration/);
+  assert.equal(late.replayed.length, 1);
 });
 
 test('--target-set live still withdraws the verdict when the live set moves mid-run (#50, #92)', async () => {

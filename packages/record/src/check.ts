@@ -434,17 +434,9 @@ export async function check(
     // `indexes` that is not a list, contributes nothing to `flatten` — so neither the readiness gate
     // nor the second look ever saw it. The strict mode declines on it as `unreadable`; vouching for
     // "the set as it stands" cannot include a part whose state was never observed.
-    const unobserved = live.fields.filter((field) => {
-      const config = field.indexConfig;
-      if (config === undefined || config === null) return true;
-      return config.reverting !== true && config.indexes !== undefined && config.indexes !== null && !Array.isArray(config.indexes);
-    });
+    const unobserved = unobservedFields(live.fields);
     if (unobserved.length > 0) {
-      say(
-        `cannot report: ${count(unobserved.length, 'field', 'fields')} listed on the target with no index ` +
-          `configuration this version can read, so its readiness was never observed: ` +
-          unobserved.map((field) => render(String(field.name))).join(', '),
-      );
+      say(`cannot report: ${describeUnobserved(unobserved)}`);
       return 2;
     }
     if (command.indexes !== undefined) {
@@ -583,6 +575,12 @@ export async function check(
       return 2;
     }
   }
+  // The same refusal as before replay, of the second listing: a field that arrived mid-run with no
+  // readable index configuration adds nothing to `flatten(after)`, so `stillHeld` cannot see it.
+  if (held.unobserved.length > 0) {
+    say(`cannot report: the index set changed while the queries were being answered: ${describeUnobserved(held.unobserved)}`);
+    return 2;
+  }
   if (held.identity.kind !== 'held') {
     say(`cannot report: ${describeHeld(held.identity)}`);
     return 2;
@@ -660,7 +658,31 @@ async function confirmSetHeld(
   return {
     declared: targetSetIsLive ? undefined : reconcileBoth(candidate, overrides, after),
     identity: stillHeld(flatten(before), flatten(after)),
+    // Asked only where `declared` is not: the strict reconcile already declines on these as unreadable.
+    unobserved: targetSetIsLive ? unobservedFields(after.fields) : [],
   };
+}
+
+/**
+ * The fields `liveSingleFieldIndexes` skips outright — no `indexConfig`, or an `indexes` that is
+ * neither a list nor absent — and so the fields neither the readiness gate nor the second look ever
+ * observe. `--target-set live` declines on them (issue #92); the strict mode already does, as
+ * `reconcileOverrides`'s `unreadable`.
+ */
+function unobservedFields(fields: readonly LiveField[]): LiveField[] {
+  return fields.filter((field) => {
+    const config = field.indexConfig;
+    if (config === undefined || config === null) return true;
+    return config.reverting !== true && config.indexes !== undefined && config.indexes !== null && !Array.isArray(config.indexes);
+  });
+}
+
+function describeUnobserved(fields: readonly LiveField[]): string {
+  return (
+    `${count(fields.length, 'field', 'fields')} listed on the target without an index configuration this ` +
+    `version can read, so readiness was never observed for ${fields.length === 1 ? 'it' : 'them'}: ` +
+    fields.map((field) => render(String(field.name))).join(', ')
+  );
 }
 
 /**
@@ -671,6 +693,8 @@ async function confirmSetHeld(
 interface Confirmation {
   readonly declared: Both | undefined;
   readonly identity: Held;
+  /** The second listing's `unobservedFields`, under `--target-set live` only; empty otherwise. */
+  readonly unobserved: readonly LiveField[];
 }
 
 /** The one set the gate observes, from the two listings that carry it. */
@@ -861,9 +885,10 @@ function recomputeVerdict(half: {
  * announced a second time for the same run; the verdict is still recomputed there, so an entry that
  * stopped being excusable (its extra vanished and something unlisted took its place) still blocks.
  *
- * `consumed` accumulates every key this call excused, across whichever halves and calls share it, so
- * the caller can report a stale `--allow-extra` entry — one that names a key the target never carried
- * as an extra — exactly once, against everything a full run could have matched it to.
+ * `consumed` accumulates every key this call excused, and every key it refused to excuse because it
+ * named both halves (matched, if not honoured), across whichever halves and calls share it, so the
+ * caller can report a stale `--allow-extra` entry — one that names a key the target never carried as
+ * an extra — exactly once, against everything a full run could have matched it to.
  */
 function excuseExtras(
   both: Both,
