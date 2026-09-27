@@ -47,7 +47,8 @@ again, by its own `corpusVersion`.
   `--target-set live`, which runs no strict reconcile for it to carve an exception out of.
 
 - **The target line names the mode**, in every run including the default strict one, so a report
-  from either flag above cannot be misread as the plain strict pass this verb defaults to.
+  from either flag above cannot be misread as the plain strict pass this verb defaults to (see
+  Changed for what that does to the default run's line).
 
 ### Changed
 
@@ -64,7 +65,13 @@ again, by its own `corpusVersion`.
   caller that only ever passed `check`'s first argument through from `parseArgs`, as the documented
   usage does, sees no difference. A caller that builds a `CheckCommand` literal by hand needs to add
   `targetSet: 'candidate'` to keep the strict default explicit — `indexes` is unaffected for that
-  caller, since it stays a plain `string` under that mode.
+  caller, since it stays a plain `string` under that mode. A `targetSet` that is neither — an untyped
+  caller's typo, or a missing member — is refused by `check` rather than run as the strict mode, the
+  same as an unknown `oracle`.
+
+- **The target line now ends in the mode, on every run** — including the default strict one, which
+  reads `, vouching for the candidate index set` after the target where it used to end at the target.
+  A consumer matching that stderr line verbatim needs to allow for the suffix.
 
 ## [0.10.1] — 2026-09-23
 

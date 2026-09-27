@@ -887,6 +887,40 @@ test('with --indexes, --target-set live reports what the pass depends on, never 
   }
 });
 
+test('--target-set live names a live entry it cannot read as a possible dependency, and says so of what is missing', async () => {
+  // An unreadable live entry has no key, so it is neither `extra` nor matched — and it may be the very
+  // declaration reported missing. Both halves of that are said, neither is dropped.
+  const unreadable = {
+    ...READY[0],
+    name: 'projects/indexwright-probe/databases/(default)/collectionGroups/orders/indexes/weird',
+    unique: true,
+  };
+  const h = harness({
+    targetSet: 'live',
+    listings: [[...READY, unreadable], [...READY, unreadable], [...READY, unreadable]],
+    declared: {
+      indexes: [
+        ...DECLARED.indexes,
+        {
+          collectionGroup: 'orders',
+          queryScope: 'COLLECTION',
+          fields: [{ fieldPath: 'placed', order: 'ASCENDING' }],
+        },
+      ],
+    },
+  });
+  assert.equal(await h.run(), 0);
+  assert.match(
+    h.said(),
+    /this coverage may depend on, beyond what could be compared with .*firestore\.indexes\.json.*: ".*\/indexes\/weird", on the target but not readable in these terms/,
+  );
+  assert.match(
+    h.said(),
+    /declared at .*firestore\.indexes\.json.*, but could not be compared against the target in these terms, so this pass cannot say whether the target holds it: "orders::COLLECTION::placed:ASCENDING"/,
+  );
+  assert.doesNotMatch(h.said(), /not on the target, so no query this pass answered went through it/);
+});
+
 test('--target-set live still withdraws the verdict when the live set moves mid-run (#50, #92)', async () => {
   const uncovered = { kind: 'uncovered', message: '"needs an index"' };
 
@@ -1109,6 +1143,15 @@ test('--target-set live and --allow-extra are refused together by the exported c
   const h = harness({ targetSet: 'live', allowExtra: allowExtraOf('k') });
   assert.equal(await h.run(), 2);
   assert.match(h.said(), /--allow-extra names extras excused from a strict reconcile/);
+});
+
+test('a --target-set that is neither mode is refused by the exported check(), not run as the strict one', async () => {
+  for (const targetSet of ['liv', 'Live', null]) {
+    const h = harness({ targetSet });
+    assert.equal(await h.run(), 2);
+    assert.match(h.said(), /cannot report: --target-set must be "candidate" or "live", got/);
+    assert.equal(h.replayed.length, 0);
+  }
 });
 
 test('--target-set candidate with no --indexes is refused by the exported check() too', async () => {

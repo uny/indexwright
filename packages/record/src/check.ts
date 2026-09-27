@@ -29,6 +29,7 @@ import {
   ORACLES,
   REQUIRE_IDENTITY,
   render,
+  TARGET_SET_CANDIDATE,
   TARGET_SET_LIVE,
   TARGET_SET_OPTION,
   type CheckCommand,
@@ -183,13 +184,21 @@ export async function check(
     named.add(normalised);
   }
 
+  // The rest of the boundary `parseCheck` presents an untyped caller (issue #92): a mode that is
+  // neither of the two, the two members `parseCheck` never produces together, and the one member
+  // `parseCheck` never leaves unset for the mode it built. A `'liv'` or a missing member is refused as
+  // the oracle's is, rather than run as the strict mode the caller may not have meant. Checked before
+  // anything is read, on the same principle the corpus checks above are — a caller that built its own
+  // `CheckCommand` gets the same legible refusal a command line does, rather than a run that silently
+  // reads one flag and ignores the other.
+  if (command.targetSet !== TARGET_SET_CANDIDATE && command.targetSet !== TARGET_SET_LIVE) {
+    say(
+      `cannot report: ${TARGET_SET_OPTION} must be "${TARGET_SET_CANDIDATE}" or "${TARGET_SET_LIVE}", ` +
+        `got ${render(String(command.targetSet))}`,
+    );
+    return 2;
+  }
   const targetSetIsLive = command.targetSet === TARGET_SET_LIVE;
-
-  // The rest of the boundary `parseCheck` presents an untyped caller (issue #92): the two members
-  // `parseCheck` never produces together, and the one member `parseCheck` never leaves unset for the
-  // mode it built. Checked before anything is read, on the same principle the corpus checks above
-  // are — a caller that built its own `CheckCommand` gets the same legible refusal a command line
-  // does, rather than a run that silently reads one flag and ignores the other.
   if (targetSetIsLive && command.allowExtra !== undefined) {
     say(
       `cannot report: ${ALLOW_EXTRA_OPTION} names extras excused from a strict reconcile, and ` +
@@ -409,11 +418,9 @@ export async function check(
     throw error;
   }
 
-  // The set this run consumed by the two reconciliations to come — the pre-replay gate immediately
-  // below, and the post-replay confirmation in `confirmSetHeld` — is tracked across both so a stale
-  // `--allow-extra` entry (issue #92) is reported once, against everything a full run could have
-  // matched it to, rather than once per reconciliation with the second occurrence read as a second
-  // finding.
+  // The keys `--allow-extra` excused (issue #92). Stale entries are reported once, from the pre-replay
+  // gate immediately below — the post-replay confirmation adds to this set but never reports from it,
+  // so the same stale entry is not announced twice in one run.
   const excusedKeys = new Set<string>();
 
   if (targetSetIsLive) {
@@ -730,11 +737,15 @@ function isVouchedBoth(both: Both): boolean {
  * pass depends on it, which is exactly the question `--target-set live` was reached for instead of
  * the strict reconcile that would have settled it.
  *
- * `incomparable` entries are silently absent from this report rather than reported as a third bucket
- * — this branch never declines on them (`incomparableReason` is a §5-key concern, and live mode's
- * vouching basis is the coarser name-and-state one `stillHeld` uses), so there is no reason to single
- * them out. The report is therefore informational and not a promise that every live entry was
- * accounted for; it says what the strict half of `reconcile` could match, and no more.
+ * The unreadable live entries themselves are named too, by resource name since they have no key:
+ * each is on the target, can serve a replayed query, and cannot be matched to the file, so the
+ * coverage may depend on it — SPEC §3's "every live index or override the file does not declare" has
+ * no exception for an entry this version cannot read.
+ *
+ * `incomparable` entries are absent from this report rather than reported as a third bucket: they are
+ * *declarations* this version cannot compare (`incomparableReason` is a §5-key concern), not live
+ * entries, and this branch never declines on them — live mode's vouching basis is the coarser
+ * name-and-state one `stillHeld` uses.
  */
 function reportDependencies(both: Both, indexesPath: string, say: (text: string) => void): void {
   const { indexes, overrides } = both;
@@ -742,9 +753,25 @@ function reportDependencies(both: Both, indexesPath: string, say: (text: string)
   for (const index of indexes.extra) {
     say(`this coverage depends on, beyond ${render(indexesPath)}: ${render(index.key)}`);
   }
+  reportUnreadableLive(indexes.unreadable, indexesPath, say);
   reportMissing(overrides.missing, overrides.unreadable.length > 0, indexesPath, say);
   for (const override of overrides.extra) {
     say(`this coverage depends on, beyond ${render(indexesPath)}: ${render(override.key)}`);
+  }
+  reportUnreadableLive(overrides.unreadable, indexesPath, say);
+}
+
+/** One half's `unreadable` list, worded as `reportDependencies`'s own doc explains. */
+function reportUnreadableLive(
+  unreadable: readonly { readonly name: string; readonly reason: string; readonly detail: string }[],
+  indexesPath: string,
+  say: (text: string) => void,
+): void {
+  for (const entry of unreadable) {
+    say(
+      `this coverage may depend on, beyond what could be compared with ${render(indexesPath)}: ` +
+        `${render(entry.name)}, on the target but not readable in these terms (${entry.reason}: ${render(entry.detail)})`,
+    );
   }
 }
 
