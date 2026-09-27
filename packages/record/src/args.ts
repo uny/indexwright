@@ -550,14 +550,6 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
   };
 }
 
-/**
- * `--oracle`'s value, or a `UsageError` naming the two this version knows.
- *
- * Refused the same way a missing value on any other option here is — an empty string, or the next
- * option absorbed because this one was written without its argument — before the smaller question
- * of which two words are accepted. `ORACLES.join` rather than a literal `"read" or "explain"`, so
- * the message and the accepted set cannot drift apart the way two independently spelled lists do.
- */
 /** The same missing-value refusal `requireOracle` makes, for the same reason. */
 function requireTargetSet(value: string, option: string): TargetSet {
   if (value === '') throw new UsageError(`${option} needs a value`);
@@ -572,6 +564,14 @@ function requireTargetSet(value: string, option: string): TargetSet {
   return value;
 }
 
+/**
+ * `--oracle`'s value, or a `UsageError` naming the two this version knows.
+ *
+ * Refused the same way a missing value on any other option here is — an empty string, or the next
+ * option absorbed because this one was written without its argument — before the smaller question
+ * of which two words are accepted. `ORACLES.join` rather than a literal `"read" or "explain"`, so
+ * the message and the accepted set cannot drift apart the way two independently spelled lists do.
+ */
 function requireOracle(value: string, option: string): Oracle {
   if (value === '') throw new UsageError(`${option} needs a value`);
   if (value.startsWith('-')) {
