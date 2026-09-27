@@ -82,6 +82,18 @@ test('--target-set refuses a value that is neither candidate nor live', () => {
   );
 });
 
+test('--target-set with no value names the missing value, not the option it swallowed', () => {
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--target-set', '--indexes', 'x.json']),
+    (error) =>
+      error instanceof UsageError && /--target-set needs a value, got the option "--indexes"/.test(error.message),
+  );
+  assert.throws(
+    () => parseArgs(['check', '--project', 'p', '--database', 'd', '--target-set=']),
+    (error) => error instanceof UsageError && /--target-set needs a value$/.test(error.message),
+  );
+});
+
 test('--allow-extra is named like --baseline, with no default', () => {
   const command = parseArgs(['check', '--project', 'p', '--database', 'd', '--allow-extra', 'extras.json']);
   assert.equal(command.allowExtra, 'extras.json');

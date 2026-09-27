@@ -466,16 +466,9 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
       case ALLOW_EXTRA_OPTION:
         allowExtra = requirePath(takeValue(), name);
         break;
-      case TARGET_SET_OPTION: {
-        const value = takeValue();
-        if (value !== TARGET_SET_CANDIDATE && value !== TARGET_SET_LIVE) {
-          throw new UsageError(
-            `${name} must be "${TARGET_SET_CANDIDATE}" or "${TARGET_SET_LIVE}", got ${render(value)}`,
-          );
-        }
-        targetSet = value;
+      case TARGET_SET_OPTION:
+        targetSet = requireTargetSet(takeValue(), name);
         break;
-      }
       case REQUIRE_IDENTITY:
         // Takes no value, for the reason `--allow-remote-emulator` does not: with the `=value`
         // already split off, `--require-identity=false` would read as "off" and turn the guard on.
@@ -565,6 +558,20 @@ function parseCheck(options: readonly string[], env: NodeJS.ProcessEnv): Command
  * of which two words are accepted. `ORACLES.join` rather than a literal `"read" or "explain"`, so
  * the message and the accepted set cannot drift apart the way two independently spelled lists do.
  */
+/** The same missing-value refusal `requireOracle` makes, for the same reason. */
+function requireTargetSet(value: string, option: string): TargetSet {
+  if (value === '') throw new UsageError(`${option} needs a value`);
+  if (value.startsWith('-')) {
+    throw new UsageError(`${option} needs a value, got the option ${render(value)}`);
+  }
+  if (value !== TARGET_SET_CANDIDATE && value !== TARGET_SET_LIVE) {
+    throw new UsageError(
+      `${option} must be "${TARGET_SET_CANDIDATE}" or "${TARGET_SET_LIVE}", got ${render(value)}`,
+    );
+  }
+  return value;
+}
+
 function requireOracle(value: string, option: string): Oracle {
   if (value === '') throw new UsageError(`${option} needs a value`);
   if (value.startsWith('-')) {
