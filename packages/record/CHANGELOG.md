@@ -5,7 +5,18 @@ All notable changes to `@indexwright/record` are documented here. The format fol
 versioning. It versions independently of `indexwright`; the corpus format is versioned separately
 again, by its own `corpusVersion`.
 
-## [Unreleased]
+## [0.11.0] — 2026-10-04
+
+Minor rather than patch: `check` can now ask its target through `explain` instead of a read
+(`--oracle explain`), vouch for a shared target's live index set (`--target-set live`) or excuse
+named extras from the strict reconcile (`--allow-extra`), and aggregation queries are captured and
+replayed rather than declined. `corpusVersion` is bumped to 3 for the new `aggregations` member; a
+v3 reader still reads v1 and v2 corpora in full, but an earlier release refuses a corpus this one
+records, and a v2 and a v3 corpus are refused as one merge.
+The provisional JS API changes shape — `Corpus.aggregations`, `Replayer.runAggregation`,
+`CheckCommand.oracle` and `CheckCommand.targetSet` are required, and `SkipReason` drops
+`'aggregation-query'` — and the default run's target line gains a suffix. The CLI's defaults are
+otherwise unchanged. The `indexwright` range stays `>=0.3.0 <1`.
 
 ### Added
 
@@ -1126,6 +1137,7 @@ First release. Query capture, specified in [SPEC.md](https://github.com/uny/inde
   stderr. Snapshot listeners carry their query over `Listen` and are counted, not recorded.
   Capturing `Listen` is the first extension worth making.
 
+[0.11.0]: https://github.com/uny/indexwright/releases/tag/record-v0.11.0
 [0.10.1]: https://github.com/uny/indexwright/releases/tag/record-v0.10.1
 [0.10.0]: https://github.com/uny/indexwright/releases/tag/record-v0.10.0
 [0.9.0]: https://github.com/uny/indexwright/releases/tag/record-v0.9.0
