@@ -263,7 +263,12 @@ function readAggregation(value: unknown): AggregationSpec {
   const avg = field(agg, 'avg');
   const set = [count, sum, avg].filter((member) => member !== undefined).length;
   if (set > 1) throw new WireError('aggregation names more than one of count, sum and avg');
-  if (count !== undefined) return { op: 'COUNT' as AggregationOp, field: null };
+  if (count !== undefined) {
+    // `up_to` is not recorded, but the member is still a `Count` message: a `"count": 7` is a value
+    // of the wrong type under a known field, declined here as it is everywhere else in this reader.
+    object(count, 'count');
+    return { op: 'COUNT' as AggregationOp, field: null };
+  }
   if (sum !== undefined) return { op: 'SUM' as AggregationOp, field: readAggregateFunctionField(sum, 'sum') };
   if (avg !== undefined) return { op: 'AVG' as AggregationOp, field: readAggregateFunctionField(avg, 'avg') };
   throw new UnsupportedShape('aggregation holds no recognised operator');

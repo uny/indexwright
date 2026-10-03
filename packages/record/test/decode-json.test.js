@@ -449,6 +449,19 @@ test('an aggregation naming more than one of count/sum/avg is undecodable, not r
   );
 });
 
+test('a count that is not a Count message is undecodable, not recorded as a COUNT', () => {
+  // The proxy records on the request, before Firestore answers it, so a body Firestore would reject
+  // must not become a replayable entry. `sum`/`avg` already go through `object()`; so does `count`.
+  const query = (aggregation) =>
+    decodeAggregation({
+      structuredAggregationQuery: { structuredQuery: { from: [{ collectionId: 'o' }] }, aggregations: [aggregation] },
+    });
+  for (const count of [7, 'bad', [], null, true]) {
+    assert.deepEqual(query({ count }), { ok: false, reason: 'undecodable-message' }, JSON.stringify(count));
+  }
+  assert.equal(query({ count: { upTo: '5' } }).ok, true, 'a Count carrying up_to is still a COUNT');
+});
+
 test('a sum or average naming no field is an unsupported shape', () => {
   const query = (aggregation) =>
     decodeAggregation({
