@@ -48,9 +48,9 @@ import {
   type Reconciliation,
   type ReconciliationVerdict,
 } from './reconcile.js';
-import { planReplay, ReplayError, type ReplayPlan } from './synthesise.js';
+import { planAggregationReplay, planReplay, ReplayError, type AggregationReplayPlan, type ReplayPlan } from './synthesise.js';
 import { replayClient, TargetError, type Replayer } from './replay.js';
-import type { Corpus, Producer, QueryShape } from './types.js';
+import type { AggregationShape, Corpus, Producer, QueryShape } from './types.js';
 
 export interface Streams {
   out(text: string): void;
@@ -91,10 +91,15 @@ export interface CheckOptions {
   deadlineMs?: number;
 }
 
-interface Entry {
-  readonly shape: QueryShape;
-  readonly plan: ReplayPlan;
-}
+/**
+ * One entry to replay, of either kind (issue #93). `check` asks the two through different
+ * `Replayer` methods — `run` for a plain query, `runAggregation` for an aggregation — but everything
+ * around that one call (planning, the report, the baseline) treats them alike: both have a `.key`
+ * into the same-shaped verdict maps, and `kind` is only what tells the run loop which method to call.
+ */
+type Entry =
+  | { readonly kind: 'query'; readonly shape: QueryShape; readonly plan: ReplayPlan }
+  | { readonly kind: 'aggregation'; readonly shape: AggregationShape; readonly plan: AggregationReplayPlan };
 
 /** What one corpus yields offline: the entries to replay, the ones that cannot be, and every key. */
 interface Planned {
@@ -151,7 +156,7 @@ export async function check(
   say(
     command.oracle === 'explain'
       ? 'oracle: explain — each entry is asked with Query.explain({ analyze: false }); nothing is read'
-      : 'oracle: read — each entry is asked by running the query and reading one document',
+      : 'oracle: read — each entry is asked by running it: a query reads one document, an aggregation runs with no limit',
   );
 
   // Checked rather than iterated. This member was one path until issue #56, and an untyped caller
@@ -305,7 +310,7 @@ export async function check(
     for (const line of part.planned.unreplayable) say(`cannot replay: ${line}`);
     say(
       part.planned.unreplayable.length === 0
-        ? `there is nothing to replay: the corpus at ${render(part.path)} holds no queries`
+        ? `there is nothing to replay: the corpus at ${render(part.path)} holds no queries or aggregations`
         : `there is nothing to replay: no entry in the corpus at ${render(part.path)} has a replayable form`,
     );
     return 2;
@@ -343,7 +348,12 @@ export async function check(
     // Said only when there was something to merge. With one corpus the merge is the identity, and a
     // line announcing it would be noise on the overwhelmingly common command line.
     if (parts.length > 1) {
-      say(`${count(parts.length, 'corpus', 'corpora')} merged into ${count(merged.queries.length, 'query', 'queries')}`);
+      say(
+        `${count(parts.length, 'corpus', 'corpora')} merged into ${count(merged.queries.length, 'query', 'queries')}` +
+          (merged.aggregations.length > 0
+            ? ` and ${count(merged.aggregations.length, 'aggregation', 'aggregations')}`
+            : ''),
+      );
     }
     ({ entries, unreplayable, keys: corpusKeys } = plan(merged));
   } catch (error) {
@@ -490,17 +500,19 @@ export async function check(
   // Seeded with what planning refused, and added to by anything materialisation refuses that
   // planning did not. Both mean the same thing to the report: an entry with no verdict.
   const cannotReplay: string[] = [...unreplayable];
-  let attempted = 0;
+  // Kept apart so the summary does not call an aggregation a query: the two cost different reads.
+  const attempted = { queries: 0, aggregations: 0 };
   let halted: string | undefined;
   try {
     for (const entry of entries) {
       // One at a time. The order of the report is then the order of the corpus rather than of
       // whichever request happened to come back first, and a throwaway database is not the place to
       // find out how a burst of concurrent queries is throttled.
-      const status = await replayer.run(entry.plan);
+      const status =
+        entry.kind === 'aggregation' ? await replayer.runAggregation(entry.plan) : await replayer.run(entry.plan);
       // Counted once the target has answered, so an entry that never reached it is not reported as
       // a query that was replayed.
-      if (status.kind !== 'unbuildable') attempted += 1;
+      if (status.kind !== 'unbuildable') attempted[entry.kind === 'aggregation' ? 'aggregations' : 'queries'] += 1;
       if (status.kind === 'served') {
         served.add(entry.shape.key);
         continue;
@@ -1240,7 +1252,7 @@ function explainedByUnreadability(half: {
  * standing against that is the sentence appearing in the log of every run that relies on it.
  */
 function reportReplay(
-  attempted: number,
+  attempted: { readonly queries: number; readonly aggregations: number },
   uncovered: readonly { key: string; message: string }[],
   accepted: ReadonlyMap<string, string> | undefined,
   served: ReadonlySet<string>,
@@ -1274,7 +1286,9 @@ function reportReplay(
 
   const findings = uncovered.length - baselined;
   say(
-    `${count(attempted, 'query', 'queries')} replayed, ` +
+    `${count(attempted.queries, 'query', 'queries')}` +
+      (attempted.aggregations > 0 ? ` and ${count(attempted.aggregations, 'aggregation', 'aggregations')}` : '') +
+      ' replayed, ' +
       `${uncovered.length} not served by the ${setLabel}` +
       (accepted === undefined ? '' : `, ${baselined} of them in the baseline`),
   );
@@ -1298,14 +1312,25 @@ function reportReplay(
 function plan(corpus: Corpus): Planned {
   const entries: Entry[] = [];
   const unreplayable: string[] = [];
-  // Every key the corpus named, planned or not. A baseline entry is only known not to reproduce if
-  // the run can account for it, and "the corpus no longer holds this query" is one of the two ways
-  // it can — so the set has to include the entries that got no further than planning.
+  // Every key the corpus named, planned or not, over both arrays: a baseline entry is only known not
+  // to reproduce if the run can account for it, and "the corpus no longer holds this query" is one
+  // of the two ways it can — so the set has to include the entries that got no further than planning.
+  // `queries` and `aggregations` key into disjoint namespaces (`aggregationKey`'s own guarantee, see
+  // `shape.ts`), so one set serves both without either kind's keys shadowing the other's.
   const keys = new Set<string>();
   for (const shape of corpus.queries) {
     keys.add(shape.key);
     try {
-      entries.push({ shape, plan: planReplay(shape) });
+      entries.push({ kind: 'query', shape, plan: planReplay(shape) });
+    } catch (error) {
+      if (!(error instanceof ReplayError)) throw error;
+      unreplayable.push(`${render(shape.key)}: ${error.message}`);
+    }
+  }
+  for (const shape of corpus.aggregations) {
+    keys.add(shape.key);
+    try {
+      entries.push({ kind: 'aggregation', shape, plan: planAggregationReplay(shape) });
     } catch (error) {
       if (!(error instanceof ReplayError)) throw error;
       unreplayable.push(`${render(shape.key)}: ${error.message}`);

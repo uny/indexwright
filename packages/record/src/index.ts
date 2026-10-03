@@ -55,8 +55,19 @@ export {
   type FirestoreModule,
 } from './client.js';
 export { buildCorpus, CorpusError, mergeCorpora, parseCorpus, serialiseCorpus, writeCorpus } from './corpus.js';
-export { decodeJsonListen, decodeJsonRunQuery, forwardChannelMessages } from './decode-json.js';
-export { decodeListen, decodeRunQuery, type DecodeResult } from './decode.js';
+export {
+  decodeJsonListen,
+  decodeJsonRunAggregationQuery,
+  decodeJsonRunQuery,
+  forwardChannelMessages,
+} from './decode-json.js';
+export {
+  decodeListen,
+  decodeRunAggregationQuery,
+  decodeRunQuery,
+  type AggregationDecodeResult,
+  type DecodeResult,
+} from './decode.js';
 export {
   classifyHost,
   EndpointError,
@@ -124,6 +135,7 @@ export {
 export { Recorder } from './recorder.js';
 export {
   askOracle,
+  buildReplayAggregateQuery,
   buildReplayQuery,
   classifyRejection,
   replayClient,
@@ -135,21 +147,27 @@ export {
   type ReplayStatus,
 } from './replay.js';
 export {
+  aggregationKey,
   compareByCodePoint,
   escapeComponent,
+  normaliseAggregations,
   normaliseFilter,
   normaliseRoot,
   queryKey,
+  serialiseAggregation,
   serialiseFilter,
   serialiseOrderBy,
+  toAggregationShape,
   toQueryShape,
 } from './shape.js';
 export {
   isReplayComposite,
   NAME_FIELD,
   operandFor,
+  planAggregationReplay,
   planReplay,
   ReplayError,
+  type AggregationReplayPlan,
   type Operand,
   type OperandType,
   type ReplayComposite,
@@ -165,6 +183,9 @@ export {
   READABLE_CORPUS_VERSIONS,
   SKIP_REASONS,
   UNARY_OPERATORS,
+  type AggregationOp,
+  type AggregationShape,
+  type AggregationSpec,
   type CompositeOperator,
   type Corpus,
   type Direction,
@@ -178,6 +199,7 @@ export {
   type Producer,
   type QueryScope,
   type QueryShape,
+  type RawAggregationQuery,
   type RawQuery,
   type SkipReason,
   type UnaryOperator,

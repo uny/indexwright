@@ -37,11 +37,12 @@ import {
   ReplayError,
   replayCollectionId,
   replaySegments,
+  type AggregationReplayPlan,
   type ReplayLeaf,
   type ReplayNode,
   type ReplayPlan,
 } from './synthesise.js';
-import type { FilterOperator } from './types.js';
+import type { AggregationSpec, FilterOperator } from './types.js';
 
 /** A replay target that could not be reached, or that this environment may not be pointed at. */
 export class TargetError extends Error {
@@ -89,6 +90,8 @@ export type ReplayStatus =
  */
 export interface Replayer {
   run(plan: ReplayPlan): Promise<ReplayStatus>;
+  /** As `run`, for an `AggregationShape` entry (issue #93). See `buildReplayAggregateQuery`. */
+  runAggregation(plan: AggregationReplayPlan): Promise<ReplayStatus>;
   close(): Promise<void>;
 }
 
@@ -270,6 +273,69 @@ export function buildReplayQuery(
   return query.limit(1);
 }
 
+/**
+ * The aggregate query one `AggregationReplayPlan` replays as (issue #93).
+ *
+ * Built the same way `buildReplayQuery` builds the inner query — `where` and `orderBy` from the same
+ * `nodeFilter`/`replayFieldPath` machinery, against the same root-collection reading for a
+ * `COLLECTION`-scope entry — and then turned into an `AggregateQuery` with `.count()` for a single
+ * `COUNT` aggregation or `.aggregate({...})` otherwise. `.count()` and `.aggregate({ a0: count() })`
+ * ask the same question of the index — `Query.count()`'s own docs describe it as shorthand for the
+ * aggregation — but `.count()` is preferred where it applies because it is the call every corpus
+ * entry recorded through the SDK's own `collection.count().get()` actually issued, and matching the
+ * call shape rather than only its wire form is one fewer place a future SDK version could let the
+ * two drift apart.
+ *
+ * **No `limit`.** See `AggregationReplayPlan`'s own docblock in `synthesise.ts` for why the plain
+ * path's measured `limit(1)` does not carry over to this one.
+ *
+ * The alias keys handed to `.aggregate()` are invented here (`a0`, `a1`, …) and exist only for the
+ * duration of this call. They are an `AggregateSpec`'s object keys, not the wire's `alias` — which
+ * SPEC §7 declines to record for the same reason `select` is declined: a client-chosen string with
+ * no bearing on which index answers the query. A recorded alias would still have had to be
+ * re-invented here, since two corpus entries may have used the same alias for different aggregations
+ * or different aliases for the same one, and neither fact is about the index set.
+ */
+export function buildReplayAggregateQuery(
+  sdk: FirestoreModule,
+  db: FirebaseFirestore.Firestore,
+  plan: AggregationReplayPlan,
+): FirebaseFirestore.AggregateQuery<FirebaseFirestore.AggregateSpec> {
+  const id = replayCollectionId(plan.collectionGroup);
+  const collection = db.collection(id);
+  let query: FirebaseFirestore.Query = plan.queryScope === 'COLLECTION_GROUP' ? db.collectionGroup(id) : collection;
+  if (plan.where !== null) query = query.where(nodeFilter(sdk, collection, plan.where));
+  for (const order of plan.orderBy) {
+    query = query.orderBy(
+      replayFieldPath(sdk, order.fieldPath),
+      order.direction === 'DESCENDING' ? 'desc' : 'asc',
+    );
+  }
+
+  if (plan.aggregations.length === 1 && plan.aggregations[0]?.op === 'COUNT') return query.count();
+
+  const spec: Record<string, FirebaseFirestore.AggregateField<number> | FirebaseFirestore.AggregateField<number | null>> = {};
+  plan.aggregations.forEach((agg, index) => {
+    spec[`a${index}`] = aggregateField(sdk, agg);
+  });
+  return query.aggregate(spec);
+}
+
+function aggregateField(
+  sdk: FirestoreModule,
+  agg: AggregationSpec,
+): FirebaseFirestore.AggregateField<number> | FirebaseFirestore.AggregateField<number | null> {
+  if (agg.op === 'COUNT') return sdk.AggregateField.count();
+  // Checked by `planAggregationReplay`, ahead of any client: `SUM`/`AVG` always name a field, and a
+  // corpus entry that does not is one `parseCorpus` already refused to read (`parseAggregationSpec`).
+  if (agg.field === null) throw new ReplayError(`no field is recorded for ${agg.op}, and it aggregates one`);
+  const path = replayFieldPath(sdk, agg.field);
+  // `AggregateField.sum`/`.average` accept a `string | FieldPath`; the `FieldPath` form is used
+  // throughout this module rather than the wire's dotted string, for the reason `replayFieldPath`
+  // gives — a raw string re-splits on `.` and does not accept the backtick-quoted form at all.
+  return agg.op === 'SUM' ? sdk.AggregateField.sum(path) : sdk.AggregateField.average(path);
+}
+
 /** Which of the three answers a rejection is. */
 export function classifyRejection(error: unknown): ReplayStatus {
   // Read through a guard rather than a cast. `messageOf` is total on purpose, and a `.code` lookup
@@ -401,6 +467,20 @@ export async function replayClient(project: string, database: string, oracle: Or
       // `explain` against `explain({ analyze: false })` — differ only in which method is called, and
       // keeping that one difference in one function is what keeps `analyze: true` unreachable from
       // both of this module's call sites rather than from only one.
+      return askOracle(query, oracle);
+    },
+    async runAggregation(plan: AggregationReplayPlan): Promise<ReplayStatus> {
+      // Same shape as `run` above, over `buildReplayAggregateQuery` instead: a plan this version
+      // cannot build is `unbuildable` rather than thrown, and the built query goes through the same
+      // `askOracle`, which is why `Askable` is a structural interface — an `AggregateQuery`'s
+      // `get()`/`explain()` satisfy it exactly as a `Query`'s do, with no adapter needed.
+      let query: FirebaseFirestore.AggregateQuery<FirebaseFirestore.AggregateSpec>;
+      try {
+        query = buildReplayAggregateQuery(sdk, db, plan);
+      } catch (error) {
+        const message = error instanceof ReplayError ? error.message : render(messageOf(error));
+        return { kind: 'unbuildable', message };
+      }
       return askOracle(query, oracle);
     },
     async close(): Promise<void> {

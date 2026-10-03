@@ -547,6 +547,58 @@ test('the corpus is written and the exit code is the suite’s', async () => {
   }
 });
 
+test('an aggregation the suite issues reaches the written corpus, not only the recorder', async () => {
+  // The one path from the proxy's recorder to the file: if `run` stopped handing
+  // `recorder.aggregations` to `buildCorpus`, every other test would still pass and the corpus would
+  // say `"aggregations": []` for a suite that issued them.
+  const upstream = createServer();
+  upstream.on('stream', (stream) => {
+    stream.on('data', () => {});
+    stream.on('end', () => {
+      stream.respond({ ':status': 200, 'content-type': 'application/grpc' }, { waitForTrailers: true });
+      stream.on('wantTrailers', () => stream.sendTrailers({ 'grpc-status': '0' }));
+      stream.end();
+    });
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const directory = mkdtempSync(join(tmpdir(), 'indexwright-record-'));
+  const { cases } = JSON.parse(
+    readFileSync(fileURLToPath(new URL('fixtures/run-aggregation-query.json', import.meta.url)), 'utf8'),
+  );
+  const message = cases.find((entry) => entry.name === 'a single sum').message;
+
+  try {
+    const out = join(directory, 'firestore.queries.json');
+    const streams = collect();
+    const child = [
+      "const { connect } = require('node:http2');",
+      `const message = Buffer.from(${JSON.stringify(message)}, 'base64');`,
+      'const header = Buffer.alloc(5); header.writeUInt32BE(message.length, 1);',
+      'const client = connect(`http://${process.env.FIRESTORE_EMULATOR_HOST}`);',
+      "const request = client.request({ ':method': 'POST', ':path': '/google.firestore.v1.Firestore/RunAggregationQuery', 'content-type': 'application/grpc', te: 'trailers' });",
+      "request.on('close', () => client.close()); request.resume(); request.end(Buffer.concat([header, message]));",
+    ].join('\n');
+    const status = await run(
+      ['--emulator', `127.0.0.1:${upstream.address().port}`, '--out', out, '--', process.execPath, '-e', child],
+      streams,
+      {},
+    );
+
+    assert.equal(status, 0);
+    const corpus = parseCorpus(readFileSync(out, 'utf8'));
+    assert.equal(corpus.corpusVersion, 3);
+    assert.deepEqual(corpus.queries, []);
+    assert.deepEqual(
+      corpus.aggregations.map((shape) => shape.key),
+      ['aggregate(orders::COLLECTION::AND()::)::SUM:amount'],
+    );
+    assert.match(streams.stderr(), /1 query request\(s\) observed, 0 distinct shape\(s\), 1 distinct aggregation\(s\)/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    upstream.close();
+  }
+});
+
 test('a command that cannot be started is reported, not thrown', async () => {
   const upstream = createServer();
   await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
