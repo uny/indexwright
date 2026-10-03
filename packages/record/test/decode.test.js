@@ -358,6 +358,15 @@ function decodeAggregationFixture(name) {
   return toAggregationShape(result.query);
 }
 
+test('a Count message that does not parse is undecodable, not recorded as a COUNT', () => {
+  // 'a bare count' with its empty `count` replaced by a lone 0x80: a varint that never ends.
+  const valid = Buffer.from(aggregationCases.find((entry) => entry.name === 'a bare count').message, 'base64').toString('hex');
+  const broken = valid.replace('121d0a0a', '121e0a0a').replace('1a0f0a003a0b', '1a100a01803a0b');
+  assert.notEqual(broken, valid);
+  assert.equal(decodeRunAggregationQuery(Buffer.from(valid, 'hex')).ok, true);
+  assert.deepEqual(decodeRunAggregationQuery(Buffer.from(broken, 'hex')), { ok: false, reason: 'undecodable-message' });
+});
+
 test('every captured aggregation request decodes to the shape it was written as', () => {
   assert.equal(aggregationCases.length, AGGREGATION_EXPECTED_KEYS.size, 'the fixture and the expectations disagree in size');
   for (const [name, expected] of AGGREGATION_EXPECTED_KEYS) {

@@ -310,6 +310,10 @@ function readAggregation(bytes: Uint8Array): AggregationSpec {
     if (field.kind !== 'bytes') continue;
     switch (field.number) {
       case AGGREGATION_COUNT:
+        // `up_to` is not recorded, but the `Count` message is still walked: one that does not parse
+        // is declined, as `decode-json.ts` declines a `count` that is not an object, rather than
+        // recorded as a COUNT the server would have refused.
+        for (const _ of fields(field.value)) void _;
         op = 'COUNT';
         field_ = null;
         break;
