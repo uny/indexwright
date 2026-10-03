@@ -156,7 +156,7 @@ export async function check(
   say(
     command.oracle === 'explain'
       ? 'oracle: explain — each entry is asked with Query.explain({ analyze: false }); nothing is read'
-      : 'oracle: read — each entry is asked by running the query and reading one document',
+      : 'oracle: read — each entry is asked by running it: a query reads one document, an aggregation runs with no limit',
   );
 
   // Checked rather than iterated. This member was one path until issue #56, and an untyped caller
@@ -500,7 +500,8 @@ export async function check(
   // Seeded with what planning refused, and added to by anything materialisation refuses that
   // planning did not. Both mean the same thing to the report: an entry with no verdict.
   const cannotReplay: string[] = [...unreplayable];
-  let attempted = 0;
+  // Kept apart so the summary does not call an aggregation a query: the two cost different reads.
+  const attempted = { queries: 0, aggregations: 0 };
   let halted: string | undefined;
   try {
     for (const entry of entries) {
@@ -511,7 +512,7 @@ export async function check(
         entry.kind === 'aggregation' ? await replayer.runAggregation(entry.plan) : await replayer.run(entry.plan);
       // Counted once the target has answered, so an entry that never reached it is not reported as
       // a query that was replayed.
-      if (status.kind !== 'unbuildable') attempted += 1;
+      if (status.kind !== 'unbuildable') attempted[entry.kind === 'aggregation' ? 'aggregations' : 'queries'] += 1;
       if (status.kind === 'served') {
         served.add(entry.shape.key);
         continue;
@@ -1251,7 +1252,7 @@ function explainedByUnreadability(half: {
  * standing against that is the sentence appearing in the log of every run that relies on it.
  */
 function reportReplay(
-  attempted: number,
+  attempted: { readonly queries: number; readonly aggregations: number },
   uncovered: readonly { key: string; message: string }[],
   accepted: ReadonlyMap<string, string> | undefined,
   served: ReadonlySet<string>,
@@ -1285,7 +1286,9 @@ function reportReplay(
 
   const findings = uncovered.length - baselined;
   say(
-    `${count(attempted, 'query', 'queries')} replayed, ` +
+    `${count(attempted.queries, 'query', 'queries')}` +
+      (attempted.aggregations > 0 ? ` and ${count(attempted.aggregations, 'aggregation', 'aggregations')}` : '') +
+      ' replayed, ' +
       `${uncovered.length} not served by the ${setLabel}` +
       (accepted === undefined ? '' : `, ${baselined} of them in the baseline`),
   );

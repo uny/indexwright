@@ -320,7 +320,8 @@ test('a corpus holding only an aggregation is asked through runAggregation, and 
   assert.equal(await h.run(), 0);
   assert.equal(h.replayed.length, 0);
   assert.equal(h.replayedAggregations.length, 1);
-  assert.match(h.said(), /1 query replayed, 0 not served/);
+  // Counted as an aggregation rather than as a query: the two cost different reads under `read`.
+  assert.match(h.said(), /0 queries and 1 aggregation replayed, 0 not served/);
 });
 
 test('an aggregation the candidate set cannot serve is the finding, reported under its own key', async () => {
@@ -341,7 +342,7 @@ test('a plain query and an aggregation in the same corpus are both replayed, eac
   assert.equal(await h.run(), 0);
   assert.equal(h.replayed.length, 1);
   assert.equal(h.replayedAggregations.length, 1);
-  assert.match(h.said(), /2 quer(?:y|ies) replayed, 0 not served/);
+  assert.match(h.said(), /1 query and 1 aggregation replayed, 0 not served/);
 });
 
 test('an aggregation runAggregation reports unbuildable is counted as incomplete, like an unreplayable query', async () => {
@@ -1851,7 +1852,7 @@ test('the default oracle is read, and stderr names it before anything else is di
   // that could drift from it.
   const h = harness();
   assert.equal(await h.run(), 0);
-  assert.match(h.said(), /oracle: read — each entry is asked by running the query and reading one document/);
+  assert.match(h.said(), /oracle: read — each entry is asked by running it: a query reads one document, an aggregation runs with no limit/);
   assert.deepEqual(h.replayerCalls, [{ project: COMMAND.project, database: COMMAND.database, oracle: 'read' }]);
 });
 
