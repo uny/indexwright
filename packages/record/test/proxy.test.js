@@ -11,6 +11,16 @@ const { cases } = JSON.parse(
   readFileSync(fileURLToPath(new URL('fixtures/run-query.json', import.meta.url)), 'utf8'),
 );
 
+const { cases: aggregationCases } = JSON.parse(
+  readFileSync(fileURLToPath(new URL('fixtures/run-aggregation-query.json', import.meta.url)), 'utf8'),
+);
+
+function aggregationMessage(name) {
+  const found = aggregationCases.find((entry) => entry.name === name);
+  assert.ok(found, `aggregation fixture "${name}" is missing`);
+  return Buffer.from(found.message, 'base64');
+}
+
 function fixtureMessage(name) {
   const found = cases.find((entry) => entry.name === name);
   assert.ok(found, `fixture "${name}" is missing`);
@@ -56,7 +66,7 @@ function stubUpstream({ trailersOnly = false } = {}) {
 }
 
 /** Send one gRPC request through the proxy and report what came back. */
-function call(address, path, body) {
+function call(address, path, body, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const client = connect(`http://${address}`);
     client.on('error', reject);
@@ -65,6 +75,7 @@ function call(address, path, body) {
       ':path': path,
       'content-type': 'application/grpc',
       te: 'trailers',
+      ...extraHeaders,
     });
     const chunks = [];
     let headers = null;
@@ -180,6 +191,36 @@ test('a RunQuery passes through unchanged and is recorded', async () => {
   }
 });
 
+test('a gRPC RunAggregationQuery passes through and is recorded as an aggregation, gzipped or not', async () => {
+  const upstream = stubUpstream();
+  const upstreamAddress = await listen(upstream.server);
+  const capture = await startCapture({ upstream: upstreamAddress });
+  try {
+    const path = '/google.firestore.v1.Firestore/RunAggregationQuery';
+    const response = await call(capture.address, path, frame(aggregationMessage('count, sum and average together')));
+    assert.equal(response.trailers['grpc-status'], '0');
+
+    // The compressed path goes through the recorder's own decompression before the same decoder.
+    const compressed = gzipSync(aggregationMessage('a collection group aggregation'));
+    const header = Buffer.alloc(5);
+    header[0] = 1;
+    header.writeUInt32BE(compressed.length, 1);
+    await call(capture.address, path, Buffer.concat([header, compressed]), { 'grpc-encoding': 'gzip' });
+
+    assert.deepEqual(upstream.seen, [path, path]);
+    assert.equal(capture.recorder.observed, 2);
+    assert.equal(capture.recorder.skips.size, 0);
+    assert.equal(capture.recorder.shapes.length, 0, 'an aggregation is not recorded as a plain query');
+    assert.deepEqual(capture.recorder.aggregations.map((shape) => shape.key).sort(), [
+      'aggregate(items::COLLECTION_GROUP::AND(sku:EQUAL)::)::COUNT',
+      'aggregate(orders::COLLECTION::AND()::)::AVG:amount|COUNT|SUM:amount',
+    ]);
+  } finally {
+    await capture.close();
+    upstream.server.close();
+  }
+});
+
 test('a trailers-only error reaches the client as one, not as a fabricated status', async () => {
   const upstream = stubUpstream({ trailersOnly: true });
   const upstreamAddress = await listen(upstream.server);
@@ -210,10 +251,9 @@ test('query-bearing RPCs that are not RunQuery are counted, and writes are not',
     for (const method of ['PartitionQuery', 'ExecutePipeline', 'Commit']) {
       await call(capture.address, `/google.firestore.v1.Firestore/${method}`, body);
     }
-    // `RunAggregationQuery` is captured as of issue #93 rather than declined, so it moved to the
-    // dedicated aggregation-decoding test below (`recordRunAggregationQuery` and its fixtures); a
-    // `RunQueryRequest` body sent to it is not a `RunAggregationQueryRequest`, and decodes as
-    // `unsupported-shape` once the two are read against the right message shape.
+    // `RunAggregationQuery` is captured as of issue #93 rather than declined (see the gRPC
+    // aggregation test above); a `RunQueryRequest` body sent to it is not a
+    // `RunAggregationQueryRequest`, and decodes as `unsupported-shape`.
     await call(capture.address, '/google.firestore.v1.Firestore/RunAggregationQuery', body);
     assert.deepEqual(
       [...capture.recorder.skips.entries()].sort(),

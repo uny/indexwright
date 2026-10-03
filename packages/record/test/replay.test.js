@@ -487,6 +487,45 @@ test('the client replayClient builds asks through the oracle it was given', asyn
   assert.deepEqual(calls, ['get', ['explain', { analyze: false }]]);
 });
 
+test('the client replayClient builds asks an aggregation through the oracle it was given', async () => {
+  // The same seam as above, for `runAggregation`: `AggregateQuery` is not exported, so its
+  // prototype is reached through an instance. A plan this version cannot build is `unbuildable`,
+  // never a verdict.
+  const AggregateQuery = Object.getPrototypeOf(db.collection('orders').count());
+  const calls = [];
+  const { get, explain } = AggregateQuery;
+  AggregateQuery.get = async function () {
+    calls.push('get');
+  };
+  AggregateQuery.explain = async function (options) {
+    calls.push(['explain', options]);
+  };
+  try {
+    for (const oracle of ['read', 'explain']) {
+      const replayer = await replayClient('indexwright-probe', '(default)', oracle);
+      try {
+        assert.deepEqual(
+          await replayer.runAggregation(
+            aggregationPlanOf({ collectionGroup: 'orders', aggregations: [{ op: 'SUM', field: 'amount' }] }),
+          ),
+          { kind: 'served' },
+        );
+        const unbuildable = await replayer.runAggregation({
+          ...aggregationPlanOf({ collectionGroup: 'orders' }),
+          aggregations: [{ op: 'SUM', field: null }],
+        });
+        assert.equal(unbuildable.kind, 'unbuildable');
+      } finally {
+        await replayer.close();
+      }
+    }
+  } finally {
+    AggregateQuery.get = get;
+    AggregateQuery.explain = explain;
+  }
+  assert.deepEqual(calls, ['get', ['explain', { analyze: false }]]);
+});
+
 test('the sentinel is a document id Firestore will accept', () => {
   // Deliberately not written in terms of `REPLAY_SENTINEL` beyond reading it: this is the one check
   // in the file that has to fail when the constant changes badly. Every other test builds both the
