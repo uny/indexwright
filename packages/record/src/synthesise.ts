@@ -259,10 +259,10 @@ export function planReplay(shape: QueryShape): ReplayPlan {
  * part of that measurement, and the read oracle's cost story for one is inferred rather than
  * measured, and is not the plain query's: a `count()` is inferred to still have to enumerate the
  * index range the inner filter names to produce its number — nothing analogous to a plain query's
- * one-document `limit(1)` stop bounds it — so `limit(1)` would either do nothing (an aggregation
- * counts rows, not documents fetched — a limit on the *count* would change the answer, not just the
- * cost) or would have to attach somewhere the SDK gives it no hook to attach to. Both readings argue
- * against reusing the plain path's limit here rather than for it, so this plan carries none, and
+ * one-document `limit(1)` stop bounds it — and a limit on the inner query (`query.limit(1).count()`)
+ * caps the number the aggregation answers with rather than only the cost of producing it, with what
+ * that does to the index Firestore asks for unmeasured. That argues against reusing the plain path's
+ * limit here rather than for it, so this plan carries none, and
  * the package README's guidance to prefer `--oracle explain` for an aggregation follows from the
  * inference and is stated for an operator rather than a developer. `probe/README.md` step 5f measured
  * selection and oracle agreement for an aggregation, but not its read cost, which stays inferred.

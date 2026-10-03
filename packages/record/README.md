@@ -458,8 +458,9 @@ aggregations. Values, aliases, and `count()`'s optional cap are not recorded, fo
 `limit`/`select` are not. An aggregation entry's key can never collide with a plain query's key over
 the same inner query — see [SPEC.md §7, *Aggregation queries*][spec-aggregation] for the proof —
 so a corpus can hold both without either shadowing the other. `check` replays an aggregation entry
-by asking Firestore the identical `count()`/`aggregate()`, with **no `limit`**: unlike a plain query,
-there is nowhere on an aggregate query to attach one. Under `--oracle read`, an aggregation over a
+by asking Firestore the identical `count()`/`aggregate()`, with **no `limit`**: a limit on the inner
+query would cap the number the aggregation answers with, and what it does to the index required was
+never measured. Under `--oracle read`, an aggregation over a
 wide shape (a `!=`, say) is inferred — not measured — to scan the matching range to produce its
 number, rather than stopping at one document the way a plain query's `limit(1)` does; prefer
 `--oracle explain` for a corpus carrying aggregation entries on that inference.

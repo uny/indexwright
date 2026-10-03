@@ -848,8 +848,9 @@ same place, and the consuming suite whose capture did not run is the one whose q
 index.
 
 The merge invents nothing. Every rule it needs is already above: `queries` de-duplicate on the
-canonical key and sort by it, `skipped` is a set of reasons, and `producers` is a set on the
-`(name, revision)` pair. The result is therefore a corpus in the sense this section defines —
+canonical key and sort by it, `aggregations` do the same over their own key (version 3, *Aggregation
+queries* below), `skipped` is a set of reasons, and `producers` is a set on the `(name, revision)`
+pair. The result is therefore a corpus in the sense this section defines —
 readable by anything that reads one — and that is the requirement rather than a property it happens
 to have. That the rules were already written down is also the argument for a tool doing it: every
 adopter otherwise writes the same `jq`, and the ones who write it slightly wrong get a corpus that
@@ -1058,9 +1059,11 @@ reimplemented, only which SDK call is issued.
 
 **No `limit` is applied to an aggregation replay, under either oracle.** *Replay without values*
 measured `limit(1)` against eight plain shapes before applying it there; no equivalent measurement
-exists for an aggregation, and the reasoning does not carry over even provisionally. A `count()` or
-`aggregate()` call has no `.limit()` to attach one to, and reasoning about what a limit would mean is
-moot for `explain`, which reads nothing regardless. Under `--oracle read`, though, an aggregation
+exists for an aggregation, and the reasoning does not carry over even provisionally. A limit can be
+put on the inner query (`query.limit(n).count()`), but there it caps the number the aggregation
+answers with rather than only the read, and what it does to the index Firestore asks for is
+unmeasured; reasoning about what a limit would mean is moot for `explain`, which reads nothing
+regardless. Under `--oracle read`, though, an aggregation
 over a shape like `!=` is *inferred* to scan the matching index range to produce its number, on what
 a `count()`/`sum()`/`average()` must do to answer correctly — a plain query's `limit(1)` stops at the
 first document, and nothing analogous bounds an aggregate's own scan. That inference is not a
@@ -1090,7 +1093,8 @@ frame is complete rather than when the stream ends, because a listener a suite n
 a stream that never does. A `remove_target`, or a target that names documents rather than a query,
 is the stream's control traffic and is neither recorded nor counted. Earlier releases counted the
 whole stream once as `listen-query`; a corpus committed under one of them still names that reason,
-and a reader accepts it — it is the one member of `skipped` no current recorder writes.
+and a reader accepts it — it is, with `aggregation-query` (*Aggregation queries* below), a member of
+`skipped` no current recorder writes.
 
 Both are read on both transports the emulator serves. Over gRPC they are protobuf; over HTTP/1.1,
 which is how the Firebase Web SDK reaches the emulator, they are the proto3 JSON mapping of the same

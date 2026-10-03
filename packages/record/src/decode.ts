@@ -143,7 +143,7 @@ export function decodeRunQuery(message: Uint8Array): DecodeResult {
  *
  * The `ok: false` branch is structurally identical to `DecodeResult`'s — both are `{ reason:
  * SkipReason }` — so `declined` is reused rather than restated; only the `ok: true` branch's payload
- * type differs; between the two decoders.
+ * type differs between the two decoders.
  */
 export function decodeRunAggregationQuery(message: Uint8Array): AggregationDecodeResult {
   try {

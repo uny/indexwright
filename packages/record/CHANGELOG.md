@@ -37,10 +37,14 @@ again, by its own `corpusVersion`.
   `QueryShape` key over the same inner query — see SPEC.md §7, *Aggregation queries*. `corpusVersion`
   is bumped to 3; a v3 reader still reads v1 and v2 corpora in full, and `aggregation-query` joins
   `listen-query` in the legacy skip vocabulary, so a corpus any earlier release wrote — including one
-  that declined this very RPC — still reads whole. `check` replays an aggregation entry through
+  that declined this very RPC — still reads whole. Parts at different versions are still refused as
+  one merge, so a `check` naming a v2 and a v3 corpus together fails until both are re-recorded. For
+  library callers, `Corpus` gains a required `aggregations` member, `Replayer` a required
+  `runAggregation`, and `SkipReason` no longer includes `'aggregation-query'`. `check` replays an aggregation entry through
   `Query.count()`/`Query.aggregate({...})`, asked via the same `--oracle read|explain` choice a plain
   entry is, with **no `limit`**: the measurement behind the plain path's `limit(1)` was never taken
-  for an aggregation, and there is nowhere on `.count()`/`.aggregate()` to attach one regardless.
+  for an aggregation, and a limit on the inner query would cap the aggregate's own answer rather
+  than only its read.
   `probe/README.md` step 5f ran on 2026-09-26. `read` and `explain` agreed on all six aggregation
   shapes. `count()` needed only what its inner query needs, while `sum(amount)` and
   `average(amount)` over the same filter were refused under an `(a, b)` index that serves the plain
